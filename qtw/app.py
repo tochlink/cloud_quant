@@ -57,22 +57,34 @@ def ok(data) -> JSONResponse:
     return JSONResponse(clean(data))
 
 
+def _persist_tick() -> None:
+    """One mark-flush + intrabar stop poll + optional WAL checkpoint."""
+    try:
+        engine.persist_marks()
+    except Exception:  # noqa: BLE001
+        log.exception("persist marks failed")
+    try:
+        ev = engine.poll_stops()
+        if ev:
+            log.info("实时止损：%s", "；".join(ev))
+    except Exception:  # noqa: BLE001
+        log.exception("poll stops failed")
+    try:
+        db.checkpoint_wal("PASSIVE")
+    except Exception:  # noqa: BLE001
+        log.debug("wal checkpoint skipped", exc_info=True)
+
+
 def _mark_persister():
+    # wait() returns True when stop is set (including mid-wait), so shutdown is
+    # interruptible. After exit, flush dirty marks once more so a restart mid-tick
+    # does not lose the last WS marks already applied in memory.
     while not _persist_stop.wait(15):
-        try:
-            engine.persist_marks()
-        except Exception:  # noqa: BLE001
-            log.exception("persist marks failed")
-        try:
-            ev = engine.poll_stops()
-            if ev:
-                log.info("实时止损：%s", "；".join(ev))
-        except Exception:  # noqa: BLE001
-            log.exception("poll stops failed")
-        try:
-            db.checkpoint_wal("PASSIVE")
-        except Exception:  # noqa: BLE001
-            log.debug("wal checkpoint skipped", exc_info=True)
+        _persist_tick()
+    try:
+        engine.persist_marks()
+    except Exception:  # noqa: BLE001
+        log.exception("final persist marks failed")
 
 
 def _start_persist():
@@ -84,8 +96,16 @@ def _start_persist():
     _persist_thread.start()
 
 
-def _stop_persist():
+def _stop_persist(timeout: float = 8.0) -> None:
+    """Signal mark-persist / stop-poll to exit and join before clearing the book.
+
+    Without a join, lifespan can null ``engine._BOOK`` while this thread is still
+    inside ``poll_stops`` / ``persist_marks`` (AttributeError or lost flush).
+    """
     _persist_stop.set()
+    t = _persist_thread
+    if t and t.is_alive():
+        t.join(timeout=timeout)
 
 
 @asynccontextmanager
@@ -146,8 +166,9 @@ def status():
 def health():
     """Lightweight smoke probe. No secrets, no vault, no full settings dump.
 
-    Used by ensure_up.sh / the 10-minute polish routine. Includes venue and
-    live-gate booleans so monitors can confirm paper mode without /api/status.
+    Used by ensure_up.sh / the 10-minute polish routine. Includes venue,
+    live-gate booleans, stream watchdog, and persist_running so monitors can
+    confirm paper mode and background stop-poll without /api/status.
     """
     cfg = S.load()
     st = stream.status(cfg["venue"])
@@ -169,6 +190,7 @@ def health():
         },
         "quotes_ws_fresh": st.get("quotes_ws_fresh"),
         "worker": {"running": bool(w.get("running"))},
+        "persist_running": bool(_persist_thread and _persist_thread.is_alive()),
         "time": iso(utcnow()),
         "time_sh": sh(utcnow()),
     })

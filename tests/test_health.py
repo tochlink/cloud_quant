@@ -23,6 +23,8 @@ def test_health_reports_paper_gate_and_stream_without_secrets():
     assert "loop_heartbeat_age_sec" in body["stream"]
     assert body["quotes_ws_fresh"] == body["stream"]["quotes_ws_fresh"]
     assert isinstance(body["worker"]["running"], bool)
+    assert "persist_running" in body
+    assert isinstance(body["persist_running"], bool)
     assert "time" in body and "time_sh" in body
     # Must never leak vault / keys / full settings
     blob = r.text.lower()
