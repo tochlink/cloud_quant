@@ -49,3 +49,18 @@ def test_migrate_csv_book(tmp_path):
     assert b.positions["BTCUSDT"].side == "short" and b.realized == pytest.approx(999.6)
     assert not src.exists()
     assert migrate_csv(conn, src) == {}
+
+
+def test_heal_empty_position_venue_from_open_fill(tmp_path):
+    """Legacy rows may lack venue on positions; load() backfills from open fill."""
+    conn = db.connect(tmp_path / "heal.sqlite")
+    b = PaperBook(1000, 4, conn=conn)
+    b.open(symbol="BTCUSDT", market="perp", side="short", qty=0.001, price=70000, price_kind="mark",
+           stop=72000, signal_bar="x", reason="t", venue="okx", data_source="okx_public_ws")
+    # Simulate pre-venue schema: wipe position.venue then reload
+    with db.tx(conn) as c:
+        c.execute("UPDATE paper_positions SET venue='' WHERE symbol='BTCUSDT'")
+    b2 = PaperBook(1000, 4, conn=conn)
+    assert b2.positions["BTCUSDT"].venue == "okx"
+    row = db.query("SELECT venue FROM paper_positions WHERE symbol='BTCUSDT'", (), conn)[0]
+    assert row["venue"] == "okx"
