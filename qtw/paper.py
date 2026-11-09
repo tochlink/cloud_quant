@@ -174,9 +174,11 @@ class PaperBook:
         return sum(p.direction * p.qty * p.mark_price for p in self.positions.values())
 
     def mark(self, symbol: str, price: float, when: str, source: str = ""):
-        if symbol in self.positions:
-            p = self.positions[symbol]
-            p.mark_price, p.mark_time, p.mark_source = price, when, source or p.mark_source
+        # Serialize with save/open/close so WS mark ticks cannot race asdict(_save).
+        with _LOCK:
+            if symbol in self.positions:
+                p = self.positions[symbol]
+                p.mark_price, p.mark_time, p.mark_source = price, when, source or p.mark_source
 
     def open(self, *, symbol, market, side, qty, price, price_kind, stop, signal_bar, reason, venue, mode="paper",
              data_source="", price_time=""):

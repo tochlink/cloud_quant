@@ -153,7 +153,9 @@ def checkpoint_wal(mode: str = "PASSIVE") -> tuple[int, int, int]:
     """Move durable WAL frames into the main DB without blocking readers.
 
     PASSIVE never waits on other readers or writers (it may no-op if the WAL
-    is busy). Returns sqlite's (busy, log, checkpointed) triple.
+    is busy). TRUNCATE also shrinks the on-disk ``-wal`` file to 0 when idle —
+    PASSIVE alone can leave a multi-MB empty WAL after heavy candle writes.
+    Returns sqlite's (busy, log, checkpointed) triple.
     """
     if mode not in ("PASSIVE", "RESTART", "FULL", "TRUNCATE"):
         mode = "PASSIVE"
@@ -163,4 +165,89 @@ def checkpoint_wal(mode: str = "PASSIVE") -> tuple[int, int, int]:
     if not row:
         return (0, 0, 0)
     return (int(row[0]), int(row[1]), int(row[2]))
+
+
+def wal_file_bytes() -> int:
+    """On-disk size of the SQLite ``-wal`` sidecar (0 if absent)."""
+    p = db_path().with_name(db_path().name + "-wal")
+    try:
+        return p.stat().st_size if p.exists() else 0
+    except OSError:
+        return 0
+
+
+# Live chart max is 1000 bars; strategy lookback is ~200. Keep a cushion so
+# dual-MA / ATR and the signals chart stay cache-hot without unbounded growth.
+CANDLE_KEEP_BARS = 1200
+# Worker snapshots ~1/min; keep ~7 days of equity history for the dashboard sparkline.
+LEDGER_KEEP_ROWS = 10_080
+
+
+def prune_candles(keep_bars: int = CANDLE_KEEP_BARS, conn=None) -> int:
+    """Delete oldest candles beyond ``keep_bars`` per (venue, market, symbol, interval).
+
+    Returns the number of rows deleted. No-op when keep_bars < 1.
+    """
+    if keep_bars < 1:
+        return 0
+    c = conn or connect()
+    deleted = 0
+    with _LOCK:
+        series = c.execute(
+            "SELECT venue, market, symbol, interval, COUNT(*) n FROM candles "
+            "GROUP BY venue, market, symbol, interval HAVING n > ?",
+            (keep_bars,),
+        ).fetchall()
+        for row in series:
+            venue, market, symbol, interval, n = row[0], row[1], row[2], row[3], int(row[4])
+            drop = n - keep_bars
+            if drop <= 0:
+                continue
+            cur = c.execute(
+                "DELETE FROM candles WHERE rowid IN ("
+                "  SELECT rowid FROM candles WHERE venue=? AND market=? AND symbol=? AND interval=? "
+                "  ORDER BY open_time ASC LIMIT ?"
+                ")",
+                (venue, market, symbol, interval, drop),
+            )
+            deleted += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+    return deleted
+
+
+def prune_ledger(keep_rows: int = LEDGER_KEEP_ROWS, conn=None) -> int:
+    """Keep the newest ``keep_rows`` paper_ledger snapshots; delete older quiet history."""
+    if keep_rows < 1:
+        return 0
+    c = conn or connect()
+    with _LOCK:
+        total = c.execute("SELECT COUNT(*) FROM paper_ledger").fetchone()[0]
+        drop = int(total) - keep_rows
+        if drop <= 0:
+            return 0
+        cur = c.execute(
+            "DELETE FROM paper_ledger WHERE id IN ("
+            "  SELECT id FROM paper_ledger ORDER BY id ASC LIMIT ?"
+            ")",
+            (drop,),
+        )
+        return int(cur.rowcount or 0)
+
+
+def maintain_storage(*, truncate_wal: bool = False, prune: bool = False) -> dict:
+    """Periodic 24/7 housekeeping: optional candle/ledger prune + WAL checkpoint.
+
+    Always runs PASSIVE first (non-blocking). When ``truncate_wal`` is set, also
+    tries TRUNCATE so the on-disk ``-wal`` file shrinks after heavy writes.
+    """
+    out: dict = {"passive": checkpoint_wal("PASSIVE"), "candles_deleted": 0, "ledger_deleted": 0,
+                 "truncate": None, "wal_bytes": wal_file_bytes()}
+    if prune:
+        out["candles_deleted"] = prune_candles()
+        out["ledger_deleted"] = prune_ledger()
+        # Re-checkpoint after deletes so freed pages leave the WAL.
+        out["passive"] = checkpoint_wal("PASSIVE")
+    if truncate_wal:
+        out["truncate"] = checkpoint_wal("TRUNCATE")
+        out["wal_bytes"] = wal_file_bytes()
+    return out
 

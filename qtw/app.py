@@ -35,6 +35,10 @@ _bt_lock = threading.Lock()
 _last_bt: dict[str, Any] = {}
 _persist_thread: threading.Thread | None = None
 _persist_stop = threading.Event()
+_persist_ticks = 0  # for periodic WAL TRUNCATE / candle+ledger prune
+# 15s tick → 20 ≈ 5 min TRUNCATE; 40 ≈ 10 min prune (24/7 disk hygiene)
+_WAL_TRUNCATE_EVERY = 20
+_PRUNE_EVERY = 40
 
 
 def clean(o):
@@ -58,7 +62,8 @@ def ok(data) -> JSONResponse:
 
 
 def _persist_tick() -> None:
-    """One mark-flush + intrabar stop poll + optional WAL checkpoint."""
+    """One mark-flush + intrabar stop poll + WAL / storage maintenance."""
+    global _persist_ticks
     try:
         engine.persist_marks()
     except Exception:  # noqa: BLE001
@@ -69,10 +74,23 @@ def _persist_tick() -> None:
             log.info("实时止损：%s", "；".join(ev))
     except Exception:  # noqa: BLE001
         log.exception("poll stops failed")
+    _persist_ticks += 1
+    do_trunc = (_persist_ticks % _WAL_TRUNCATE_EVERY) == 0
+    do_prune = (_persist_ticks % _PRUNE_EVERY) == 0
     try:
-        db.checkpoint_wal("PASSIVE")
+        # PASSIVE every tick; TRUNCATE every ~5 min so the -wal file actually shrinks
+        # (PASSIVE alone left a multi-MB empty WAL after candle bulk writes).
+        # Candle/ledger prune every ~10 min keeps 24/7 SQLite bounded.
+        info = db.maintain_storage(truncate_wal=do_trunc, prune=do_prune)
+        if do_prune and (info.get("candles_deleted") or info.get("ledger_deleted")):
+            log.info(
+                "storage prune: candles -%s · ledger -%s · wal=%sB",
+                info.get("candles_deleted", 0),
+                info.get("ledger_deleted", 0),
+                info.get("wal_bytes", 0),
+            )
     except Exception:  # noqa: BLE001
-        log.debug("wal checkpoint skipped", exc_info=True)
+        log.debug("storage maintain skipped", exc_info=True)
 
 
 def _mark_persister():
@@ -141,9 +159,13 @@ async def lifespan(_app: FastAPI):
             engine._MARK["venue"] = None
             engine._MARK["dirty"] = False
         try:
-            db.checkpoint_wal("PASSIVE")
+            # TRUNCATE on shutdown so the next start does not inherit a fat -wal file.
+            db.checkpoint_wal("TRUNCATE")
         except Exception:  # noqa: BLE001
-            log.debug("shutdown wal checkpoint skipped", exc_info=True)
+            try:
+                db.checkpoint_wal("PASSIVE")
+            except Exception:  # noqa: BLE001
+                log.debug("shutdown wal checkpoint skipped", exc_info=True)
         log.info("QTW 已关闭（worker / stream / persist 已请求停止）")
 
 
