@@ -64,6 +64,12 @@ def _mark_persister():
         except Exception:  # noqa: BLE001
             log.exception("persist marks failed")
         try:
+            ev = engine.poll_stops()
+            if ev:
+                log.info("实时止损：%s", "；".join(ev))
+        except Exception:  # noqa: BLE001
+            log.exception("poll stops failed")
+        try:
             db.checkpoint_wal("PASSIVE")
         except Exception:  # noqa: BLE001
             log.debug("wal checkpoint skipped", exc_info=True)

@@ -70,8 +70,8 @@ cd /workspace/quant-trading-web
 
 | 交易所 | 连接 | 频道 |
 |---|---|---|
-| OKX | `wss://ws.okx.com:8443/ws/v5/public`（被拦时自动换 `wss://ws.okx.com/ws/v5/public`、`wsaws.okx.com`） | `tickers`（现货）、`mark-price`（永续） |
-| OKX | `wss://ws.okx.com:8443/ws/v5/business`（同上回退） | `candle4H`（现货 + 永续） |
+| OKX | `wss://ws.okx.com/ws/v5/public`（优先；回退 `:8443` / `wsaws`） | `tickers`（现货）、`mark-price`（永续） |
+| OKX | `wss://ws.okx.com/ws/v5/business`（同上回退） | `candle4H`（现货 + 永续） |
 | Gate | `wss://api.gateio.ws/ws/v4/` | `spot.tickers`、`spot.candlesticks` |
 | Gate | `wss://fx-ws.gateio.ws/v4/ws/usdt` | `futures.tickers`（mark_price）、`futures.candlesticks` |
 
@@ -144,7 +144,8 @@ CSV 均带 `venue` / `data_source` / `fetched_at` 等来源字段。纸面账本
 * OKX `history-candles` 每次 100 根，首次长回测需要数秒到数十秒（已做 2 分钟缓存与 4 并发）。
 * 实盘模式按纸面账本的调仓意图发单，**没有与交易所实际持仓 / 成交对账**，也不处理部分成交；实盘前请先在 OKX 模拟盘或 Gate 合约测试网验证。Gate 现货没有测试网。
 * 仅监听 127.0.0.1，没有登录鉴权；不要暴露到公网。
-* 本机网络若拦截 OKX 8443 端口，会自动改用 443 端口的官方地址。
+* OKX WebSocket 优先连 443 端口官方地址；若失败再回退 :8443 / wsaws（部分网络会重置 8443）。
+* 持仓 ATR 止损除了后台周期检查外，还会在标记价持久化线程里约每 15 秒用最新公共价轮询一次，缩短止损延迟。
 * 界面自适应：侧栏与平板同在一个网格里随窗口 / 缩放一起伸缩；≤1180px 右栏变成抽屉（顶部按钮打开），≤760px 底部胶囊导航。
 * 若某交易所在你所在地区被限制（HTTP 403 / 451），客户端会尝试官方备用域名（OKX `aws.okx.com`，Gate `api.gate.io`），仍失败就报错——**绝不伪造行情**。
 

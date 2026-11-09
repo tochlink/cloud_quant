@@ -1,7 +1,7 @@
 """官方公共 WebSocket 实时行情（无需 API Key）+ REST 轮询兜底。
 
 连接（每个交易所现货 / 永续各一条，外加 OKX K 线 business 通道）：
-  OKX  public   wss://ws.okx.com:8443/ws/v5/public（端口被拦时自动换 wss://ws.okx.com/ws/v5/public、wsaws）
+  OKX  public   wss://ws.okx.com/ws/v5/public（优先 443；被拦时再试 :8443 / wsaws）
        频道：tickers（现货 BTC-USDT…）、mark-price（永续 BTC-USDT-SWAP…）
   OKX  business wss://ws.okx.com:8443/ws/v5/business  频道：candle4H（现货 + 永续）
   Gate spot     wss://api.gateio.ws/ws/v4/            频道：spot.tickers、spot.candlesticks
@@ -32,8 +32,8 @@ from .timeutil import iso, utcnow
 
 log = logging.getLogger("qtw.stream")
 
-OKX_PUBLIC = ["wss://ws.okx.com:8443/ws/v5/public", "wss://ws.okx.com/ws/v5/public", "wss://wsaws.okx.com:8443/ws/v5/public"]
-OKX_BUSINESS = ["wss://ws.okx.com:8443/ws/v5/business", "wss://ws.okx.com/ws/v5/business", "wss://wsaws.okx.com:8443/ws/v5/business"]
+OKX_PUBLIC = ["wss://ws.okx.com/ws/v5/public", "wss://ws.okx.com:8443/ws/v5/public", "wss://wsaws.okx.com/ws/v5/public", "wss://wsaws.okx.com:8443/ws/v5/public"]
+OKX_BUSINESS = ["wss://ws.okx.com/ws/v5/business", "wss://ws.okx.com:8443/ws/v5/business", "wss://wsaws.okx.com/ws/v5/business", "wss://wsaws.okx.com:8443/ws/v5/business"]
 GATE_SPOT = ["wss://api.gateio.ws/ws/v4/"]
 GATE_FUT = ["wss://fx-ws.gateio.ws/v4/ws/usdt"]
 OKX_BAR = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1Dutc"}

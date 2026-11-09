@@ -61,6 +61,49 @@ def persist_marks() -> bool:
     return False
 
 
+def poll_stops(cfg: dict | None = None) -> list[str]:
+    """Worker 周期之间用最新公共价检查 ATR 止损，避免最多等 interval_sec 才离场。
+
+    只平仓已触及止损的纸面持仓；信号反转仍由 run_cycle 处理。拿不到报价就跳过该币。
+    """
+    events: list[str] = []
+    if not CYCLE_LOCK.acquire(blocking=False):
+        return events  # 正在跑完整周期，让 run_cycle 自己处理
+    try:
+        cfg = cfg or S.load()
+        bk = book(cfg)
+        venue = cfg["venue"]
+        if not bk.positions:
+            return events
+        touched = False
+        for s, p in list(bk.positions.items()):
+            try:
+                px, kind, q = _quote(venue, s, p.market)
+            except MarketDataError:
+                continue
+            bk.mark(s, px, iso(q.ts), q.data_source)
+            touched = True
+            hit = (p.side == "long" and px <= p.stop_price) or (p.side == "short" and px >= p.stop_price)
+            if not hit:
+                continue
+            side = p.side
+            qty = p.qty
+            mkt = p.market
+            bk.blocks[s] = p.direction
+            pnl = bk.close(s, px, kind, "ATR止损", venue, data_source=q.data_source, price_time=iso(q.ts))
+            _route(cfg, s, mkt, "close_long" if side == "long" else "close_short", qty, px)
+            events.append(f"{s} 平{('多' if side == 'long' else '空')} @ {px:g}（ATR止损·实时，盈亏 {pnl:+.2f}）")
+        if events:
+            bk.snapshot("；".join(events)[:240])
+            export_paper_csv(cfg)
+        elif touched:
+            bk.save()
+        return events
+    finally:
+        CYCLE_LOCK.release()
+
+
+
 def _quote(venue: str, sym: str, market: str):
     """真实公共报价：现货最新价 / 永续标记价。
 
