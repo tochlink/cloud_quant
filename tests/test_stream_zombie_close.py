@@ -195,3 +195,22 @@ def test_load_settings_does_not_block_event_loop(monkeypatch):
         assert elapsed >= 0.30
 
     asyncio.run(run())
+
+
+def test_connect_ws_guard_times_out_hung_handshake(monkeypatch):
+    """A handshake that never completes must not leave _run_ws stuck on connecting."""
+    async def hanging(*_a, **_k):
+        await asyncio.sleep(30)
+        raise AssertionError("handshake should have been cancelled")
+
+    monkeypatch.setattr(stream, "CONNECT_GUARD_SEC", 0.2)
+    monkeypatch.setattr(stream, "OPEN_TIMEOUT_SEC", 0.1)
+
+    async def run():
+        t0 = time.monotonic()
+        with pytest.raises(ConnectionError, match="握手"):
+            await stream._connect_ws("wss://example.invalid/ws", opener=hanging)
+        assert time.monotonic() - t0 < 1.5
+
+    asyncio.run(run())
+
