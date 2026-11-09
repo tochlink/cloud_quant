@@ -15,6 +15,8 @@
     发出订阅 / ping 也有超时：半开 TCP 让 send 挂起时会主动重连，避免状态仍是 connected 但 last_msg 数分钟不刷新。
   * 已收盘 K 线写入 SQLite 放到线程池，避免 db 锁/WAL 卡住 asyncio 事件循环，导致四条连接同时假死（status=connected 但 last_msg 数分钟不刷新）。
   * status() 把「已连接但 last_msg 超过 ZOMBIE_SEC」标为 stale，不计入 up，避免 UI 误报实时。
+  * status(venue) 的 mode / quotes_ws_fresh / quotes_rest_fresh 只统计该行情源：OKX 标记价全走 REST 时，不会因为 Gate WS 仍新鲜而显示 mode=ws。
+  * WebSocket 握手除库自带 open_timeout 外再包一层 wait_for，避免 DNS / 半开 TCP 让状态一直停在 connecting（此时还没有 _ws_refs，僵尸踢除无法中断）。
   * supervisor 每轮检查僵尸连接：last_msg 过旧仍标 connected 时强制中断套接字（优先 transport.abort，避免 close 握手挂起），并行踢掉并标 reconnecting，迫使 _run_ws 走重连；刚连上时写入 last_msg，空 last_msg 则用 connected_at 计龄；踢掉后立刻 REST 填一次标记价，不等 10 秒轮询。
   * supervisor 读配置走线程池（run_in_executor），避免 S.load()/SQLite 锁被纸面写库或 K 线缓存占用时卡住 asyncio，导致四条 WS 同时假死、zombie age 远超 ZOMBIE_SEC。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
@@ -48,6 +50,9 @@ WS_MODE_HOLD_SEC = 90
 RECV_WAIT_SEC = 25
 PING_EVERY_SEC = 20
 SEND_WAIT_SEC = 10
+OPEN_TIMEOUT_SEC = 10
+# Outer guard around websockets.connect: open_timeout alone can miss DNS/TCP stalls.
+CONNECT_GUARD_SEC = OPEN_TIMEOUT_SEC + 2
 # connected + last_msg older than this → report as stale (recv/grace should have
 # reconnected already; if the event loop was blocked, status must not lie).
 ZOMBIE_SEC = RECV_WAIT_SEC * 2 + PING_EVERY_SEC  # 70
@@ -61,7 +66,7 @@ _thread: threading.Thread | None = None
 _loop: asyncio.AbstractEventLoop | None = None
 _rest_errors: dict[str, str] = {}
 _on_quote = []  # 回调：用于给纸面持仓实时计价
-_last_ws_at: float = 0.0  # monotonic-ish wall time of last *_ws quote
+_last_ws_at: dict[str, float] = {}  # venue -> wall time of last *_ws quote for that venue
 _ws_refs: dict[str, object] = {}  # live websocket objects (stream-loop only) for zombie close
 
 
@@ -75,11 +80,10 @@ def version() -> int:
 
 
 def _put(q: Quote):
-    global _last_ws_at
     with _lock:
         _quotes[(q.venue.lower(), q.symbol, q.market)] = q
         if q.data_source.endswith("_ws"):
-            _last_ws_at = time.time()
+            _last_ws_at[q.venue.lower()] = time.time()
         _bump()
     for cb in _on_quote:
         try:
@@ -164,22 +168,51 @@ def annotate_conn(conn: dict, *, now: float | None = None, zombie_sec: float = Z
     return c
 
 
-def status() -> dict:
-    with _lock:
-        raw = [dict(v) for v in _conns.values()]
-        now = time.time()
-        q = list(_quotes.values())
-        last_ws = _last_ws_at
-    conns = [annotate_conn(c, now=now) for c in raw]
-    live = sum(1 for x in q if x.data_source.endswith("_ws") and (now - x.ts.timestamp()) < STALE_SEC)
-    rest = sum(1 for x in q if x.data_source.endswith("_rest") and (now - x.ts.timestamp()) < 60)
+def _conn_belongs(name: str, venue: str) -> bool:
+    return (name or "").lower().startswith(venue.lower())
+
+
+def _freshness(quotes: list, conns: list, last_ws: float, now: float) -> tuple[str, int, int]:
+    """Classify mode from the given (already venue-filtered) quotes and sockets."""
+    live = sum(1 for x in quotes if x.data_source.endswith("_ws") and (now - x.ts.timestamp()) < STALE_SEC)
+    rest = sum(1 for x in quotes if x.data_source.endswith("_rest") and (now - x.ts.timestamp()) < 60)
     # stale sockets must not count as "up" or we keep advertising a live WS path
     up = sum(1 for c in conns if c["status"] == "connected")
     trying = sum(1 for c in conns if c["status"] in ("connected", "reconnecting", "connecting"))
     recent_ws = bool(last_ws) and (now - last_ws) < WS_MODE_HOLD_SEC
     mode = classify_mode(live=live, rest=rest, up=up, trying=trying, recent_ws=recent_ws)
-    return {"mode": mode, "connections": conns, "quotes_ws_fresh": live, "quotes_rest_fresh": rest,
-            "quotes_total": len(q), "rest_errors": dict(_rest_errors), "running": bool(_thread and _thread.is_alive())}
+    return mode, live, rest
+
+
+def status(venue: str | None = None) -> dict:
+    """Stream health. When ``venue`` is set, mode and freshness are scoped to it.
+
+    Paper marks follow settings.venue. A live Gate WebSocket must not make
+    stream.mode look like ``ws`` while the active OKX public socket is down
+    and every OKX mark is coming from REST.
+    """
+    with _lock:
+        raw = [dict(v) for v in _conns.values()]
+        now = time.time()
+        q = list(_quotes.values())
+        last_ws_map = dict(_last_ws_at)
+        rest_err = dict(_rest_errors)
+    conns = [annotate_conn(c, now=now) for c in raw]
+    v = (venue or "").strip().lower() or None
+    if v:
+        q_use = [x for x in q if (x.venue or "").lower() == v]
+        c_use = [c for c in conns if _conn_belongs(c.get("name") or "", v)]
+        last_ws = float(last_ws_map.get(v) or 0.0)
+        rest_err = {k: e for k, e in rest_err.items() if str(k).lower().startswith(v + ":")}
+    else:
+        q_use, c_use = q, conns
+        last_ws = max(last_ws_map.values(), default=0.0)
+    mode, live, rest = _freshness(q_use, c_use, last_ws, now)
+    out = {"mode": mode, "connections": conns, "quotes_ws_fresh": live, "quotes_rest_fresh": rest,
+           "quotes_total": len(q_use), "rest_errors": rest_err, "running": bool(_thread and _thread.is_alive())}
+    if v:
+        out["venue"] = v
+    return out
 
 
 def snapshot(venue: str) -> dict:
@@ -292,51 +325,86 @@ async def _send(ws, payload):
         raise ConnectionError(f"{SEND_WAIT_SEC} 秒内未能发出心跳/订阅（连接可能已半开）") from None
 
 
-async def _run_ws(name, urls, subscribe_msgs, handle, ping):
+async def _connect_ws(url: str, *, opener=None):
+    """Open a WebSocket with a hard outer timeout around the handshake.
+
+    ``websockets.connect(..., open_timeout=N)`` can still stall (DNS lookup or
+    a half-open TCP that never completes the upgrade). ``_run_ws`` sets
+    status=connecting *before* the handshake, and ``_ws_refs`` is only filled
+    after it succeeds, so a hung connect would sit at connecting forever and
+    the zombie kicker could not abort it. Cancelling via wait_for forces the
+    reconnect loop to make progress.
+    """
     import websockets
+    fn = opener or websockets.connect
+    try:
+        return await asyncio.wait_for(
+            fn(url, open_timeout=OPEN_TIMEOUT_SEC, ping_interval=None, close_timeout=3, max_size=2**22),
+            CONNECT_GUARD_SEC,
+        )
+    except asyncio.TimeoutError:
+        raise ConnectionError(f"{CONNECT_GUARD_SEC} 秒内未能完成 WebSocket 握手") from None
+
+
+async def _close_ws_quietly(ws) -> None:
+    try:
+        await asyncio.wait_for(ws.close(), 3)
+    except Exception:
+        try:
+            transport = getattr(ws, "transport", None)
+            if transport is not None and not transport.is_closing():
+                transport.abort()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _run_ws(name, urls, subscribe_msgs, handle, ping):
     backoff, i = 1.0, 0
     while True:
         url = urls[i % len(urls)]
         was_connected = False
         _conn_state(name, status="connecting", url=url)
+        ws = None
         try:
             # Keep library protocol ping disabled: OKX/Gate use app-level ping/pong
             # and we do not want a second heartbeat to interfere. Quiet stretches
             # are handled by the grace-retry below.
-            async with websockets.connect(url, open_timeout=10, ping_interval=None, close_timeout=3, max_size=2**22) as ws:
-                _ws_refs[name] = ws
-                try:
-                    for m in subscribe_msgs():
-                        await _send(ws, m)
-                    _conn_state(name, status="connected", connected_at=iso(utcnow()), last_msg=iso(utcnow()), last_error="")
-                    backoff, was_connected = 1.0, True
-                    last_ping = time.time()
-                    while True:
-                        if time.time() - last_ping > PING_EVERY_SEC:
+            ws = await _connect_ws(url)
+            _ws_refs[name] = ws
+            try:
+                for m in subscribe_msgs():
+                    await _send(ws, m)
+                _conn_state(name, status="connected", connected_at=iso(utcnow()), last_msg=iso(utcnow()), last_error="")
+                backoff, was_connected = 1.0, True
+                last_ping = time.time()
+                while True:
+                    if time.time() - last_ping > PING_EVERY_SEC:
+                        await _send(ws, ping())
+                        last_ping = time.time()
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), RECV_WAIT_SEC)
+                    except asyncio.TimeoutError:
+                        # Grace retry: one extra app-level ping + one more recv wait
+                        # so a brief quiet period does not flap all sockets at once.
+                        try:
                             await _send(ws, ping())
                             last_ping = time.time()
-                        try:
                             raw = await asyncio.wait_for(ws.recv(), RECV_WAIT_SEC)
                         except asyncio.TimeoutError:
-                            # Grace retry: one extra app-level ping + one more recv wait
-                            # so a brief quiet period does not flap all sockets at once.
-                            try:
-                                await _send(ws, ping())
-                                last_ping = time.time()
-                                raw = await asyncio.wait_for(ws.recv(), RECV_WAIT_SEC)
-                            except asyncio.TimeoutError:
-                                raise ConnectionError(f"{RECV_WAIT_SEC} 秒未收到消息（grace ping 后仍无响应）") from None
-                        _note_activity(name)
-                        if is_keepalive(raw):
-                            _bump()
-                            continue
-                        try:
-                            handle(json.loads(raw), url)
-                        except Exception as e:  # noqa: BLE001
-                            log.warning("%s handle error: %s", name, e)
-                finally:
-                    if _ws_refs.get(name) is ws:
-                        _ws_refs.pop(name, None)
+                            raise ConnectionError(f"{RECV_WAIT_SEC} 秒未收到消息（grace ping 后仍无响应）") from None
+                    _note_activity(name)
+                    if is_keepalive(raw):
+                        _bump()
+                        continue
+                    try:
+                        handle(json.loads(raw), url)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("%s handle error: %s", name, e)
+            finally:
+                if _ws_refs.get(name) is ws:
+                    _ws_refs.pop(name, None)
+                # Close before the reconnect sleep (same timing as the old async with).
+                await _close_ws_quietly(ws)
         except asyncio.CancelledError:
             _conn_state(name, status="stopped")
             raise
@@ -349,7 +417,6 @@ async def _run_ws(name, urls, subscribe_msgs, handle, ping):
                 i += 1  # 这个地址连不上就换下一个官方地址；连上过的地址断线后先原地重连
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
-
 
 
 def _host(url):

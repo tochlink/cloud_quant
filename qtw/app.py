@@ -99,7 +99,7 @@ def status():
     return ok({"version": __version__, "time": iso(utcnow()), "time_la": la(utcnow()), "time_sh": sh(utcnow()), "settings": cfg,
                "mode": "live" if S.live_armed(cfg) else "paper", "live_gate_open": live_ok,
                "live_block_reasons": reasons, "worker": worker.status(), "vault": vault.status(),
-               "stream": stream.status(), "db": {"path": str(db.db_path()), "counts": db.counts()},
+               "stream": stream.status(cfg["venue"]), "db": {"path": str(db.db_path()), "counts": db.counts()},
                "confirm_phrase_required": S.LIVE_CONFIRM_PHRASE})
 
 
@@ -107,7 +107,7 @@ def status():
 def health():
     """Lightweight smoke probe. No secrets, no vault, no full settings dump."""
     cfg = S.load()
-    st = stream.status()
+    st = stream.status(cfg["venue"])
     w = worker.status()
     return ok({
         "ok": True,
@@ -200,7 +200,7 @@ def positions():
 def quotes():
     """Thin alias: live public quotes from the stream snapshot (no new market calls)."""
     cfg = S.load()
-    st = stream.status()
+    st = stream.status(cfg["venue"])
     snap = stream.snapshot(cfg["venue"])
     flat = []
     for sym, mkts in sorted(snap.get("prices", {}).items()):
@@ -519,11 +519,12 @@ def _live_payload() -> dict:
     bk = engine.book(cfg)
     eq = bk.equity()
     snap = stream.snapshot(cfg["venue"])
+    st = stream.status(cfg["venue"])
     return clean({
         "time": iso(utcnow()), "venue": cfg["venue"], "interval": cfg["strategy"]["interval"],
-        "stream": {k: v for k, v in stream.status().items() if k != "connections"},
+        "stream": {k: v for k, v in st.items() if k != "connections"},
         "connections": [{k: c[k] for k in ("name", "status", "url", "last_msg", "last_msg_age_sec", "reconnects", "last_error")}
-                        for c in stream.status()["connections"]],
+                        for c in st["connections"]],
         "prices": snap["prices"], "forming": snap["forming"],
         "paper": {"equity": eq, "realized": bk.realized, "unrealized": eq - bk.realized, "gross": bk.gross(),
                   "net": bk.net(), "total_pnl": eq - bk.starting,
@@ -552,7 +553,8 @@ async def sse():
 
 @app.get("/api/stream/status")
 def stream_status():
-    return ok(stream.status())
+    cfg = S.load()
+    return ok(stream.status(cfg["venue"]))
 
 
 EXPORTS = {"signals": "signals.csv", "paper_positions": "paper_positions.csv", "paper_fills": "paper_fills.csv",
