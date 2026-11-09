@@ -287,7 +287,7 @@ def test_abort_ws_transport_sync_from_watchdog_path(monkeypatch):
 def test_watchdog_tick_aborts_when_loop_stalled(monkeypatch):
     """If the asyncio heartbeat is stale, side-thread abort must not wait for supervisor."""
     states = {}
-    scheduled = {"n": 0}
+    filled = {"n": 0}
 
     def fake_state(name, **kw):
         st = states.setdefault(name, {"name": name, "status": "connected", "last_msg": "", "reconnects": 0})
@@ -297,7 +297,11 @@ def test_watchdog_tick_aborts_when_loop_stalled(monkeypatch):
     monkeypatch.setattr(stream, "ZOMBIE_SEC", 70)
     monkeypatch.setattr(stream, "LOOP_STALL_SEC", 12)
     monkeypatch.setattr(stream, "WATCHDOG_GRACE_SEC", 12)
-    monkeypatch.setattr(stream, "_schedule_rest_fill_from_watchdog", lambda: scheduled.__setitem__("n", scheduled["n"] + 1))
+    monkeypatch.setattr(stream, "_rest_fill_stale_sync",
+                        lambda *_a, **_k: filled.__setitem__("n", filled["n"] + 1) or 4)
+    monkeypatch.setattr(stream, "_schedule_rest_fill_from_watchdog",
+                        lambda: (_ for _ in ()).throw(AssertionError("async fill on stall")))
+    monkeypatch.setattr(stream, "_watch_symbols", ["BTCUSDT"])
     stream._ws_refs.clear()
     stream._loop_heartbeat = time.time() - 60  # stalled
     with stream._lock:
@@ -312,7 +316,7 @@ def test_watchdog_tick_aborts_when_loop_stalled(monkeypatch):
 
     n = stream._watchdog_tick()
     assert n == 2
-    assert scheduled["n"] == 1
+    assert filled["n"] == 1
     for name in ("okx_public", "gate_spot"):
         assert states[name]["status"] == "reconnecting"
         assert stream._ws_refs.get(name) is None
