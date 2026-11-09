@@ -164,6 +164,8 @@ def health():
             "running": bool(st.get("running")),
             "quotes_ws_fresh": st.get("quotes_ws_fresh"),
             "quotes_rest_fresh": st.get("quotes_rest_fresh"),
+            "watchdog_running": bool(st.get("watchdog_running")),
+            "loop_heartbeat_age_sec": st.get("loop_heartbeat_age_sec"),
         },
         "quotes_ws_fresh": st.get("quotes_ws_fresh"),
         "worker": {"running": bool(w.get("running"))},

@@ -1,6 +1,7 @@
 """Zombie WS force-close must abort without hanging the supervisor."""
 import asyncio
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -267,3 +268,104 @@ def test_rest_fill_stale_runs_preferred_venue_before_secondary(monkeypatch):
         assert set(order[2:]) == {"gate"}
 
     asyncio.run(run())
+
+
+def test_abort_ws_transport_sync_from_watchdog_path(monkeypatch):
+    states = {}
+
+    def fake_state(name, **kw):
+        st = states.setdefault(name, {"name": name, "status": "connected", "last_msg": "", "reconnects": 0})
+        st.update(kw)
+
+    monkeypatch.setattr(stream, "_conn_state", fake_state)
+    stream._ws_refs.clear()
+    ws = _HangCloseWS()
+    stream._ws_refs["okx_public"] = ws
+    assert stream._abort_ws_transport_sync(ws, "okx_public", reason="zombie: watchdog abort") is True
+    assert ws.aborted is True
+    assert "okx_public" not in stream._ws_refs
+    assert states["okx_public"]["status"] == "reconnecting"
+    assert "watchdog" in states["okx_public"]["last_error"]
+
+
+def test_watchdog_tick_aborts_when_loop_stalled(monkeypatch):
+    """If the asyncio heartbeat is stale, side-thread abort must not wait for supervisor."""
+    states = {}
+    scheduled = {"n": 0}
+
+    def fake_state(name, **kw):
+        st = states.setdefault(name, {"name": name, "status": "connected", "last_msg": "", "reconnects": 0})
+        st.update(kw)
+
+    monkeypatch.setattr(stream, "_conn_state", fake_state)
+    monkeypatch.setattr(stream, "ZOMBIE_SEC", 70)
+    monkeypatch.setattr(stream, "LOOP_STALL_SEC", 12)
+    monkeypatch.setattr(stream, "WATCHDOG_GRACE_SEC", 12)
+    monkeypatch.setattr(stream, "_schedule_rest_fill_from_watchdog", lambda: scheduled.__setitem__("n", scheduled["n"] + 1))
+    stream._ws_refs.clear()
+    stream._loop_heartbeat = time.time() - 60  # stalled
+    with stream._lock:
+        stream._conns.clear()
+        lm = datetime.fromtimestamp(time.time() - 95, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for name in ("okx_public", "gate_spot"):
+            stream._conns[name] = {
+                "name": name, "status": "connected", "last_msg": lm,
+                "reconnects": 0, "url": "", "connected_at": lm, "last_error": "", "channels": [],
+            }
+            stream._ws_refs[name] = _HangCloseWS()
+
+    n = stream._watchdog_tick()
+    assert n == 2
+    assert scheduled["n"] == 1
+    for name in ("okx_public", "gate_spot"):
+        assert states[name]["status"] == "reconnecting"
+        assert stream._ws_refs.get(name) is None
+        assert stream._ws_refs.get(name) is None or name not in stream._ws_refs
+
+    with stream._lock:
+        stream._conns.clear()
+    stream._ws_refs.clear()
+    stream._loop_heartbeat = time.time()
+
+
+def test_watchdog_tick_waits_grace_when_loop_healthy(monkeypatch):
+    """Fresh heartbeat + age just past ZOMBIE → leave kick to in-loop supervisor."""
+    states = {}
+    scheduled = {"n": 0}
+
+    def fake_state(name, **kw):
+        st = states.setdefault(name, {"name": name, "status": "connected", "last_msg": "", "reconnects": 0})
+        st.update(kw)
+
+    monkeypatch.setattr(stream, "_conn_state", fake_state)
+    monkeypatch.setattr(stream, "ZOMBIE_SEC", 70)
+    monkeypatch.setattr(stream, "LOOP_STALL_SEC", 12)
+    monkeypatch.setattr(stream, "WATCHDOG_GRACE_SEC", 12)
+    monkeypatch.setattr(stream, "_schedule_rest_fill_from_watchdog", lambda: scheduled.__setitem__("n", scheduled["n"] + 1))
+    stream._ws_refs.clear()
+    stream._loop_heartbeat = time.time()  # healthy
+    with stream._lock:
+        stream._conns.clear()
+        # 75s > 70 but within grace (70+12)
+        lm = datetime.fromtimestamp(time.time() - 75, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        stream._conns["okx_public"] = {
+            "name": "okx_public", "status": "connected", "last_msg": lm,
+            "reconnects": 0, "url": "", "connected_at": lm, "last_error": "", "channels": [],
+        }
+        stream._ws_refs["okx_public"] = _HangCloseWS()
+
+    assert stream._watchdog_tick() == 0
+    assert scheduled["n"] == 0
+    assert stream._ws_refs.get("okx_public") is not None
+
+    # Past grace → watchdog acts even with healthy heartbeat
+    lm2 = datetime.fromtimestamp(time.time() - 95, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stream._conns["okx_public"]["last_msg"] = lm2
+    assert stream._watchdog_tick() == 1
+    assert scheduled["n"] == 1
+    assert "okx_public" not in stream._ws_refs
+
+    with stream._lock:
+        stream._conns.clear()
+    stream._ws_refs.clear()
+
