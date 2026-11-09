@@ -83,6 +83,12 @@ cd /workspace/quant-trading-web
 * 纸面持仓按同一交易所、同一市场的实时价格计价（现货多 → 现货最新价，永续空 → 永续标记价），每 15 秒落库；落库后对 SQLite WAL 做 `PASSIVE` checkpoint（不阻塞并发读）。
 * 页面通过 **SSE `/api/stream`** 每 1.5 秒收到更新：顶部状态（实时 / 部分重连 / 恢复中 / REST 兜底）、右栏价格与盈亏、总览权益、信号卡片价格、K 线最后一根。
 * 冒烟：`GET /api/health` 返回 `ok`、纸面/实盘 `mode`、`stream.mode`（含 recovering）、`quotes_ws_fresh`、`worker.running`、时间；不含密钥或完整设置。
+* 监控只读别名（复用现有数据，不另造行情或账本计算）：
+  * `GET /api/paper` — 纸面账本快照（权益、敞口、持仓、近期成交、账本）
+  * `GET /api/positions` — 当前持仓与权益 / 敞口
+  * `GET /api/quotes` — 当前行情源的实时报价（`stream.snapshot`，含扁平 `quotes` 列表）
+  * `GET /api/risk` — 风控规则与当前单币权重 / 总敞口是否越界
+* 后台 `worker.status` 含 `last_run` / `last_run_la` / `last_run_sh`（上海时间 CST+8）。尚未排出下次执行时间（首轮进行中，或上一轮 deadline 已过、正在跑周期）时，`next_run_in_sec` 为 `null`，不再误报「0 秒后」。
 
 ## 自动交易与紧急停止
 

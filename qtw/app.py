@@ -127,8 +127,8 @@ def _closed_trades(fills: list[dict]) -> list[dict]:
     return [f for f in fills if f["action"] == "close"]
 
 
-@app.get("/api/dashboard")
-def dashboard():
+def _dashboard_data() -> dict:
+    """Shared paper-book snapshot used by /api/dashboard and thin monitoring aliases."""
     cfg = S.load()
     bk = engine.book(cfg)
     eq = bk.equity()
@@ -151,8 +151,9 @@ def dashboard():
         dd.append(v / peak - 1 if peak > 0 else 0)
     week_ledger = [r for r in ledger if r["time"].replace("Z", "+00:00") >= week_ago]
     week_start_eq = float(week_ledger[0]["equity_usdt"]) if week_ledger else bk.starting
-    return ok({
-        "time": iso(utcnow()), "time_la": la(utcnow()), "time_sh": sh(utcnow()), "mode": "live" if S.live_armed(cfg) else "paper",
+    now = utcnow()
+    return {
+        "time": iso(now), "time_la": la(now), "time_sh": sh(now), "mode": "live" if S.live_armed(cfg) else "paper",
         "venue": cfg["venue"], "starting_equity": bk.starting, "equity": eq, "realized": bk.realized,
         "unrealized": eq - bk.realized, "cash_free": max(0.0, eq - bk.gross()) if abs(eq - bk.gross()) < 1e-6 else eq - bk.gross(), "gross": bk.gross(), "net": bk.net(),
         "total_pnl": eq - bk.starting, "total_return": eq / bk.starting - 1,
@@ -166,6 +167,97 @@ def dashboard():
         "drawdown": dd[-300:], "max_drawdown": min(dd) if dd else 0, "closed_trades": len(closed),
         "win_rate": (len(wins) / len(closed)) if closed else None, "worker": worker.status(),
         "pnl_by_trade": [float(f["realized_pnl_usdt"]) for f in closed[-30:]],
+    }
+
+
+@app.get("/api/dashboard")
+def dashboard():
+    return ok(_dashboard_data())
+
+
+@app.get("/api/paper")
+def paper():
+    """Thin alias: paper-book snapshot (equity, exposure, positions, fills, ledger)."""
+    d = _dashboard_data()
+    return ok({k: d[k] for k in (
+        "time", "time_la", "time_sh", "mode", "venue", "starting_equity", "equity",
+        "realized", "unrealized", "cash_free", "gross", "net", "total_pnl", "total_return",
+        "week", "positions", "recent_fills", "ledger", "max_drawdown", "closed_trades",
+        "win_rate", "worker",
+    )})
+
+
+@app.get("/api/positions")
+def positions():
+    """Thin alias: current paper positions plus equity / exposure."""
+    d = _dashboard_data()
+    return ok({k: d[k] for k in (
+        "time", "time_la", "time_sh", "mode", "venue", "equity", "gross", "net", "positions",
+    )})
+
+
+@app.get("/api/quotes")
+def quotes():
+    """Thin alias: live public quotes from the stream snapshot (no new market calls)."""
+    cfg = S.load()
+    st = stream.status()
+    snap = stream.snapshot(cfg["venue"])
+    flat = []
+    for sym, mkts in sorted(snap.get("prices", {}).items()):
+        for mkt, rec in mkts.items():
+            row = {"symbol": sym, "market": mkt}
+            row.update(rec)
+            flat.append(row)
+    now = utcnow()
+    return ok({
+        "time": iso(now), "time_la": la(now), "time_sh": sh(now),
+        "venue": cfg["venue"],
+        "stream_mode": st.get("mode"),
+        "quotes_ws_fresh": st.get("quotes_ws_fresh"),
+        "quotes_rest_fresh": st.get("quotes_rest_fresh"),
+        "quotes_total": st.get("quotes_total"),
+        "prices": snap.get("prices", {}),
+        "quotes": flat,
+    })
+
+
+@app.get("/api/risk")
+def risk_overview():
+    """Thin alias: risk rules plus current per-name weight and gross usage."""
+    cfg = S.load()
+    d = _dashboard_data()
+    rk = cfg["risk"]
+    eq = float(d["equity"] or 0)
+    gross = float(d["gross"] or 0)
+    name_cap = float(rk["max_weight_per_name"])
+    gross_cap = float(rk["max_gross_exposure"])
+    rows = []
+    breaches = []
+    for p in d["positions"]:
+        w = float(p["weight"] or 0)
+        over = w > name_cap + 1e-12
+        if over:
+            breaches.append(p["symbol"])
+        rows.append({
+            "symbol": p["symbol"], "market": p["market"], "side": p["side"],
+            "notional": p["notional"], "weight": p["weight"], "upnl": p["upnl"],
+            "stop_price": p["stop_price"], "over_name_cap": over,
+        })
+    gross_usage = (gross / eq) if eq else 0.0
+    return ok({
+        "time": d["time"], "time_la": d["time_la"], "time_sh": d["time_sh"],
+        "mode": d["mode"], "venue": d["venue"],
+        "rules": rk,
+        "starting_equity": d["starting_equity"],
+        "equity": d["equity"], "gross": d["gross"], "net": d["net"],
+        "gross_usage": gross_usage,
+        "max_risk_per_trade": rk["max_risk_per_trade"],
+        "max_weight_per_name": name_cap,
+        "max_gross_exposure": gross_cap,
+        "positions": rows,
+        "name_cap_breaches": breaches,
+        "name_cap_ok": not breaches,
+        "gross_cap_ok": gross_usage <= gross_cap + 1e-9,
     })
 
 

@@ -6,10 +6,10 @@ import threading
 import time
 
 from . import settings as S
-from .timeutil import iso, la, utcnow
+from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
-_state = {"running": False, "last_run": "", "last_run_la": "", "last_result": None, "last_error": "", "next_run": 0.0}
+_state = {"running": False, "last_run": "", "last_run_la": "", "last_run_sh": "", "last_result": None, "last_error": "", "next_run": 0.0}
 _stop = threading.Event()
 _thread: threading.Thread | None = None
 _lock = threading.Lock()
@@ -25,7 +25,8 @@ def _loop():
         except Exception as e:  # noqa: BLE001
             log.exception("cycle failed")
             _state["last_error"] = str(e)[:300]
-        _state.update(last_run=iso(utcnow()), last_run_la=la(utcnow()))
+        now = utcnow()
+        _state.update(last_run=iso(now), last_run_la=la(now), last_run_sh=sh(now))
         _state["next_run"] = time.time() + cfg["worker"]["interval_sec"]
         _stop.wait(cfg["worker"]["interval_sec"])
     _state["running"] = False
@@ -50,5 +51,14 @@ def stop():
 def status() -> dict:
     s = dict(_state)
     s["running"] = bool(_thread and _thread.is_alive() and not _stop.is_set())
-    s["next_run_in_sec"] = max(0, int(s.pop("next_run") - time.time())) if s["running"] else None
+    next_run = s.pop("next_run", 0.0)
+    if not s["running"]:
+        s["next_run_in_sec"] = None
+    elif not next_run:
+        # First cycle has not finished, so the next deadline is still unknown.
+        s["next_run_in_sec"] = None
+    else:
+        remaining = next_run - time.time()
+        # A negative remainder means a cycle is in progress; do not report "0 seconds".
+        s["next_run_in_sec"] = None if remaining < 0 else int(remaining)
     return s
