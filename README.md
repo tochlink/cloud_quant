@@ -75,7 +75,7 @@ cd /workspace/quant-trading-web
 | Gate | `wss://api.gateio.ws/ws/v4/` | `spot.tickers`、`spot.candlesticks` |
 | Gate | `wss://fx-ws.gateio.ws/v4/ws/usdt` | `futures.tickers`（mark_price）、`futures.candlesticks` |
 
-* 两个交易所都订阅整个标的池；断线指数退避自动重连；任何价格 20 秒没有 WS 更新就改用官方 REST 拉取（`*_public_rest`）。
+* 两个交易所都订阅整个标的池；断线指数退避自动重连；任何价格 20 秒没有 WS 更新就改用官方 REST 拉取（`*_public_rest`）。 REST 填隙**优先当前纸面行情源**（`settings.venue`），同批有限并发，僵尸踢掉后纸面标记价不必排在另一所串行 REST 后面。监控别名 `GET /api/paper/book` 与 `GET /api/paper/snapshot` 与 `/api/paper` 同载荷。
 * **有纸面持仓时不能切换行情源（OKX ↔ Gate）**：入场价 / 止损 / 标记价必须来自同一交易所公共行情；请先紧急停止平仓或重置账本后再切换。加载账本时会把旧持仓缺失的 `venue` 从开仓成交记录回填。
 * 心跳：OKX 文本 `pong`、Gate JSON（`channel` 以 `.pong` 结尾，例如 `spot.pong` / `futures.pong`）都算连接活跃并刷新 `last_msg`，不交给行情处理函数。recv 超时会先再发一次应用层 ping 并多等一轮，避免短暂静默就重连。发出订阅 / ping 也有超时，半开连接导致 send 挂起时会主动重连。 已收盘 K 线写库走线程池，避免 SQLite/WAL 卡住事件循环；`status` 把「已连接但 last_msg 过旧」标为 `stale`（无响应）；supervisor 对僵尸套接字优先 `transport.abort()` 硬中断（并行踢掉、短超时 close 兜底），避免 close 握手挂起导致重连卡住；连接成功即写入 `last_msg`，空 `last_msg` 用 `connected_at` 计龄；踢掉后立刻官方 REST 填一次过期报价，不等 10 秒轮询。 supervisor 读配置经线程池，避免 `S.load()`/SQLite 锁卡住事件循环。顶部行情 pill 只按当前行情源（OKX / Gate）的连接判断「无响应」，不会被另一所的 stale 误伤。WebSocket 握手除库自带 `open_timeout` 外再包一层超时，避免 DNS / 半开 TCP 让单条连接的状态一直停在 `connecting`。
 * `stream.mode` 与 `quotes_ws_fresh` / `quotes_rest_fresh` 按当前行情源（`settings.venue`）统计：OKX 标记价全部来自 REST 时，不会因为 Gate 的 WebSocket 仍在线而显示 `mode=ws`。顶部行情 pill 与该口径一致（只按当前所判断无响应 / 实时 / 恢复中 / REST 兜底）。`mode` 仍带迟滞：`ws`（当前所有新鲜 WS 报价）→ `recovering`（该所插座仍在 / 刚重连、REST 短暂填隙）→ `rest`（该所 WS 路径真正不可用、仅 REST）→ `down`。重连风暴时不会立刻误报「REST 兜底」。
