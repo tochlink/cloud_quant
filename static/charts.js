@@ -113,6 +113,7 @@
       c.timeScale().fitContent();
       c._candle = s;
       c._last = d.candles.length ? d.candles[d.candles.length - 1].time : 0;
+      c._lastClosed = c._last; // 已收盘最后一根；未收盘跳动只更新 c._last
       return c;
     },
     equity(el, pts) {

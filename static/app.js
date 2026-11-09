@@ -593,11 +593,29 @@ function applyForming() {
   if (L.venue !== S.status.settings.venue) return;
   const f = L.forming[`${L.interval}:${c._sym}:${c._mkt}`];
   if (!f) return;
-  if (f.time > c._last + c._iv && Date.now() - (c._loadedAt || 0) > 20000) { loadCandles(); return; } // 上一根已收盘：重新拉取以更新均线与标记
-  if (f.time >= c._last) {
+  const lastClosed = c._lastClosed || 0;
+  // 未收盘 K 线会把 c._last 推到当前根。收盘检测必须对照「最后一根已收盘」时间，
+  // 否则新周期开始时 f.time === c._last + iv，均线与交叉标记不会刷新。
+  if (f.time > lastClosed + (c._iv || 0) && Date.now() - (c._loadedAt || 0) > 20000) {
+    c._loadedAt = Date.now(); // 先打戳，避免 SSE 连续触发重复拉取
+    loadCandles();
+    refreshSignalsNow();
+    return;
+  }
+  if (f.time >= (c._last || 0)) {
     try { c._candle.update({ time: f.time, open: f.open, high: f.high, low: f.low, close: f.close }); c._last = f.time; c._liveAt = Date.now(); c._liveKind = /_ws$/.test(f.source || "") ? "WebSocket" : "REST"; } catch (_) {}
   }
   renderChartSrc();
+}
+async function refreshSignalsNow() {
+  if (S._sigRefreshing) return;
+  S._sigRefreshing = true;
+  try {
+    S.signals = await api("/api/signals");
+    renderRight();
+    if (S.page === "signals") renderSigGrid();
+  } catch (_) {}
+  finally { S._sigRefreshing = false; }
 }
 /* 行情状态：实时 / 部分重连 / 恢复中 / REST 兜底 / 数据延迟 / 中断 */
 function liveState() {
@@ -684,4 +702,4 @@ if (!new URLSearchParams(location.search).has("nolive")) connectLive(); // noliv
 setInterval(renderLivePill, 5000);
 setInterval(() => { if (S.page === "signals") renderChartSrc(); }, 1000);
 setInterval(async () => { await refreshAll(); }, 30000);
-setInterval(async () => { try { S.signals = await api("/api/signals"); renderRight(); if (S.page === "signals") renderSigGrid(); } catch (_) {} }, 120000);
+setInterval(() => { refreshSignalsNow(); }, 120000);

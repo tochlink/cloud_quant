@@ -430,7 +430,7 @@ def _live_payload() -> dict:
     return clean({
         "time": iso(utcnow()), "venue": cfg["venue"], "interval": cfg["strategy"]["interval"],
         "stream": {k: v for k, v in stream.status().items() if k != "connections"},
-        "connections": [{k: c[k] for k in ("name", "status", "url", "last_msg", "reconnects", "last_error")}
+        "connections": [{k: c[k] for k in ("name", "status", "url", "last_msg", "last_msg_age_sec", "reconnects", "last_error")}
                         for c in stream.status()["connections"]],
         "prices": snap["prices"], "forming": snap["forming"],
         "paper": {"equity": eq, "realized": bk.realized, "unrealized": eq - bk.realized, "gross": bk.gross(),
