@@ -7,3 +7,4 @@ PyYAML>=6.0.1,<7
 cryptography>=42,<60
 pytest>=7.4,<10
 httpx>=0.27,<1
+websockets>=12,<16

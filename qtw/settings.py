@@ -1,13 +1,17 @@
-"""非敏感配置（data/settings.yaml）。API 密钥不在这里，见 qtw/vault.py。"""
+"""非敏感配置，存于 SQLite（data/qtw.sqlite 的 settings 表）。API 密钥不在这里，见 qtw/vault.py。"""
 from __future__ import annotations
 
 import copy
 import threading
 from typing import Any
 
+import json
+
 import yaml
 
+from . import db
 from .paths import DATA_DIR, ensure_dirs
+from .timeutil import iso, utcnow
 
 LIVE_CONFIRM_PHRASE = "我已了解实盘交易可能亏损全部资金"
 
@@ -33,7 +37,7 @@ DEFAULTS: dict[str, Any] = {
         "allow_perp_short": True,
     },
     "fees": {"taker_bps": 4.0},
-    "worker": {"enabled": False, "interval_sec": 300},
+    "worker": {"enabled": True, "interval_sec": 60},  # 7×24 纸面自动交易（服务运行即运行；紧急停止会关闭）
     "live": {
         "mode": "paper",  # paper | live
         "live_enabled": False,
@@ -57,13 +61,27 @@ def _merge(base: dict, over: dict) -> dict:
     return out
 
 
+def _read_db() -> dict | None:
+    r = db.query("SELECT value FROM settings WHERE key='config'")
+    return json.loads(r[0]["value"]) if r else None
+
+
+def _write_db(s: dict) -> None:
+    db.execute("INSERT INTO settings(key,value,updated_at) VALUES('config',?,?) "
+               "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+               (db.dumps(s), iso(utcnow())))
+
+
 def load() -> dict:
     with _LOCK:
         ensure_dirs()
-        if PATH.exists():
-            data = yaml.safe_load(PATH.read_text(encoding="utf-8")) or {}
-        else:
+        data = _read_db()
+        if data is None:
             data = {}
+            if PATH.exists():  # 旧版 YAML → SQLite 一次性迁移
+                data = yaml.safe_load(PATH.read_text(encoding="utf-8")) or {}
+                _write_db(_merge(DEFAULTS, data))
+                PATH.rename(PATH.with_suffix(".yaml.migrated"))
         return _merge(DEFAULTS, data)
 
 
@@ -101,8 +119,7 @@ def validate(s: dict) -> dict:
 def save(s: dict) -> dict:
     with _LOCK:
         s = validate(_merge(DEFAULTS, s))
-        ensure_dirs()
-        PATH.write_text(yaml.safe_dump(s, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        _write_db(s)
         return s
 
 
