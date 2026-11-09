@@ -15,7 +15,7 @@
     发出订阅 / ping 也有超时：半开 TCP 让 send 挂起时会主动重连，避免状态仍是 connected 但 last_msg 数分钟不刷新。
   * 已收盘 K 线写入 SQLite 放到线程池，避免 db 锁/WAL 卡住 asyncio 事件循环，导致四条连接同时假死（status=connected 但 last_msg 数分钟不刷新）。
   * status() 把「已连接但 last_msg 超过 ZOMBIE_SEC」标为 stale，不计入 up，避免 UI 误报实时。
-  * supervisor 每轮检查僵尸连接：last_msg 过旧仍标 connected 时主动 close 套接字，迫使 _run_ws 走重连（兜底 recv/wait_for 未触发的半开连接）。
+  * supervisor 每轮检查僵尸连接：last_msg 过旧仍标 connected 时强制中断套接字（优先 transport.abort，避免 close 握手挂起），并行踢掉并标 reconnecting，迫使 _run_ws 走重连。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
 """
@@ -457,15 +457,50 @@ async def _rest_fallback(symbols):
                         _rest_errors[key] = str(e)[:200]
 
 
+async def _force_close_ws(ws, name: str) -> None:
+    """Hard-stop a zombie socket so `_run_ws` exits into its reconnect loop.
+
+    Half-open peers often never finish the WebSocket close handshake. A plain
+    ``await wait_for(ws.close(), …)`` can cancel the close coroutine *before*
+    websockets aborts the TCP transport, leaving ``recv()`` blocked and
+    reconnects stuck at 0 while the supervisor spends ~3s per socket.
+    Prefer ``transport.abort()`` (instant), with a short close() fallback.
+    """
+    # Flip UI/status immediately and drop the ref so the next supervisor tick
+    # does not re-kick the same object while `_run_ws` is still unwinding.
+    _conn_state(name, status="reconnecting", last_error="zombie: forced close")
+    if _ws_refs.get(name) is ws:
+        _ws_refs.pop(name, None)
+    transport = getattr(ws, "transport", None)
+    try:
+        if transport is not None and not transport.is_closing():
+            transport.abort()
+            return
+    except Exception as e:  # noqa: BLE001
+        log.info("%s zombie abort: %s", name, type(e).__name__)
+    try:
+        await asyncio.wait_for(ws.close(), 0.5)
+    except Exception as e:  # noqa: BLE001
+        log.info("%s zombie close: %s", name, type(e).__name__)
+        try:
+            transport = getattr(ws, "transport", None)
+            if transport is not None and not transport.is_closing():
+                transport.abort()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def _kick_zombies():
     """Close sockets that look connected but have been silent past ZOMBIE_SEC.
 
     recv/grace should already reconnect; this is a safety net when the library
     recv wait never returns while the event loop is otherwise healthy.
+    Kicks run in parallel so one hung close cannot stall the other three.
     """
     now = time.time()
     with _lock:
         rows = [(n, dict(st)) for n, st in _conns.items()]
+    jobs = []
     for name, st in rows:
         if st.get("status") != "connected":
             continue
@@ -474,12 +509,14 @@ async def _kick_zombies():
             continue
         ws = _ws_refs.get(name)
         if ws is None:
+            # Still mark reconnecting so mode leaves "rest"/stale if the task
+            # is wedged without a live socket ref.
+            _conn_state(name, status="reconnecting", last_error="zombie: no live socket ref")
             continue
         log.warning("%s zombie (last_msg %.0fs ago > %ss), forcing socket close", name, age, ZOMBIE_SEC)
-        try:
-            await asyncio.wait_for(ws.close(), 3)
-        except Exception as e:  # noqa: BLE001
-            log.info("%s zombie close: %s", name, type(e).__name__)
+        jobs.append(_force_close_ws(ws, name))
+    if jobs:
+        await asyncio.gather(*jobs, return_exceptions=True)
 
 
 async def _supervisor():

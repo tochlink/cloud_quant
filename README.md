@@ -77,7 +77,7 @@ cd /workspace/quant-trading-web
 
 * 两个交易所都订阅整个标的池；断线指数退避自动重连；任何价格 20 秒没有 WS 更新就改用官方 REST 拉取（`*_public_rest`）。
 * **有纸面持仓时不能切换行情源（OKX ↔ Gate）**：入场价 / 止损 / 标记价必须来自同一交易所公共行情；请先紧急停止平仓或重置账本后再切换。加载账本时会把旧持仓缺失的 `venue` 从开仓成交记录回填。
-* 心跳：OKX 文本 `pong`、Gate JSON（`channel` 以 `.pong` 结尾，例如 `spot.pong` / `futures.pong`）都算连接活跃并刷新 `last_msg`，不交给行情处理函数。recv 超时会先再发一次应用层 ping 并多等一轮，避免短暂静默就重连。发出订阅 / ping 也有超时，半开连接导致 send 挂起时会主动重连。 已收盘 K 线写库走线程池，避免 SQLite/WAL 卡住事件循环；`status` 把「已连接但 last_msg 过旧」标为 `stale`（无响应）；supervisor 对僵尸套接字主动 close 以强制重连。顶部行情 pill 只按当前行情源（OKX / Gate）的连接判断「无响应」，不会被另一所的 stale 误伤。
+* 心跳：OKX 文本 `pong`、Gate JSON（`channel` 以 `.pong` 结尾，例如 `spot.pong` / `futures.pong`）都算连接活跃并刷新 `last_msg`，不交给行情处理函数。recv 超时会先再发一次应用层 ping 并多等一轮，避免短暂静默就重连。发出订阅 / ping 也有超时，半开连接导致 send 挂起时会主动重连。 已收盘 K 线写库走线程池，避免 SQLite/WAL 卡住事件循环；`status` 把「已连接但 last_msg 过旧」标为 `stale`（无响应）；supervisor 对僵尸套接字优先 `transport.abort()` 硬中断（并行踢掉、短超时 close 兜底），避免 close 握手挂起导致重连卡住。顶部行情 pill 只按当前行情源（OKX / Gate）的连接判断「无响应」，不会被另一所的 stale 误伤。
 * `stream.mode` 带迟滞：`ws`（有新鲜 WS 报价）→ `recovering`（插座仍在 / 刚重连、REST 短暂填隙）→ `rest`（WS 路径真正不可用、仅 REST）→ `down`。重连风暴时不会立刻误报「REST 兜底」。
 * 收盘确认的 K 线（`confirm=1` / `w=true`）写入 SQLite `candles` 表（`data_source=okx_public_ws / gate_public_ws`）；未收盘 K 线只用于图表最后一根的实时跳动。
 * 纸面持仓按同一交易所、同一市场的实时价格计价（现货多 → 现货最新价，永续空 → 永续标记价），每 15 秒落库；落库后对 SQLite WAL 做 `PASSIVE` checkpoint（不阻塞并发读）。

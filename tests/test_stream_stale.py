@@ -45,4 +45,5 @@ def test_zombie_kick_helper_is_exported():
     # Safety-net close path must stay importable for the supervisor loop.
     from qtw import stream as st
     assert callable(getattr(st, "_kick_zombies", None))
+    assert callable(getattr(st, "_force_close_ws", None))
     assert isinstance(getattr(st, "_ws_refs"), dict)
