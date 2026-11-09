@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>QTW · 量化交易控制台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='10' fill='%234b3aa6'/%3E%3Cpath d='M7 21l6-6 4 4 8-9' stroke='%2373f0e0' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/static/styles.css?v=1794240067" />
+  <link rel="stylesheet" href="/static/styles.css?v=1794250002" />
 </head>
 <body>
   <div class="bg-arcs" aria-hidden="true">
@@ -18,40 +18,39 @@
     <div class="shell" id="shell">
       <main class="main">
         <header class="topbar">
-          <div>
-            <h1 class="greet" id="greet">晚上好，kean</h1>
+          <div class="tb-title">
+            <h1 class="greet" id="greet">你好，kean</h1>
             <div class="sub" id="pageSub">系统化纸面 / 研究工具 · 不构成投资建议</div>
           </div>
           <div class="top-actions">
-            <span class="live-pill" id="livePill" title="实时行情连接状态">行情连接中…</span>
-            <span class="mode-badge" id="modeBadge">纸面模式</span>
-            <label class="switcher" title="账户">
-              <select id="accountSel" aria-label="切换账户">
-                <option value="paper">模拟盘 · 纸面账本</option>
-                <option value="okx">交易所 · OKX</option>
-                <option value="gate">交易所 · Gate.io</option>
-              </select>
-              <svg class="chev" viewBox="0 0 24 24"><path d="M8 10l4-4 4 4M8 14l4 4 4-4"/></svg>
-            </label>
-            <button class="ico-btn rail-btn" id="railBtn" title="持仓 / 关注币种" aria-label="打开右侧面板"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M14 4v16"/></svg></button>
-            <button class="sq-btn" id="runNowBtn" title="立即执行一次系统化周期（纸面）"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M16 12.5h2M3 9h13a2 2 0 0 0 0-3"/></svg></button>
+            <div class="status-group" role="group" aria-label="系统状态">
+              <button class="stat-pill" id="modeBadge" type="button" title="交易模式 · 点击查看运行状态"><i></i><span>纸面模式</span></button>
+              <button class="stat-pill wait" id="livePill" type="button" title="实时行情 · 点击查看连接详情"><i></i><span>行情连接中…</span></button>
+            </div>
+            <div class="venue" role="group" aria-label="行情源" title="只切换公共行情来源，始终保持纸面模式">
+              <span class="venue-lbl">行情源</span>
+              <button type="button" data-venue="okx">OKX</button><button type="button" data-venue="gate">Gate</button>
+            </div>
+            <button class="btn ghost rail-btn" id="railBtn" type="button" aria-controls="rpanel" aria-expanded="false"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M14 4v16"/></svg><span id="railBtnLbl">持仓面板</span></button>
+            <button class="btn run-btn" id="runNowBtn" type="button" title="按最新已收盘 K 线跑一轮系统化周期，只在纸面账本调仓，不下真实单"><svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg><span>跑一轮</span></button>
           </div>
         </header>
         <section class="page" id="page"></section>
       </main>
 
       <div class="rail-backdrop" id="railBackdrop"></div>
-      <aside class="rpanel" id="rpanel">
+      <aside class="rpanel" id="rpanel" aria-label="持仓与提醒">
         <div class="r-top">
-          <button class="ico-btn" id="noticeBtn" title="系统消息"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg></button>
-          <button class="ico-btn" id="bellBtn" title="运行状态"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><i class="dot" id="bellDot"></i></button>
+          <button class="rail-close" id="railClose" type="button" aria-label="关闭面板"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+          <button class="chip-btn" id="noticeBtn" type="button" title="最近一次自动周期的系统消息"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg>消息</button>
+          <button class="chip-btn" id="bellBtn" type="button" title="自动交易、实盘闸门与上次执行时间"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>运行状态<i class="dot" id="bellDot"></i></button>
           <div class="avatar" title="kean">K</div>
         </div>
         <div class="r-head">
           <h2 id="rTitle">持仓</h2>
-          <button class="ico-btn sm" id="rSearchBtn" title="搜索"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></button>
+          <button class="ico-btn sm" id="rSearchBtn" type="button" title="筛选币种" aria-label="筛选币种"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></button>
         </div>
-        <input class="r-search hidden" id="rSearch" placeholder="搜索币种…" />
+        <input class="r-search hidden" id="rSearch" placeholder="输入币种筛选，如 BTC" aria-label="筛选币种" />
         <div class="r-sub" id="rSub">—</div>
         <div class="r-list" id="rList"></div>
         <div class="r-alert" id="rAlert">
@@ -59,8 +58,8 @@
           <div class="bell"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/><path d="M3 6l2 1M21 6l-2 1M12 2v1"/></svg></div>
           <div class="r-alert-text" id="rAlertText">加载中…</div>
           <div class="r-alert-actions">
-            <button class="kill" id="killBtn" title="紧急停止：平掉全部纸面持仓并关闭自动交易">紧急停止</button>
-            <button class="round-go" id="alertGo" title="查看信号"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+            <button class="kill" id="killBtn" type="button" title="停止自动交易、关闭实盘开关，并平掉全部纸面持仓（会先确认）"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>紧急停止</button>
+            <button class="btn sm" id="alertGo" type="button">查看信号<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
           </div>
         </div>
       </aside>
@@ -71,7 +70,7 @@
   <div class="modal hidden" id="modal"><div class="modal-card" id="modalCard"></div></div>
 
   <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
-  <script src="/static/charts.js?v=1794240067"></script>
-  <script src="/static/app.js?v=1794240067"></script>
+  <script src="/static/charts.js?v=1794250002"></script>
+  <script src="/static/app.js?v=1794250002"></script>
 </body>
 </html>

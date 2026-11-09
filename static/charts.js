@@ -1,6 +1,24 @@
 /* 小型 SVG 图表（摘要卡片用）+ lightweight-charts 封装 */
 (function () {
+  /* 统一时间格式：全部按 kean 所在时区 America/Los_Angeles 显示，并带 “PT” 标签 */
+  const TZ = "America/Los_Angeles", _f = {};
+  function parts(d, o) {
+    const k = JSON.stringify(o);
+    const f = _f[k] || (_f[k] = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, hourCycle: "h23", ...o }));
+    return Object.fromEntries(f.formatToParts(d).map((p) => [p.type, p.value]));
+  }
+  const toD = (x) => (x instanceof Date ? x : typeof x === "number" ? new Date(x * 1000) : new Date(x));
+  window.PT = {
+    tz: TZ,
+    hour(d = new Date()) { return +parts(d, { hour: "2-digit" }).hour; },
+    short(x) { const d = toD(x); if (isNaN(d)) return String(x); const p = parts(d, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }); return `${p.month}-${p.day} ${p.hour}:${p.minute} PT`; },
+    full(x, sec) { const d = toD(x); if (isNaN(d)) return String(x); const p = parts(d, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", ...(sec ? { second: "2-digit" } : {}) }); return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}${sec ? ":" + p.second : ""} PT`; },
+    clock(x) { const d = toD(x); const p = parts(d, { hour: "2-digit", minute: "2-digit" }); return `${p.hour}:${p.minute}`; },
+    tick(ts, type) { const d = toD(ts); const p = parts(d, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+      return type === 0 ? p.year : type === 1 ? `${p.year}-${p.month}` : type === 2 ? `${p.month}-${p.day}` : `${p.hour}:${p.minute}`; },
+  };
   const W = 260, H = 90;
+  let gid = 0;
   function norm(vals, pad = 8) {
     const v = vals.filter((x) => x != null && isFinite(x));
     if (!v.length) return { pts: [], min: 0, max: 1 };
@@ -28,13 +46,20 @@
       const d = smooth(pts);
       return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><path d="${d} L${W} ${H} L0 ${H}Z" fill="${color}"/></svg>`;
     },
+    spark(vals, color = "#73f0e0") {
+      const { pts } = norm(vals, 10);
+      if (pts.length < 2) return empty("跑几轮后生成权益曲线");
+      const d = smooth(pts), id = "sp" + ++gid, last = pts[pts.length - 1];
+      return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><defs><linearGradient id="${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><path d="${d} L${W} ${H} L0 ${H}Z" fill="url(#${id})"/><path d="${d}" stroke="${color}" stroke-width="2.2" fill="none" vector-effect="non-scaling-stroke"/><circle cx="${last[0] - 3}" cy="${last[1]}" r="3.5" fill="${color}"/></svg>`;
+    },
     line(vals, color = "#2cc4c9") {
       const { pts } = norm(vals, 14);
       if (pts.length < 2) return empty("暂无已平仓盈亏");
       const d = smooth(pts);
       const dots = [pts[Math.floor(pts.length / 3)], pts[Math.floor((2 * pts.length) / 3)]]
         .map((p) => `<circle cx="${p[0]}" cy="${p[1]}" r="4.5" fill="${color}" stroke="#fff" stroke-width="2"/>`).join("");
-      return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><defs><linearGradient id="lg1" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".25"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><path d="${d} L${W} ${H} L0 ${H}Z" fill="url(#lg1)"/><path d="${d}" stroke="${color}" stroke-width="2.2" fill="none"/>${dots}</svg>`;
+      const id = "lg" + ++gid;
+      return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><defs><linearGradient id="${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".25"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><path d="${d} L${W} ${H} L0 ${H}Z" fill="url(#${id})"/><path d="${d}" stroke="${color}" stroke-width="2.2" fill="none"/>${dots}</svg>`;
     },
     bars(vals) {
       const v = vals.slice(-18);
@@ -61,12 +86,12 @@
   };
 
   const base = {
-    layout: { background: { type: "solid", color: "#ffffff" }, textColor: "#6f6c92", fontFamily: "Poppins, PingFang SC, sans-serif" },
+    layout: { attributionLogo: false, background: { type: "solid", color: "#ffffff" }, textColor: "#6f6c92", fontFamily: "Poppins, PingFang SC, sans-serif" },
     grid: { vertLines: { color: "#f3f1fb" }, horzLines: { color: "#f3f1fb" } },
     rightPriceScale: { borderColor: "#ece8fd" },
-    timeScale: { borderColor: "#ece8fd", timeVisible: true },
+    timeScale: { borderColor: "#ece8fd", timeVisible: true, tickMarkFormatter: (ts, type) => window.PT.tick(ts, type) },
     crosshair: { mode: 1 },
-    localization: { locale: "zh-CN", dateFormat: "yyyy-MM-dd" },
+    localization: { locale: "zh-CN", timeFormatter: (ts) => window.PT.full(ts) },
   };
   window.BigCharts = {
     make(el, h) {
