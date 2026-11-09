@@ -162,3 +162,36 @@ def test_kick_zombies_triggers_rest_fill(monkeypatch):
     with stream._lock:
         stream._conns.clear()
     stream._ws_refs.clear()
+
+
+def test_load_settings_does_not_block_event_loop(monkeypatch):
+    """S.load() can wait on db._LOCK; supervisor must await it in an executor."""
+    ticks = {"n": 0}
+
+    def slow_load():
+        time.sleep(0.35)
+        return {
+            "symbols": ["BTCUSDT"],
+            "strategy": {"interval": "4h"},
+        }
+
+    async def ticker():
+        # While _load_settings awaits the executor, this must keep advancing.
+        for _ in range(6):
+            await asyncio.sleep(0.05)
+            ticks["n"] += 1
+
+    monkeypatch.setattr(stream.S, "load", slow_load)
+
+    async def run():
+        t0 = time.monotonic()
+        cfg_task = asyncio.create_task(stream._load_settings())
+        tick_task = asyncio.create_task(ticker())
+        cfg = await cfg_task
+        await tick_task
+        elapsed = time.monotonic() - t0
+        assert cfg["symbols"] == ["BTCUSDT"]
+        assert ticks["n"] >= 4  # would stay ~0 if load blocked the loop
+        assert elapsed >= 0.30
+
+    asyncio.run(run())

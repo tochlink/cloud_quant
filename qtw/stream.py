@@ -16,6 +16,7 @@
   * 已收盘 K 线写入 SQLite 放到线程池，避免 db 锁/WAL 卡住 asyncio 事件循环，导致四条连接同时假死（status=connected 但 last_msg 数分钟不刷新）。
   * status() 把「已连接但 last_msg 超过 ZOMBIE_SEC」标为 stale，不计入 up，避免 UI 误报实时。
   * supervisor 每轮检查僵尸连接：last_msg 过旧仍标 connected 时强制中断套接字（优先 transport.abort，避免 close 握手挂起），并行踢掉并标 reconnecting，迫使 _run_ws 走重连；刚连上时写入 last_msg，空 last_msg 则用 connected_at 计龄；踢掉后立刻 REST 填一次标记价，不等 10 秒轮询。
+  * supervisor 读配置走线程池（run_in_executor），避免 S.load()/SQLite 锁被纸面写库或 K 线缓存占用时卡住 asyncio，导致四条 WS 同时假死、zombie age 远超 ZOMBIE_SEC。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
 """
@@ -550,11 +551,21 @@ async def _kick_zombies(symbols: list[str] | None = None) -> int:
     return len(jobs)
 
 
+async def _load_settings():
+    """Load settings off the WS event loop so a contended SQLite lock cannot freeze recv/ping."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, S.load)
+
+
 async def _supervisor():
     cur, tasks = None, []
     syms: list[str] = []
     while True:
-        cfg = S.load()
+        # S.load() hits SQLite under db._LOCK. Paper save / candle upsert / WAL
+        # checkpoint can hold that lock for seconds; doing it inline here used to
+        # stall the whole stream loop so all four sockets looked connected while
+        # last_msg aged well past ZOMBIE_SEC (zombie kick only runs after load).
+        cfg = await _load_settings()
         want = (tuple(cfg["symbols"]), cfg["strategy"]["interval"])
         if want != cur:
             for t in tasks:
