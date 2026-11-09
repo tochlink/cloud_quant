@@ -12,6 +12,7 @@
   * 断线指数退避自动重连；某个价格超过 20 秒没有 WS 更新 → 用官方公共 REST 拉取（data_source=*_public_rest）。
   * 应用层心跳：OKX 文本 ping/pong；Gate JSON 的 channel 以 .pong 结尾（不是字符串 "pong"）。二者都视为连接活跃并刷新 last_msg，不交给行情 handle。
     recv 超时后先再发一次 ping 并多等一轮，仍无消息才重连，避免短暂静默导致连接一起抖动。
+  * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
 """
 from __future__ import annotations
@@ -36,6 +37,9 @@ GATE_SPOT = ["wss://api.gateio.ws/ws/v4/"]
 GATE_FUT = ["wss://fx-ws.gateio.ws/v4/ws/usdt"]
 OKX_BAR = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1Dutc"}
 STALE_SEC = 20
+# After the last WS quote, keep mode as ws/recovering this long so a reconnect
+# storm (sockets flap, REST briefly fills marks) does not flash "rest" in health/UI.
+WS_MODE_HOLD_SEC = 90
 
 _lock = threading.RLock()
 _quotes: dict[tuple, Quote] = {}
@@ -46,6 +50,7 @@ _thread: threading.Thread | None = None
 _loop: asyncio.AbstractEventLoop | None = None
 _rest_errors: dict[str, str] = {}
 _on_quote = []  # 回调：用于给纸面持仓实时计价
+_last_ws_at: float = 0.0  # monotonic-ish wall time of last *_ws quote
 
 
 def _bump():
@@ -58,8 +63,11 @@ def version() -> int:
 
 
 def _put(q: Quote):
+    global _last_ws_at
     with _lock:
         _quotes[(q.venue.lower(), q.symbol, q.market)] = q
+        if q.data_source.endswith("_ws"):
+            _last_ws_at = time.time()
         _bump()
     for cb in _on_quote:
         try:
@@ -90,15 +98,36 @@ def _conn_state(name: str, **kw):
         _bump()
 
 
+def classify_mode(*, live: int, rest: int, up: int, trying: int, recent_ws: bool) -> str:
+    """Map quote/connection counters to a stable stream mode label.
+
+    Prefer ws / recovering while any socket is still alive or we recently had
+    WS quotes, so REST gap-fills during reconnect do not look like a full
+    fallback. Pure "rest" only when the WS path is gone and REST is serving.
+    """
+    if live > 0:
+        return "ws"
+    if trying > 0 and (up > 0 or recent_ws):
+        return "recovering"
+    if rest > 0:
+        return "rest"
+    if trying > 0:
+        return "recovering"
+    return "down"
+
+
 def status() -> dict:
     with _lock:
         conns = [dict(v) for v in _conns.values()]
         now = time.time()
         q = list(_quotes.values())
+        last_ws = _last_ws_at
     live = sum(1 for x in q if x.data_source.endswith("_ws") and (now - x.ts.timestamp()) < STALE_SEC)
     rest = sum(1 for x in q if x.data_source.endswith("_rest") and (now - x.ts.timestamp()) < 60)
     up = sum(1 for c in conns if c["status"] == "connected")
-    mode = "ws" if up and live else ("rest" if rest else "down")
+    trying = sum(1 for c in conns if c["status"] in ("connected", "reconnecting", "connecting"))
+    recent_ws = bool(last_ws) and (now - last_ws) < WS_MODE_HOLD_SEC
+    mode = classify_mode(live=live, rest=rest, up=up, trying=trying, recent_ws=recent_ws)
     return {"mode": mode, "connections": conns, "quotes_ws_fresh": live, "quotes_rest_fresh": rest,
             "quotes_total": len(q), "rest_errors": dict(_rest_errors), "running": bool(_thread and _thread.is_alive())}
 

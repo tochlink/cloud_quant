@@ -566,7 +566,7 @@ function pageHelp() {
   const st = S.status.settings, s = st.strategy;
   $("#page").innerHTML = `<div class="panel help">
   <section class="lead"><h4 style="margin-top:0">这是什么</h4><p>面向 kean 的系统化加密货币交易控制台：只用 OKX / Gate.io 官方<b>公共</b>行情（<b>无需 API Key</b>）做信号、回测与纸面交易；配置密钥后可在严格闸门下接入实盘。所有价格都来自交易所实时接口，<b>不使用任何模拟 / 伪造数据</b>，请求失败会直接报错。<b>这是系统化纸面 / 研究工具，不构成投资建议；实盘交易可能亏损全部本金。</b></p></section>
-  <section><h4>顶部栏</h4><ul><li><b>纸面模式 / 实盘已开启</b>：当前交易模式，点击查看运行状态。</li><li><b>实时 · OKX</b>：行情连接状态（实时 / 部分重连 / REST 兜底 / 数据延迟 / 中断），点击看每条连接。</li><li><b>行情源 OKX | Gate</b>：只切换公共行情来源，始终保持纸面。开启实盘只能在「设置」页完成。</li><li><b>跑一轮</b>：立即执行一次系统化周期（纸面调仓）。</li></ul></section>
+  <section><h4>顶部栏</h4><ul><li><b>纸面模式 / 实盘已开启</b>：当前交易模式，点击查看运行状态。</li><li><b>实时 · OKX</b>：行情连接状态（实时 / 部分重连 / 恢复中 / REST 兜底 / 数据延迟 / 中断），点击看每条连接。</li><li><b>行情源 OKX | Gate</b>：只切换公共行情来源，始终保持纸面。开启实盘只能在「设置」页完成。</li><li><b>跑一轮</b>：立即执行一次系统化周期（纸面调仓）。</li></ul></section>
   <section><h4>策略 · ${esc(s.rule_id)}</h4><ul>
   <li>现货与 USDT 永续<b>各自</b>在自己已收盘的 ${s.interval} K 线上计算 SMA${s.fast_ma} / SMA${s.slow_ma}。</li>
   <li>现货看多且永续不看空 → <b>做多·现货</b>；永续看空且现货不看多 → <b>做空·USDT 永续</b>（1 倍）；两者冲突或无信号 → 空仓。</li>
@@ -589,7 +589,7 @@ function applyForming() {
   }
   renderChartSrc();
 }
-/* 行情状态：实时 / 部分重连 / REST 兜底 / 数据延迟 / 中断 */
+/* 行情状态：实时 / 部分重连 / 恢复中 / REST 兜底 / 数据延迟 / 中断 */
 function liveState() {
   const L = S.live, st = S.status;
   const src = L ? { mode: L.stream.mode, conns: L.connections, venue: L.venue, n: L.stream.quotes_ws_fresh, rest: L.stream.quotes_rest_fresh }
@@ -600,6 +600,8 @@ function liveState() {
   if (L && S.liveAt && Date.now() - S.liveAt > 30000) return ["bad", `数据延迟 · ${Math.round((Date.now() - S.liveAt) / 1000)} 秒无更新`];
   const mine = (src.conns || []).filter((c) => c.name.startsWith(src.venue));
   if (src.mode === "ws") return mine.length && mine.every((c) => c.status === "connected") ? ["ok", `实时 · ${V}`] : ["warn", `实时 · ${V} 部分重连`];
+  // WS sockets reconnecting / quote gap filled by REST — not a full REST-only fallback
+  if (src.mode === "recovering") return ["warn", `恢复中 · ${V}`];
   if (src.mode === "rest") return ["warn", `REST 兜底 · ${V}`];
   return ["bad", `行情中断 · ${V}`];
 }
@@ -640,7 +642,7 @@ function connectLive() {
 $("#livePill").onclick = () => {
   const L = S.live, conns = L ? L.connections : S.status?.stream?.connections || [], sm = L ? L.stream : S.status?.stream || {};
   modal(`<h3>实时行情连接</h3><div class="note" style="margin-bottom:8px">官方公共接口，无需 API Key。当前行情源：<b>${VN[S.status.settings.venue]}</b></div><div class="conn-list">${conns.map((c) => `<div><b class="${c.status === "connected" ? "ok" : "bad"}">●</b> ${esc(c.name)} · ${c.status === "connected" ? "已连接" : esc(c.status)}${c.last_msg ? ` · 最后消息 ${tFull(c.last_msg, true)}` : ""}${c.reconnects ? ` · 累计重连 ${c.reconnects} 次` : ""}<br><span class="src">${esc(c.url)}</span>${c.last_error ? `<br><span class="src neg">${esc(c.last_error)}</span>` : ""}</div>`).join("") || "暂无连接信息"}</div>
-   <div class="note" style="margin-top:10px">WebSocket 新鲜报价 ${sm.quotes_ws_fresh ?? "—"} 个 · REST 兜底 ${sm.quotes_rest_fresh ?? "—"} 个。价格超过 20 秒无 WS 更新时自动改用官方 REST；获取失败只报错，不会编造价格。${Object.keys(sm.rest_errors || {}).length ? "<br><span class='neg'>REST 错误：" + Object.entries(sm.rest_errors).slice(0, 4).map(([k, v]) => esc(k + " " + v)).join("；") + "</span>" : ""}</div>
+   <div class="note" style="margin-top:10px">模式 ${sm.mode ?? "—"} · WebSocket 新鲜报价 ${sm.quotes_ws_fresh ?? "—"} 个 · REST 兜底 ${sm.quotes_rest_fresh ?? "—"} 个。价格超过 20 秒无 WS 更新时自动改用官方 REST；重连窗口内标为「恢复中」而非误报 REST；获取失败只报错，不会编造价格。${Object.keys(sm.rest_errors || {}).length ? "<br><span class='neg'>REST 错误：" + Object.entries(sm.rest_errors).slice(0, 4).map(([k, v]) => esc(k + " " + v)).join("；") + "</span>" : ""}</div>
    <div class="acts"><button class="btn" data-close>关闭</button></div>`, (m) => (m.querySelector("[data-close]").onclick = closeModal));
 };
 

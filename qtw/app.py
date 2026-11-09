@@ -106,7 +106,11 @@ def health():
     return ok({
         "ok": True,
         "mode": "live" if S.live_armed(cfg) else "paper",
-        "stream": {"mode": st.get("mode")},
+        "stream": {
+            "mode": st.get("mode"),
+            "quotes_ws_fresh": st.get("quotes_ws_fresh"),
+            "quotes_rest_fresh": st.get("quotes_rest_fresh"),
+        },
         "quotes_ws_fresh": st.get("quotes_ws_fresh"),
         "worker": {"running": bool(w.get("running"))},
         "time": iso(utcnow()),
