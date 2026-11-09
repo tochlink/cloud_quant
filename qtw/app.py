@@ -252,6 +252,18 @@ def get_settings():
 @app.put("/api/settings")
 def put_settings(patch: dict = Body(...)):
     patch.pop("live", None)  # 实盘相关只能走 /api/live
+    # 有纸面持仓时禁止切换行情源：入场价/止损应按同一交易所公共价计价，避免 OKX↔Gate 混用
+    if "venue" in patch:
+        cur = S.load()
+        want = str(patch.get("venue") or "").lower()
+        if want in ("okx", "gate") and want != cur.get("venue"):
+            bk = engine.book(cur)
+            if bk.positions:
+                n = len(bk.positions)
+                raise HTTPException(
+                    409,
+                    f"当前有 {n} 个纸面持仓，不能切换行情源。请先平仓（紧急停止）或重置账本后再切换 OKX / Gate。",
+                )
     try:
         return ok(S.update(patch))
     except (ValueError, KeyError, TypeError) as e:

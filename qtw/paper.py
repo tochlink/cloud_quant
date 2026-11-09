@@ -118,9 +118,26 @@ class PaperBook:
                               self._q("SELECT * FROM paper_positions")}
             for p in self.positions.values():
                 p.venue, p.mark_source = p.venue or "", p.mark_source or ""
+            healed = self._heal_venues()
             self.blocks = {r["symbol"]: int(r["blocked_signal"]) for r in self._q("SELECT * FROM paper_blocks")}
-            if not st:
+            if not st or healed:
                 self.save()
+
+    def _heal_venues(self) -> bool:
+        """Backfill empty position.venue from the latest open fill (legacy rows)."""
+        changed = False
+        for sym, p in self.positions.items():
+            if p.venue:
+                continue
+            rows = self._q(
+                "SELECT venue FROM paper_fills WHERE symbol=? AND action='open' AND venue!='' "
+                "ORDER BY fill_id DESC LIMIT 1",
+                (sym,),
+            )
+            if rows and rows[0].get("venue"):
+                p.venue = str(rows[0]["venue"]).lower()
+                changed = True
+        return changed
 
     def _save(self, c):
         for k, v in (("starting_equity_usdt", self.starting), ("realized_usdt", self.realized),

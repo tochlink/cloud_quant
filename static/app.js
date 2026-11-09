@@ -93,9 +93,13 @@ function renderMode() {
   b.querySelector("span").textContent = live ? `实盘已开启 · ${VN[v]}` : "纸面模式";
   b.title = live ? "实盘已开启：订单会真实发送到交易所。点击查看运行状态" : "纸面模式：只在本地账本记账，不向交易所下单。点击查看运行状态";
   $("#shell").classList.toggle("live-on", live);
+  const hasPos = !!(S.dash && S.dash.positions && S.dash.positions.length);
   document.querySelectorAll("[data-venue]").forEach((x) => {
     x.classList.toggle("on", x.dataset.venue === v); x.setAttribute("aria-pressed", x.dataset.venue === v);
-    x.disabled = live; x.title = live ? "实盘开启时不能在这里切换交易所，请先到「设置」关闭实盘" : `使用 ${VN[x.dataset.venue]} 官方公共行情（仍为纸面）`;
+    x.disabled = live || (hasPos && x.dataset.venue !== v);
+    x.title = live ? "实盘开启时不能在这里切换交易所，请先到「设置」关闭实盘"
+      : hasPos && x.dataset.venue !== v ? `有 ${S.dash.positions.length} 个纸面持仓，请先平仓或重置后再切换行情源`
+      : `使用 ${VN[x.dataset.venue]} 官方公共行情（仍为纸面）`;
   });
   const w = st.worker;
   $("#bellDot").className = "dot" + (w.last_error ? " warn" : "");
@@ -106,6 +110,8 @@ function renderMode() {
 async function setVenue(v) {
   if (!S.status || v === S.status.settings.venue) return;
   if (S.status.mode === "live") { toast("实盘开启中：请先到「设置」关闭实盘，再切换交易所", true); return; }
+  const nPos = S.dash?.positions?.length || 0;
+  if (nPos) { toast(`当前有 ${nPos} 个纸面持仓，不能切换行情源。请先紧急停止平仓或重置账本。`, true); return; }
   try {
     await api("/api/settings", { method: "PUT", body: { venue: v } });
     toast(`行情源已切换为 ${VN[v]} · 仍为纸面模式，不下真实单`);
@@ -414,8 +420,8 @@ function pagePositions() {
   const d = S.dash;
   $("#page").innerHTML = `<div class="metrics" style="margin-bottom:18px"><div class="metric feature"><small>纸面权益</small><b class="num">${f2(d.equity)}</b></div><div class="metric"><small>可用现金</small><b class="num">${f2(d.cash_free)}</b></div><div class="metric"><small>总敞口 / 净敞口</small><b class="num">${f2(d.gross, 0)} / ${sgn(d.net, 0)}</b></div><div class="metric"><small>未实现盈亏</small><b class="num ${cls(d.unrealized)}">${sgn(d.unrealized)}</b></div></div>
   <div class="panel"><div class="sec-title"><h3>当前纸面持仓（${d.positions.length}）</h3><a class="btn ghost sm" href="/api/export/paper_positions.csv">${ic("dl")}导出 CSV</a></div>
-  ${d.positions.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>标的</th><th>方向</th><th>数量</th><th>入场价</th><th>入场时间</th><th>最新价</th><th>止损价</th><th>名义</th><th>权重</th><th>未实现</th></tr></thead><tbody>
-  ${d.positions.map((p) => `<tr><td><div style="display:flex;gap:10px;align-items:center">${coin(p.symbol)}<b>${p.symbol}</b></div></td><td><span class="pill ${p.side}">${sideCn(p.side)} · ${mktCn(p.market)}</span></td><td class="num">${fp(p.qty)}</td><td class="num">${fp(p.entry_price)}</td><td>${tFull(p.entry_time)}</td><td class="num">${fp(p.mark_price)}<br><small class="muted">${esc(p.mark_source || "—")}</small></td><td class="num">${fp(p.stop_price)}</td><td class="num">${f2(p.notional)}</td><td class="num">${pct(p.weight, 1)}</td><td class="num ${cls(p.upnl)}">${sgn(p.upnl)}</td></tr>`).join("")}</tbody></table></div>`
+  ${d.positions.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>标的</th><th>方向</th><th>行情源</th><th>数量</th><th>入场价</th><th>入场时间</th><th>最新价</th><th>止损价</th><th>名义</th><th>权重</th><th>未实现</th></tr></thead><tbody>
+  ${d.positions.map((p) => `<tr><td><div style="display:flex;gap:10px;align-items:center">${coin(p.symbol)}<b>${p.symbol}</b></div></td><td><span class="pill ${p.side}">${sideCn(p.side)} · ${mktCn(p.market)}</span></td><td>${esc((p.venue || S.status.settings.venue || "—").toUpperCase())}</td><td class="num">${fp(p.qty)}</td><td class="num">${fp(p.entry_price)}</td><td>${tFull(p.entry_time)}</td><td class="num">${fp(p.mark_price)}<br><small class="muted">${esc(p.mark_source || "—")}</small></td><td class="num">${fp(p.stop_price)}</td><td class="num">${f2(p.notional)}</td><td class="num">${pct(p.weight, 1)}</td><td class="num ${cls(p.upnl)}">${sgn(p.upnl)}</td></tr>`).join("")}</tbody></table></div>`
   : '<div class="empty">当前空仓。开启自动交易或点击右上角「跑一轮」执行一次系统化周期。</div>'}
   <div class="note" style="margin-top:10px">纸面账本持久化保存在 data/qtw.sqlite（重启不丢失；CSV 仅为导出）。永续空头按 1 倍保证金计，占用等额现金。</div></div>`;
 }
@@ -514,8 +520,8 @@ function pageSettings() {
      <div class="masked">${v[ex].configured ? esc(v[ex].api_key_masked) : "•••• •••• •••• ••••"}</div><div class="st">Secret ${v[ex].secret_set ? "已保存（不可回显）" : "未保存"}${ex === "okx" ? ` · Passphrase ${v.okx.passphrase_set ? "已保存" : "未保存"}` : ""}</div></div>`;
   $("#page").innerHTML = `
   <div class="panel"><div class="sec-title"><h3>行情源</h3></div>
-    <div class="venue-row"><div class="venue big" role="group" aria-label="行情源">${["okx", "gate"].map((x) => `<button type="button" data-v2="${x}" class="${s.venue === x ? "on" : ""}" ${live ? "disabled" : ""}>${VN[x]}</button>`).join("")}</div>
-    <div class="note">信号、K 线和纸面账本的计价都来自这里选择的交易所官方<b>公共</b>行情，不需要 API Key，切换后仍是纸面模式。${live ? '<br><span class="neg">实盘开启时不能切换，请先在下方关闭实盘。</span>' : "只有在下方实盘开关通过全部闸门后，才会用它下真实单。"}</div></div></div>
+    <div class="venue-row"><div class="venue big" role="group" aria-label="行情源">${["okx", "gate"].map((x) => `<button type="button" data-v2="${x}" class="${s.venue === x ? "on" : ""}" ${(live || ((S.dash?.positions?.length || 0) && x !== s.venue)) ? "disabled" : ""}>${VN[x]}</button>`).join("")}</div>
+    <div class="note">信号、K 线和纸面账本的计价都来自这里选择的交易所官方<b>公共</b>行情，不需要 API Key，切换后仍是纸面模式。${live ? '<br><span class="neg">实盘开启时不能切换，请先在下方关闭实盘。</span>' : (S.dash?.positions?.length ? `<br><span class="neg">当前有 ${S.dash.positions.length} 个纸面持仓：请先平仓或重置后再切换行情源，避免入场/止损跨所混价。</span>` : "有纸面持仓时不能切换；只有在下方实盘开关通过全部闸门后，才会用它下真实单。")}</div></div></div>
   <div class="grid two-col" style="margin-top:18px">
     <div class="panel">
       ${kc("okx", "OKX API 密钥")}
