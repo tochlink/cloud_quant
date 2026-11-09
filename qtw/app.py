@@ -234,6 +234,7 @@ def health():
             "watchdog_running": bool(st.get("watchdog_running")),
             "loop_heartbeat_age_sec": st.get("loop_heartbeat_age_sec"),
             "rest_fill_inflight": bool(st.get("rest_fill_inflight")),
+            "stall_suspect_count": st.get("stall_suspect_count"),
             "last_zombie_kick_age_sec": st.get("last_zombie_kick_age_sec"),
             "last_zombie_max_age_sec": st.get("last_zombie_max_age_sec"),
         },

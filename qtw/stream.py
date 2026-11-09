@@ -23,6 +23,9 @@
   * 报价回调（纸面 mark）不在 asyncio 线程同步执行：经单线程队列派发，避免 PaperBook._LOCK / SQLite 写锁卡住 recv/ping/zombie kick（曾出现 last_msg 龄到 200s+ 而 watchdog 日志缺失的假死）。
   * supervisor / watchdog 踢僵尸时记录 last_zombie_kick_age_sec / last_zombie_max_age_sec，供 /api/health 与打磨例程一眼看出「上次踢除多久前、当时最大静默龄」。
   * REST 填隙用独立线程池 + 短超时报价客户端，并在填隙期间刷新 loop heartbeat；watchdog 在 rest_fill_inflight 时不把心跳迟滞当成 loop stall（仍会踢超过 ZOMBIE+宽限的真僵尸），避免「填隙拖心跳 → 误杀重连中的套接字 → 再填隙」的正反馈。
+  * 若 rest_fill_inflight 持续超过 FILLING_STALL_SEC（填隙协程卡在已冻结的 loop 上、depth 无法清零），取消 filling 护盾，按真 stall 处理。
+  * `_note_activity`（recv/pong）也刷新 loop heartbeat：supervisor 卡在 S.load/DB 时，只要事件循环仍在处理帧就不误报 stall。
+  * 真 stall 时用更短的 STALL_ZOMBIE_SEC 门槛踢套接字，并在尚无僵尸前就调度 REST 填隙，缩短纸面标记价空白窗。
   * REST 填隙优先当前纸面行情源（settings.venue），同批内有限并发，避免僵尸踢掉后纸面标记价排在另一所 32 路串行 REST 后面。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
@@ -69,6 +72,12 @@ ZOMBIE_SEC = RECV_WAIT_SEC * 2 + PING_EVERY_SEC  # 70
 WATCHDOG_INTERVAL_SEC = 2.0
 LOOP_STALL_SEC = 12.0
 WATCHDOG_GRACE_SEC = 12.0
+# When the asyncio loop is frozen, waiting a full ZOMBIE_SEC (70) before abort
+# leaves paper marks blank too long. Stall path uses this shorter age floor.
+STALL_ZOMBIE_SEC = 30.0
+# rest_fill_inflight shields against false stall; if depth stays >0 this long the
+# fill coroutine itself is wedged on a dead loop — drop the shield.
+FILLING_STALL_SEC = 45.0
 
 _lock = threading.RLock()
 _quotes: dict[tuple, Quote] = {}
@@ -93,6 +102,8 @@ _last_zombie_kick_at: float = 0.0  # wall time of last supervisor/watchdog zombi
 _last_zombie_max_age_sec: float | None = None  # max last_msg age among sockets in that kick
 _io_pool: concurrent.futures.ThreadPoolExecutor | None = None  # dedicated REST/candle/settings IO
 _rest_fill_depth = 0  # >0 while _rest_fill_stale runs (watchdog must not false-stall)
+_rest_fill_started_at: float = 0.0  # wall time when depth went 0→1 (stuck-fill detector)
+_stall_suspect_count = 0  # watchdog mass-abort / stall recoveries (health polish)
 GAP_FILL_TIMEOUT_SEC = 5.0
 GAP_FILL_RETRIES = 2
 GAP_FILL_BACKOFF_SEC = 0.25
@@ -322,6 +333,7 @@ def status(venue: str | None = None) -> dict:
            "watchdog_running": bool(_watchdog_thread and _watchdog_thread.is_alive()),
            "loop_heartbeat_age_sec": round(time.time() - hb, 1) if hb else None,
            "rest_fill_inflight": int(_rest_fill_depth) > 0,
+           "stall_suspect_count": int(_stall_suspect_count),
            "last_zombie_kick_age_sec": round(time.time() - kick_at, 1) if kick_at else None,
            "last_zombie_max_age_sec": _last_zombie_max_age_sec}
     if v:
@@ -423,8 +435,16 @@ def is_keepalive(raw) -> bool:
 
 
 def _note_activity(name: str) -> None:
-    """Refresh last_msg so status/UI see pongs as well as market data."""
+    """Refresh last_msg so status/UI see pongs as well as market data.
+
+    Also bumps the supervisor heartbeat: a healthy recv/pong path proves the
+    asyncio loop is alive even when ``_supervisor`` is blocked in
+    ``run_in_executor`` (settings/DB). Without this, a long S.load wait aged
+    the heartbeat while sockets were fine, then a brief quiet stretch looked
+    like a multi-minute loop stall.
+    """
     ts = iso(utcnow())
+    _bump_loop_heartbeat()
     with _lock:
         st = _conns.get(name)
         if st is not None:
@@ -661,7 +681,7 @@ async def _rest_fill_stale(symbols, venues=("okx", "gate"), *, preferred_venue: 
     side-thread watchdog does not treat a busy (but healthy) fill as a stall and
     abort sockets that are mid-reconnect.
     """
-    global _rest_fill_depth
+    global _rest_fill_depth, _rest_fill_started_at
     loop = asyncio.get_running_loop()
     pool = _ensure_io_pool()
     order = _venue_fill_order(preferred_venue, venues)
@@ -677,6 +697,8 @@ async def _rest_fill_stale(symbols, venues=("okx", "gate"), *, preferred_venue: 
 
     sem = asyncio.Semaphore(REST_FILL_CONCURRENCY)
     _rest_fill_depth += 1
+    if _rest_fill_depth == 1:
+        _rest_fill_started_at = time.time()
     _bump_loop_heartbeat()
     try:
         async def one(venue: str, sym: str, mkt: str) -> int:
@@ -712,6 +734,8 @@ async def _rest_fill_stale(symbols, venues=("okx", "gate"), *, preferred_venue: 
         return filled
     finally:
         _rest_fill_depth = max(0, _rest_fill_depth - 1)
+        if _rest_fill_depth == 0:
+            _rest_fill_started_at = 0.0
         _bump_loop_heartbeat()
 
 
@@ -831,16 +855,33 @@ def _watchdog_tick() -> int:
     ``WATCHDOG_GRACE_SEC`` after ``ZOMBIE_SEC`` so we do not race a healthy
     supervisor. When the heartbeat is stale (loop stall) or a zombie survives
     past that grace window, abort transports immediately.
+
+    Stall path uses ``STALL_ZOMBIE_SEC`` (shorter than ``ZOMBIE_SEC``) so a
+    frozen loop recovers paper marks in ~30s instead of waiting a full quiet
+    window. A wedged ``rest_fill_inflight`` older than ``FILLING_STALL_SEC``
+    drops the filling shield (depth can stick if the fill task never runs
+    finally on a dead loop).
     """
+    global _stall_suspect_count
     now = time.time()
     hb = _loop_heartbeat
     hb_age = (now - hb) if hb else None
     # A long official REST gap-fill yields on the event loop but can leave the
     # supervisor heartbeat idle for > LOOP_STALL_SEC. That is not a frozen loop —
     # aborting mid-reconnect just recreates zombies. True zombies past
-    # ZOMBIE+grace are still kicked below.
+    # ZOMBIE+grace are still kicked below. If depth stays raised past
+    # FILLING_STALL_SEC the fill itself is wedged — treat as stall.
     filling = _rest_fill_depth > 0
+    fill_age = (now - _rest_fill_started_at) if (filling and _rest_fill_started_at) else None
+    filling_wedged = bool(filling and fill_age is not None and fill_age > FILLING_STALL_SEC)
+    if filling_wedged:
+        filling = False
+        log.warning(
+            "rest_fill_inflight wedged (%.0fs > %.0fs); dropping fill shield",
+            fill_age, FILLING_STALL_SEC,
+        )
     stalled = (not filling) and (hb_age is None or hb_age > LOOP_STALL_SEC)
+    age_floor = STALL_ZOMBIE_SEC if stalled else ZOMBIE_SEC
     with _lock:
         rows = [(n, dict(st)) for n, st in _conns.items()]
     jobs: list[tuple[str, object, float]] = []
@@ -848,7 +889,7 @@ def _watchdog_tick() -> int:
         if st.get("status") != "connected":
             continue
         age = _activity_age_sec(st, now)
-        if age is None or age <= ZOMBIE_SEC:
+        if age is None or age <= age_floor:
             continue
         if not stalled and age <= ZOMBIE_SEC + WATCHDOG_GRACE_SEC:
             continue
@@ -857,17 +898,27 @@ def _watchdog_tick() -> int:
             _conn_state(name, status="reconnecting", last_error="zombie: no live socket ref")
             continue
         jobs.append((name, ws, age))
+    # Even before sockets cross the zombie floor: if the loop heartbeat is dead,
+    # REST-fill marks so the paper book does not sit on multi-minute blanks.
+    if stalled and not jobs:
+        _schedule_rest_fill_from_watchdog()
+        return 0
     if not jobs:
         return 0
     if stalled:
+        _stall_suspect_count += 1
         log.warning(
-            "stream loop stall suspected (heartbeat %s); watchdog aborting %d zombie(s)",
+            "stream loop stall suspected (heartbeat %s); watchdog aborting %d zombie(s) [stall#%d]",
             f"{hb_age:.0f}s old" if hb_age is not None else "missing",
             len(jobs),
+            _stall_suspect_count,
         )
     _note_zombie_kick([age for _, _, age in jobs])
     for name, ws, age in jobs:
-        log.warning("%s zombie (last_msg %.0fs ago > %ss), watchdog forcing abort", name, age, ZOMBIE_SEC)
+        log.warning(
+            "%s zombie (last_msg %.0fs ago > %ss), watchdog forcing abort",
+            name, age, age_floor,
+        )
         _abort_ws_transport_sync(ws, name, reason="zombie: watchdog abort")
     _schedule_rest_fill_from_watchdog()
     return len(jobs)
