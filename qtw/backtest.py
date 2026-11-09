@@ -1,10 +1,14 @@
-"""组合回测：真实公共历史 K 线 + dual_ma 信号 + 风控仓位。
+"""组合回测：交易所真实公共历史 K 线（现货 + USDT 永续）+ dual_ma 信号 + 风控仓位。
 
+数据：data = {"spot": {symbol: df}, "perp": {symbol: df}}，均为官方公共 REST 拉取的已收盘 K 线。
+  * 做多仓位的入场 / 止损 / 离场 / 计价全部用**现货** OHLC 与现货 ATR；
+  * 做空仓位全部用**永续** OHLC 与永续 ATR；绝不拿现货价格代替永续价格。
+  * 信号 = strategy.combine(现货信号, 永续信号)。
 时间约定（无前视）：
   * 第 i-1 根收盘后的信号/ATR/权益 → 第 i 根开盘价成交；
   * 止损在第 i 根盘中按最高/最低价检查（跳空则按开盘价成交）；
-  * 权益在第 i 根收盘按收盘价计价。
-做空用现货 K 线近似永续价格，未计资金费率（见 README 局限性）。
+  * 权益在第 i 根收盘按各自市场的收盘价计价。
+未计资金费率与滑点（见 README）。
 """
 from __future__ import annotations
 
@@ -15,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from .risk import scale_to_room, size
-from .strategy import indicators, market_of, side_of
+from .strategy import combine, indicators, market_of, side_of
 
 BARS_PER_YEAR = {"15m": 35040, "1h": 8760, "4h": 2190, "1d": 365}
 
@@ -40,29 +44,38 @@ class Trade:
     status: str = "open"
 
 
-def run_backtest(data: dict[str, pd.DataFrame], cfg: dict) -> dict:
+def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     st, rk, fee_bps = cfg["strategy"], cfg["risk"], float(cfg["fees"]["taker_bps"])
     fee = fee_bps / 10_000
     start_eq = float(rk["starting_equity_usdt"])
-    ind = {s: indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"]).set_index("open_time")
-           for s, df in data.items() if len(df) > st["slow_ma"] + 2}
-    if not ind:
-        raise ValueError("历史 K 线不足以计算慢均线")
+    need = st["slow_ma"] + 2
+    spot_d, perp_d = data.get("spot", {}), data.get("perp", {})
+    syms = sorted(s for s in spot_d if s in perp_d and len(spot_d[s]) > need and len(perp_d[s]) > need)
+    excluded = sorted((set(spot_d) | set(perp_d)) - set(syms))
+    if not syms:
+        raise ValueError("没有同时具备足够现货与永续历史 K 线的标的")
+    ind = {m: {s: indicators(src[s], st["fast_ma"], st["slow_ma"], st["atr_period"]).set_index("open_time") for s in syms}
+           for m, src in (("spot", spot_d), ("perp", perp_d))}
     idx = None
-    for d in ind.values():
-        idx = d.index if idx is None else idx.intersection(d.index)
+    for m in ind.values():
+        for d in m.values():
+            idx = d.index if idx is None else idx.intersection(d.index)
     idx = idx.sort_values()
-    syms = sorted(ind)
-    O = {s: ind[s].loc[idx, "open"].to_numpy() for s in syms}
-    H = {s: ind[s].loc[idx, "high"].to_numpy() for s in syms}
-    L = {s: ind[s].loc[idx, "low"].to_numpy() for s in syms}
-    C = {s: ind[s].loc[idx, "close"].to_numpy() for s in syms}
-    SIG = {s: ind[s].loc[idx, "signal"].to_numpy() for s in syms}
-    ATR = {s: ind[s].loc[idx, "atr"].to_numpy() for s in syms}
-    close_t = {s: ind[s].loc[idx, "close_time"] for s in syms}
-    times = list(idx)
-    ct = list(close_t[syms[0]])
+    if len(idx) <= need:
+        raise ValueError("现货与永续 K 线对齐后长度不足")
 
+    def arr(m, col):
+        return {s: ind[m][s].loc[idx, col].to_numpy() for s in syms}
+
+    PX = {m: {c: arr(m, c) for c in ("open", "high", "low", "close", "atr", "signal")} for m in ("spot", "perp")}
+    SIG = {s: combine(PX["spot"]["signal"][s], PX["perp"]["signal"][s]) for s in syms}
+    MK = {"long": "spot", "short": "perp"}
+
+    def P(side, col, s):
+        return PX[MK[side]][col][s]
+
+    times = list(idx)
+    ct = list(ind["spot"][syms[0]].loc[idx, "close_time"])
     warm = max(st["slow_ma"], st["atr_period"] + 1)
     realized = start_eq
     pos: dict[str, Trade] = {}
@@ -95,14 +108,14 @@ def run_backtest(data: dict[str, pd.DataFrame], cfg: dict) -> dict:
         for s in list(pos):
             want = side_of(SIG[s][i - 1])
             if want != pos[s].side:
-                close(s, O[s][i], when, "信号反转" if want != "flat" else "信号转空仓", i)
+                close(s, P(pos[s].side, "open", s)[i], when, "信号反转" if want != "flat" else "信号转空仓", i)
         # 解除止损锁定
         for s in list(blocked):
             if SIG[s][i - 1] != blocked[s]:
                 blocked.pop(s)
         # 2) 入场（同一根 K 线的多个新仓按剩余总敞口额度等比缩放）
         eq_prev = prev_eq
-        gross = sum(abs(t.qty) * O[s][i] for s, t in pos.items())
+        gross = sum(abs(t.qty) * P(t.side, "open", s)[i] for s, t in pos.items())
         want: dict = {}
         for s in syms:
             sg = int(SIG[s][i - 1])
@@ -110,7 +123,8 @@ def run_backtest(data: dict[str, pd.DataFrame], cfg: dict) -> dict:
                 continue
             if sg > 0 and not rk["allow_spot_long"] or sg < 0 and not rk["allow_perp_short"]:
                 continue
-            z = size(side=side_of(sg), equity=eq_prev, price=O[s][i], atr=ATR[s][i - 1],
+            sd = side_of(sg)
+            z = size(side=sd, equity=eq_prev, price=P(sd, "open", s)[i], atr=P(sd, "atr", s)[i - 1],
                      max_risk=rk["max_risk_per_trade"], max_weight=rk["max_weight_per_name"],
                      atr_mult=st["atr_stop_mult"])
             if z.notional > 0:
@@ -121,24 +135,26 @@ def run_backtest(data: dict[str, pd.DataFrame], cfg: dict) -> dict:
             notional = alloc[s]
             if notional < 1.0:
                 continue
-            qty = notional / O[s][i]
+            px = P(side_of(sg), "open", s)[i]
+            qty = notional / px
             f = notional * fee
             realized -= f
-            pos[s] = Trade(s, market_of(sg), side_of(sg), when, float(O[s][i]), qty, notional, z.stop_price, fees_usdt=f)
+            pos[s] = Trade(s, market_of(sg), side_of(sg), when, float(px), qty, notional, z.stop_price, fees_usdt=f)
             entry_i[s] = i
         # 3) 盘中止损
         for s in list(pos):
             t = pos[s]
-            if t.side == "long" and L[s][i] <= t.stop_price:
-                close(s, min(O[s][i], t.stop_price), when, "ATR止损", i)
+            o, h, lo = P(t.side, "open", s)[i], P(t.side, "high", s)[i], P(t.side, "low", s)[i]
+            if t.side == "long" and lo <= t.stop_price:
+                close(s, min(o, t.stop_price), when, "ATR止损", i)
                 blocked[s] = 1
-            elif t.side == "short" and H[s][i] >= t.stop_price:
-                close(s, max(O[s][i], t.stop_price), when, "ATR止损", i)
+            elif t.side == "short" and h >= t.stop_price:
+                close(s, max(o, t.stop_price), when, "ATR止损", i)
                 blocked[s] = -1
         # 4) 收盘计价
-        eq = realized + sum(upnl(t, C[s][i]) for s, t in pos.items())
-        g = sum(abs(t.qty) * C[s][i] for s, t in pos.items())
-        n = sum((1 if t.side == "long" else -1) * t.qty * C[s][i] for s, t in pos.items())
+        eq = realized + sum(upnl(t, P(t.side, "close", s)[i]) for s, t in pos.items())
+        g = sum(abs(t.qty) * P(t.side, "close", s)[i] for s, t in pos.items())
+        n = sum((1 if t.side == "long" else -1) * t.qty * P(t.side, "close", s)[i] for s, t in pos.items())
         curve.append({"time": pd.Timestamp(ct[i]).isoformat(), "equity": eq, "gross_exposure": g,
                       "net_exposure": n, "positions": len(pos)})
         prev_eq = eq
@@ -146,7 +162,7 @@ def run_backtest(data: dict[str, pd.DataFrame], cfg: dict) -> dict:
     last_t = pd.Timestamp(ct[-1]).isoformat()
     open_trades = []
     for s, t in pos.items():
-        t.exit_price = float(C[s][-1])
+        t.exit_price = float(P(t.side, "close", s)[-1])
         t.pnl_usdt = upnl(t, t.exit_price) - t.fees_usdt
         t.return_pct = t.pnl_usdt / t.notional_usdt
         t.exit_reason, t.bars_held = "持仓中（按最后收盘价估值）", len(times) - 1 - entry_i[s]
@@ -165,7 +181,7 @@ def run_backtest(data: dict[str, pd.DataFrame], cfg: dict) -> dict:
     end_eq = float(ec["equity"].iloc[-1])
     years = len(ec) / bpy
     btc = "BTCUSDT" if "BTCUSDT" in syms else syms[0]
-    bh = float(C[btc][-1] / O[btc][warm + 1] - 1)
+    bh = float(PX["spot"]["close"][btc][-1] / PX["spot"]["open"][btc][warm + 1] - 1)
     summary = {
         "rule_id": st["rule_id"], "venue": cfg.get("venue", ""), "interval": st["interval"],
         "symbols": " ".join(syms), "start_time": ec["time"].iloc[0], "end_time": last_t,
@@ -180,7 +196,13 @@ def run_backtest(data: dict[str, pd.DataFrame], cfg: dict) -> dict:
         "fees_usdt": sum(t.fees_usdt for t in closed + open_trades),
         "stop_exits": sum(1 for t in closed if t.exit_reason == "ATR止损"),
         "avg_gross_exposure_pct": float((ec["gross_exposure"] / ec["equity"]).mean()),
-        "benchmark": f"{btc} 买入持有", "benchmark_return": bh,
+        "benchmark": f"{btc} 现货买入持有", "benchmark_return": bh,
+        "signal_rule": "combine(spot_sma, perp_sma): 现货多且永续不空→现货多；永续空且现货不多→永续空；冲突→空仓",
+        "long_prices": "spot OHLC", "short_prices": "perp (USDT 永续) OHLC",
+        "excluded_symbols": " ".join(excluded),
+        "spot_signal_long_bars": int(sum((PX["spot"]["signal"][s][warm:] == 1).sum() for s in syms)),
+        "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
+        "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": fee_bps, "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
         "atr_stop_mult": st["atr_stop_mult"], "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],

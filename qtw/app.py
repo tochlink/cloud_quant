@@ -10,10 +10,13 @@ from typing import Any
 
 import pandas as pd
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+import asyncio
+import json
+
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, engine, vault, worker
+from . import __version__, db, engine, stream, vault, worker
 from . import settings as S
 from .backtest import run_backtest
 from .live import guard
@@ -52,10 +55,26 @@ def ok(data) -> JSONResponse:
     return JSONResponse(clean(data))
 
 
+def _mark_persister():
+    import time as _t
+    while True:
+        _t.sleep(15)
+        try:
+            engine.persist_marks()
+        except Exception:  # noqa: BLE001
+            log.exception("persist marks failed")
+
+
 @app.on_event("startup")
 def _startup():
-    cfg = S.load()
-    engine.book(cfg)
+    db.connect()
+    cfg = S.save(S.load())  # 确保非敏感设置落在 SQLite
+    bk = engine.book(cfg)
+    if bk.migrated:
+        log.info("已把旧版 CSV 纸面账本迁移到 SQLite：%s", bk.migrated)
+    stream.on_quote(engine.mark_from_stream)
+    stream.start()
+    threading.Thread(target=_mark_persister, name="qtw-mark-persist", daemon=True).start()
     if cfg["worker"]["enabled"]:
         worker.start()
     log.info("QTW %s 已启动；模式=%s；实盘闸门=%s", __version__, cfg["live"]["mode"],
@@ -70,6 +89,7 @@ def status():
     return ok({"version": __version__, "time": iso(utcnow()), "time_la": la(utcnow()), "settings": cfg,
                "mode": "live" if S.live_armed(cfg) else "paper", "live_gate_open": live_ok,
                "live_block_reasons": reasons, "worker": worker.status(), "vault": vault.status(),
+               "stream": stream.status(), "db": {"path": str(db.db_path()), "counts": db.counts()},
                "confirm_phrase_required": S.LIVE_CONFIRM_PHRASE})
 
 
@@ -127,19 +147,23 @@ def signals(quotes: bool = True):
 
 
 @app.get("/api/candles")
-def candles(symbol: str, bars: int = 300):
+def candles(symbol: str, bars: int = 300, market: str = "spot"):
     cfg = S.load()
     st = cfg["strategy"]
+    if market not in ("spot", "perp"):
+        raise HTTPException(400, "market 只能是 spot 或 perp")
     bars = max(st["slow_ma"] + 10, min(1000, bars))
     try:
-        df = mcache.candles(cfg["venue"], symbol.upper(), st["interval"], bars)
+        df = mcache.candles(cfg["venue"], symbol.upper(), st["interval"], bars, market)
     except MarketDataError as e:
         raise HTTPException(502, f"行情获取失败：{e}") from e
     ind = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"])
     t = ((ind["open_time"] - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1)).astype(int).tolist()
     ch = ind["signal"].ne(ind["signal"].shift(1)) & ind["sma_slow"].notna() & ind["signal"].shift(1).notna()
     markers = [{"time": int(t[i]), "signal": int(ind["signal"].iloc[i])} for i in range(len(ind)) if ch.iloc[i] and i > 0]
-    return ok({"symbol": symbol.upper(), "venue": cfg["venue"], "interval": st["interval"],
+    return ok({"symbol": symbol.upper(), "venue": cfg["venue"], "interval": st["interval"], "market": market,
+               "data_source": df.attrs.get("data_source"), "source_host": df.attrs.get("source_host"),
+               "fetched_at": df.attrs.get("fetched_at"),
                "candles": [{"time": int(t[i]), "open": r.open, "high": r.high, "low": r.low, "close": r.close}
                            for i, r in enumerate(ind.itertuples())],
                "fast": [{"time": int(t[i]), "value": v} for i, v in enumerate(ind["sma_fast"]) if not pd.isna(v)],
@@ -191,11 +215,7 @@ def fills():
 
 @app.get("/api/orders")
 def orders():
-    p = engine.PAPER_DIR / "orders.csv"
-    if not p.exists():
-        return ok([])
-    with p.open(encoding="utf-8") as f:
-        return ok(list(reversed(list(csv.DictReader(f))))[:300])
+    return ok(engine.book().orders(300))
 
 
 # ---------------- 设置 / 密钥 ----------------
@@ -270,6 +290,15 @@ def keys_test(exchange: str):
 
 
 # ---------------- 回测 ----------------
+def _bt_payload(run: dict, eqdf: pd.DataFrame, trades: pd.DataFrame) -> dict:
+    step = max(1, len(eqdf) // 800)
+    return {"run_id": run["run_id"], "summary": run["summary"], "data_errors": run.get("data_errors", {}),
+            "generated_at": run["created_at"], "generated_at_la": la(pd.Timestamp(run["created_at"]).to_pydatetime()),
+            "equity": [{"time": int(pd.Timestamp(r.time).timestamp()), "equity": r.equity, "drawdown": r.drawdown}
+                       for r in eqdf.iloc[::step].itertuples()],
+            "trades": trades.to_dict("records")}
+
+
 @app.post("/api/backtest")
 def backtest(body: dict = Body(default={})):
     cfg = S.load()
@@ -284,56 +313,114 @@ def backtest(body: dict = Body(default={})):
     if not _bt_lock.acquire(blocking=False):
         raise HTTPException(409, "已有回测在运行")
     try:
-        data, errs = mcache.many(cfg["venue"], cfg["symbols"], cfg["strategy"]["interval"], bars)
-        if not data:
-            raise HTTPException(502, f"所有标的行情获取失败：{errs}")
-        res = run_backtest(data, cfg)
-        d = OUTPUT_DIR / "backtest"
-        d.mkdir(parents=True, exist_ok=True)
-        res["equity"].to_csv(d / "backtest_equity.csv", index=False)
-        res["trades"].to_csv(d / "backtest_trades.csv", index=False)
-        pd.DataFrame([{"metric": k, "value": v} for k, v in res["summary"].items()]).to_csv(d / "backtest_summary.csv", index=False)
-        eqdf = res["equity"]
-        step = max(1, len(eqdf) // 800)
-        out = {"summary": res["summary"], "data_errors": errs, "generated_at": iso(utcnow()), "generated_at_la": la(utcnow()),
-               "equity": [{"time": int(pd.Timestamp(r.time).timestamp()), "equity": r.equity, "drawdown": r.drawdown}
-                          for r in eqdf.iloc[::step].itertuples()],
-               "trades": res["trades"].to_dict("records")}
-        _last_bt.clear()
-        _last_bt.update(out)
-        return ok(out)
+        frames, errs = mcache.many(cfg["venue"], cfg["symbols"], cfg["strategy"]["interval"], bars)
+        if not frames["spot"] or not frames["perp"]:
+            raise HTTPException(502, f"官方公共行情获取失败（不会用任何替代数据）：{errs}")
+        try:
+            res = run_backtest(frames, cfg)
+        except ValueError as e:
+            raise HTTPException(502, f"{e}；行情错误：{errs}") from e
+        prov = mcache.data_provenance(frames)
+        created = iso(utcnow())
+        summ = {**res["summary"], "venue": cfg["venue"], **prov, "bars_requested": bars,
+                "data_errors": "; ".join(f"{k}: {v}" for k, v in errs.items())}
+        eqdf, tr = res["equity"], res["trades"]
+        with db.tx() as c:
+            cur = c.execute("INSERT INTO backtest_runs(created_at,venue,data_source,fetched_at,params,summary) VALUES(?,?,?,?,?,?)",
+                            (created, cfg["venue"], prov["data_source"], prov["fetched_at"],
+                             db.dumps({"strategy": cfg["strategy"], "risk": cfg["risk"], "fees": cfg["fees"],
+                                       "symbols": cfg["symbols"], "bars": bars}), db.dumps(clean(summ))))
+            run_id = cur.lastrowid
+            c.executemany("INSERT INTO backtest_equity VALUES(?,?,?,?,?,?,?)",
+                          [(run_id, r.time, r.equity, r.drawdown, r.gross_exposure, r.net_exposure, int(r.positions))
+                           for r in eqdf.itertuples()])
+            cols = ["symbol", "market", "side", "entry_time", "entry_price", "qty", "notional_usdt", "stop_price", "exit_time",
+                    "exit_price", "exit_reason", "pnl_usdt", "fees_usdt", "return_pct", "bars_held", "status"]
+            c.executemany(f"INSERT INTO backtest_trades(run_id,seq,{','.join(cols)}) VALUES({','.join('?' * (len(cols) + 2))})",
+                          [(run_id, i, *[clean(getattr(r, k)) for k in cols]) for i, r in enumerate(tr.itertuples())])
+        _export_bt(run_id, summ, eqdf, tr, cfg["venue"], prov)
+        return ok(_bt_payload({"run_id": run_id, "summary": {**summ, "run_id": run_id}, "created_at": created,
+                               "data_errors": errs}, eqdf, tr))
     finally:
         _bt_lock.release()
 
 
+def _export_bt(run_id, summ, eqdf, tr, venue, prov):
+    d = OUTPUT_DIR / "backtest"
+    d.mkdir(parents=True, exist_ok=True)
+    tag = {"run_id": run_id, "venue": venue, "data_source": prov["data_source"], "fetched_at": prov["fetched_at"]}
+    eqdf.assign(**tag).to_csv(d / "backtest_equity.csv", index=False)
+    tr.assign(**tag, price_market=tr["side"].map({"long": "spot", "short": "perp"})).to_csv(d / "backtest_trades.csv", index=False)
+    pd.DataFrame([{"metric": k, "value": v} for k, v in {"run_id": run_id, **summ}.items()]).to_csv(
+        d / "backtest_summary.csv", index=False)
+
+
 @app.get("/api/backtest/latest")
 def backtest_latest():
-    if not _last_bt:
-        d = OUTPUT_DIR / "backtest"
-        try:
-            summ = pd.read_csv(d / "backtest_summary.csv")
-            eqdf = pd.read_csv(d / "backtest_equity.csv")
-            tr = pd.read_csv(d / "backtest_trades.csv").fillna({"exit_time": "", "exit_reason": ""})
-        except (FileNotFoundError, pd.errors.EmptyDataError):
-            return ok({})
-        summary = {}
-        for k, v in zip(summ["metric"], summ["value"]):
-            try:
-                summary[k] = float(v) if k not in ("rule_id", "venue", "interval", "symbols", "start_time", "end_time", "benchmark") else v
-            except (TypeError, ValueError):
-                summary[k] = v
-        for k in ("bars", "closed_trades", "open_trades", "stop_exits", "fast_ma", "slow_ma"):
-            if isinstance(summary.get(k), float):
-                summary[k] = int(summary[k])
-        step = max(1, len(eqdf) // 800)
-        _last_bt.update({"summary": summary, "data_errors": {}, "generated_at": "", "generated_at_la": "",
-                         "equity": [{"time": int(pd.Timestamp(r.time).timestamp()), "equity": r.equity, "drawdown": r.drawdown}
-                                    for r in eqdf.iloc[::step].itertuples()],
-                         "trades": tr.to_dict("records")})
-    return ok(_last_bt)
+    r = db.query("SELECT * FROM backtest_runs ORDER BY run_id DESC LIMIT 1")
+    if not r:
+        return ok({})
+    run = r[0]
+    run["summary"] = {**json.loads(run["summary"]), "run_id": run["run_id"]}
+    eqdf = pd.DataFrame(db.query("SELECT time, equity, drawdown FROM backtest_equity WHERE run_id=? ORDER BY time", (run["run_id"],)))
+    tr = pd.DataFrame(db.query("SELECT * FROM backtest_trades WHERE run_id=? ORDER BY seq", (run["run_id"],)))
+    tr = tr.drop(columns=["run_id", "seq"], errors="ignore").fillna({"exit_time": "", "exit_reason": ""})
+    return ok(_bt_payload(run, eqdf, tr))
+
+
+@app.get("/api/backtest/runs")
+def backtest_runs():
+    rows = db.query("SELECT run_id, created_at, venue, data_source, fetched_at, summary FROM backtest_runs ORDER BY run_id DESC LIMIT 50")
+    for r in rows:
+        sm = json.loads(r.pop("summary"))
+        r.update({k: sm.get(k) for k in ("total_return", "max_drawdown", "sharpe", "win_rate", "start_time", "end_time", "bars")})
+    return ok(rows)
+
+
+# ---------------- 实时推送（SSE） ----------------
+def _live_payload() -> dict:
+    cfg = S.load()
+    bk = engine.book(cfg)
+    eq = bk.equity()
+    snap = stream.snapshot(cfg["venue"])
+    return clean({
+        "time": iso(utcnow()), "venue": cfg["venue"], "interval": cfg["strategy"]["interval"],
+        "stream": {k: v for k, v in stream.status().items() if k != "connections"},
+        "connections": [{k: c[k] for k in ("name", "status", "url", "last_msg", "reconnects", "last_error")}
+                        for c in stream.status()["connections"]],
+        "prices": snap["prices"], "forming": snap["forming"],
+        "paper": {"equity": eq, "realized": bk.realized, "unrealized": eq - bk.realized, "gross": bk.gross(),
+                  "net": bk.net(), "total_pnl": eq - bk.starting,
+                  "positions": {p.symbol: {"mark": p.mark_price, "mark_time": p.mark_time, "source": p.mark_source,
+                                           "upnl": p.upnl(), "weight": (p.qty * p.mark_price / eq) if eq else 0,
+                                           "notional": p.qty * p.mark_price} for p in bk.positions.values()}},
+        "worker": {k: v for k, v in worker.status().items() if k != "last_result"},
+    })
+
+
+@app.get("/api/stream")
+async def sse():
+    async def gen():
+        last, beat = -1, 0.0
+        yield "retry: 3000\n\n"
+        while True:
+            v = stream.version()
+            now = asyncio.get_running_loop().time()
+            if v != last or now - beat > 10:
+                last, beat = v, now
+                yield f"event: tick\ndata: {json.dumps(_live_payload(), ensure_ascii=False)}\n\n"
+            await asyncio.sleep(1.5)
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/stream/status")
+def stream_status():
+    return ok(stream.status())
 
 
 EXPORTS = {"signals": "signals.csv", "paper_positions": "paper_positions.csv", "paper_fills": "paper_fills.csv",
+           "paper_orders": "paper_orders.csv",
            "paper_ledger": "paper_ledger.csv", "backtest_equity": "backtest/backtest_equity.csv",
            "backtest_trades": "backtest/backtest_trades.csv", "backtest_summary": "backtest/backtest_summary.csv"}
 

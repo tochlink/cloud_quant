@@ -12,16 +12,16 @@ from .live import guard
 from .market import MarketDataError, get_client
 from .market import cache as mcache
 from .market.base import INTERVAL_MS
-from .paper import PaperBook, _append
-from .paths import OUTPUT_DIR, PAPER_DIR
+from . import db
+from .paper import ORDER_COLS, PaperBook
+from .paths import OUTPUT_DIR
 from .risk import scale_to_room, size
-from .strategy import indicators, last_cross, market_of, side_of
+from .strategy import combine, indicators, last_cross, market_of, side_of
 from .timeutil import iso, la, utcnow
 
 log = logging.getLogger(__name__)
 ADVICE = {1: "做多", -1: "做空", 0: "空仓"}
 MARKET_CN = {"spot": "现货", "perp": "USDT 永续", "-": "—"}
-ORDER_COLS = ["time", "mode", "venue", "symbol", "market", "action", "qty", "ref_price", "status", "detail"]
 _BOOK: PaperBook | None = None
 _BOOK_LOCK = threading.Lock()
 CYCLE_LOCK = threading.Lock()
@@ -35,46 +35,109 @@ def book(cfg: dict | None = None) -> PaperBook:
             _BOOK = PaperBook(cfg["risk"]["starting_equity_usdt"], cfg["fees"]["taker_bps"])
         elif cfg:
             _BOOK.fee = cfg["fees"]["taker_bps"] / 10_000
+        if cfg:
+            _MARK["venue"] = cfg["venue"]
         return _BOOK
 
 
+_MARK = {"venue": None, "dirty": False}
+
+
+def mark_from_stream(q) -> None:
+    """WS/REST 实时报价回调：只给“同交易所 + 同市场”的纸面持仓计价（现货多用现货价，永续空用永续标记价）。"""
+    if _BOOK is None or q.venue.lower() != _MARK["venue"]:
+        return
+    p = _BOOK.positions.get(q.symbol)
+    if p and p.market == q.market:
+        _BOOK.mark(q.symbol, q.price, iso(q.ts), q.data_source)
+        _MARK["dirty"] = True
+
+
+def persist_marks() -> bool:
+    if _BOOK is not None and _MARK["dirty"]:
+        _MARK["dirty"] = False
+        _BOOK.save()
+        return True
+    return False
+
+
 def _quote(venue: str, sym: str, market: str):
-    q = get_client(venue).quote(sym, market)
-    return q.price, q.kind, q.ts
+    """真实公共报价：现货最新价 / 永续标记价。
+
+    优先用官方公共 WebSocket 推送的最新值（≤ 30 秒内），否则走官方公共 REST。
+    失败抛 MarketDataError，绝不回退到虚构价格。
+    """
+    from . import stream
+    q = stream.latest(venue, sym, market, max_age_sec=30)
+    if q is None:
+        q = get_client(venue).quote(sym, market)
+    return q.price, q.kind, q
+
+
 
 
 def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     st, rk = cfg["strategy"], cfg["risk"]
     venue = cfg["venue"]
     need = max(st["lookback_bars"], st["slow_ma"] + st["atr_period"] + 5)
-    data, errs = mcache.many(venue, cfg["symbols"], st["interval"], need)
+    frames, errs = mcache.many(venue, cfg["symbols"], st["interval"], need)
     bk = book(cfg)
     eq = bk.equity()
     step = pd.Timedelta(milliseconds=INTERVAL_MS[st["interval"]])
     rows = []
     for sym in cfg["symbols"]:
-        if sym not in data or len(data[sym]) < st["slow_ma"] + 1:
-            rows.append({"symbol": sym, "error": errs.get(sym, "K 线不足")})
+        ind = {}
+        for m in ("spot", "perp"):
+            df = frames.get(m, {}).get(sym)
+            if df is not None and len(df) >= st["slow_ma"] + 1:
+                ind[m] = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"])
+                ind[m].attrs.update(df.attrs)
+        if not ind:
+            rows.append({"symbol": sym, "error": "；".join(v for k, v in errs.items() if k.startswith(sym + ":")) or "K 线不足"})
             continue
-        ind = indicators(data[sym], st["fast_ma"], st["slow_ma"], st["atr_period"])
-        last = ind.iloc[-1]
-        sig = int(last["signal"])
+        ssig = int(ind["spot"]["signal"].iloc[-1]) if "spot" in ind else 0
+        psig = int(ind["perp"]["signal"].iloc[-1]) if "perp" in ind else 0
+        sig = int(combine([ssig], [psig])[0])
         side, mkt = side_of(sig), market_of(sig)
-        cross = last_cross(ind)
+        use = mkt if mkt in ind else ("spot" if "spot" in ind else "perp")
+        src = ind[use]
+        last = src.iloc[-1]
+        # 合成信号序列（两市场按开盘时间对齐）→ 信号起始时间
+        if "spot" in ind and "perp" in ind:
+            j = ind["spot"][["open_time", "close_time", "signal"]].merge(
+                ind["perp"][["open_time", "signal"]], on="open_time", suffixes=("_s", "_p"))
+            j["signal"] = combine(j["signal_s"], j["signal_p"])
+        else:
+            j = src[["open_time", "close_time", "signal"]].copy()
+            if "perp" not in ind:
+                j["signal"] = combine(j["signal"], [0] * len(j))
+            else:
+                j["signal"] = combine([0] * len(j), j["signal"])
+        cross = last_cross(j)
         as_of = last["close_time"]
+        warn = [f"{m} 数据不可用：{errs.get(f'{sym}:{m}', 'K 线不足')}" for m in ("spot", "perp") if m not in ind]
+        if "spot" in ind and "perp" in ind and ind["spot"]["close_time"].iloc[-1] != ind["perp"]["close_time"].iloc[-1]:
+            warn.append("现货与永续最新收盘 K 线时间不一致")
         row = {
             "symbol": sym, "rule_id": st["rule_id"], "signal": sig, "advice": ADVICE[sig], "side": side,
-            "market": mkt, "market_cn": MARKET_CN[mkt], "bar_close": float(last["close"]),
+            "market": mkt, "market_cn": MARKET_CN[mkt], "signal_market": use,
+            "spot_signal": ssig, "perp_signal": psig, "conflict": bool(ssig == 1 and psig == -1),
+            "bar_close": float(last["close"]),
             "sma_fast": float(last["sma_fast"]), "sma_slow": float(last["sma_slow"]), "atr": float(last["atr"]),
+            "spot_close": float(ind["spot"]["close"].iloc[-1]) if "spot" in ind else None,
+            "perp_close": float(ind["perp"]["close"].iloc[-1]) if "perp" in ind else None,
             "as_of": iso(as_of.to_pydatetime()), "as_of_la": la(as_of.to_pydatetime()),
             "signal_since": iso(cross.to_pydatetime()) if cross is not None else "",
             "next_check": iso((as_of + step).to_pydatetime()), "next_check_la": la((as_of + step).to_pydatetime()),
-            "error": "",
+            "venue": venue, "data_source": src.attrs.get("data_source", ""), "source_host": src.attrs.get("source_host", ""),
+            "fetched_at": src.attrs.get("fetched_at", ""), "candle_cache": src.attrs.get("cache", ""),
+            "error": "", "warning": "；".join(warn),
         }
         px, kind = float(last["close"]), "bar_close"
         if with_quotes and mkt != "-":
             try:
-                px, kind, _ = _quote(venue, sym, mkt)
+                px, kind, q = _quote(venue, sym, mkt)
+                row.update(ref_price_time=iso(q.ts), ref_price_source=q.data_source, ref_price_host=q.source_host)
             except MarketDataError as e:
                 row["error"] = f"报价失败：{e}"
         row["ref_price"], row["ref_price_kind"] = px, kind
@@ -124,7 +187,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
 
 
 def _log_order(**kw):
-    _append(PAPER_DIR / "orders.csv", ORDER_COLS, {"time": iso(utcnow()), **kw})
+    book().log_order(**kw)
 
 
 def _trader(cfg):
@@ -174,16 +237,16 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         prices = {}
         for s, p in list(bk.positions.items()):
             try:
-                px, kind, _ = _quote(venue, s, p.market)
-                prices[s] = (px, kind)
-                bk.mark(s, px, iso(utcnow()))
+                px, kind, q = _quote(venue, s, p.market)
+                prices[s] = (px, kind, q)
+                bk.mark(s, px, iso(q.ts), q.data_source)
             except MarketDataError as e:
                 errors[s] = f"报价失败：{e}"
         # 2) 离场：信号改变 / 触及止损
         for s, p in list(bk.positions.items()):
             if s not in prices or s not in rows:
                 continue
-            px, kind = prices[s]
+            px, kind, q = prices[s]
             want = rows[s]["side"]
             reason = None
             if want != p.side:
@@ -192,7 +255,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
                 reason = "ATR止损"
                 bk.blocks[s] = p.direction
             if reason:
-                pnl = bk.close(s, px, kind, reason, venue)
+                pnl = bk.close(s, px, kind, reason, venue, data_source=q.data_source, price_time=iso(q.ts))
                 _route(cfg, s, p.market, "close_long" if p.side == "long" else "close_short", p.qty, px)
                 events.append(f"{s} 平{('多' if p.side == 'long' else '空')} @ {px:g}（{reason}，盈亏 {pnl:+.2f}）")
         # 解除止损锁
@@ -210,22 +273,27 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
             if r["side"] == "long" and not rk["allow_spot_long"] or r["side"] == "short" and not rk["allow_perp_short"]:
                 continue
             try:
-                px, kind, _ = _quote(venue, s, r["market"])
+                px, kind, q = _quote(venue, s, r["market"])
             except MarketDataError as e:
                 errors[s] = f"报价失败：{e}"
+                continue
+            # 止损所用 ATR 必须来自该市场自己的 K 线（做多=现货，做空=永续）
+            if r["signal_market"] != r["market"]:
+                errors[s] = f"{r['market']} K 线不可用，跳过入场"
                 continue
             z = size(side=r["side"], equity=eq, price=px, atr=r["atr"], max_risk=rk["max_risk_per_trade"],
                      max_weight=rk["max_weight_per_name"], atr_mult=st["atr_stop_mult"])
             if z.notional > 0:
-                want[s] = (r, px, kind, z)
+                want[s] = (r, px, kind, z, q)
         room = eq * rk["max_gross_exposure"] - bk.gross()
         alloc = scale_to_room({s: w[3].notional for s, w in want.items()}, room, bk.fee)
-        for s, (r, px, kind, z) in want.items():
+        for s, (r, px, kind, z, q) in want.items():
             if alloc[s] < 1.0:
                 continue
             qty = alloc[s] / px
             bk.open(symbol=s, market=r["market"], side=r["side"], qty=qty, price=px, price_kind=kind,
-                    stop=z.stop_price, signal_bar=r["as_of"], reason=f"{r['advice']}信号（{st['rule_id']}）", venue=venue)
+                    stop=z.stop_price, signal_bar=r["as_of"], reason=f"{r['advice']}信号（{st['rule_id']}）", venue=venue,
+                    data_source=q.data_source, price_time=iso(q.ts))
             _route(cfg, s, r["market"], "open_long" if r["side"] == "long" else "open_short", qty, px)
             events.append(f"{s} 开{('多·现货' if r['side'] == 'long' else '空·永续')} {qty:.6g} @ {px:g}，止损 {z.stop_price:.6g}")
         snap = bk.snapshot(note or ("; ".join(events)[:240] if events else "无变化"))
@@ -243,10 +311,12 @@ def kill_switch(cfg: dict | None = None) -> dict:
         events = []
         for s, p in list(bk.positions.items()):
             try:
-                px, kind, _ = _quote(cfg["venue"], s, p.market)
+                px, kind, q = _quote(cfg["venue"], s, p.market)
+                src, pt = q.data_source, iso(q.ts)
             except MarketDataError:
-                px, kind = p.mark_price, f"last_mark@{p.mark_time}"
-            pnl = bk.close(s, px, kind, "紧急停止(Kill Switch)", cfg["venue"])
+                # 拿不到新报价时使用该持仓最后一次真实公共标记价（明确标注时间），不编造价格
+                px, kind, src, pt = p.mark_price, f"last_real_mark@{p.mark_time}", p.mark_source, p.mark_time
+            pnl = bk.close(s, px, kind, "紧急停止(Kill Switch)", cfg["venue"], data_source=src, price_time=pt)
             events.append(f"{s} 已平仓 @ {px:g}（{kind}），盈亏 {pnl:+.2f}")
         bk.snapshot("Kill Switch：全部平仓并停止自动交易")
         export_paper_csv(cfg)
@@ -262,11 +332,12 @@ def export_paper_csv(cfg: dict) -> list[str]:
     for p in bk.positions.values():
         pos_rows.append({"symbol": p.symbol, "market": p.market, "side": p.side, "qty": p.qty,
                          "entry_price": p.entry_price, "entry_time": p.entry_time, "mark_price": p.mark_price,
-                         "mark_time": p.mark_time, "stop_price": p.stop_price,
+                         "mark_time": p.mark_time, "mark_source": p.mark_source, "venue": p.venue, "stop_price": p.stop_price,
                          "notional_usdt": p.qty * p.mark_price,
                          "weight": p.qty * p.mark_price / bk.equity() if bk.equity() else 0,
                          "unrealized_pnl_usdt": p.upnl()})
-    for name, rows in (("paper_positions.csv", pos_rows), ("paper_fills.csv", bk.fills()), ("paper_ledger.csv", bk.ledger())):
+    for name, rows in (("paper_positions.csv", pos_rows), ("paper_fills.csv", bk.fills()), ("paper_ledger.csv", bk.ledger()),
+                       ("paper_orders.csv", bk.orders(100000)[::-1])):
         path = OUTPUT_DIR / name
         cols = list(rows[0].keys()) if rows else ["empty"]
         with path.open("w", encoding="utf-8", newline="") as f:
@@ -280,7 +351,9 @@ def export_paper_csv(cfg: dict) -> list[str]:
 def export_signals_csv(sig: dict) -> str:
     path = OUTPUT_DIR / "signals.csv"
     rows = [r for r in sig["rows"] if not r.get("error")]
-    cols = ["symbol", "rule_id", "signal", "advice", "market", "ref_price", "ref_price_kind", "bar_close", "sma_fast",
+    cols = ["symbol", "venue", "market", "data_source", "source_host", "fetched_at", "rule_id", "signal", "spot_signal",
+            "perp_signal", "conflict", "advice", "signal_market", "ref_price", "ref_price_kind", "ref_price_time",
+            "ref_price_source", "spot_close", "perp_close", "bar_close", "sma_fast",
             "sma_slow", "atr", "as_of", "signal_since", "next_check", "target_notional_usdt", "target_qty",
             "target_weight", "stop_price", "risk_usdt", "capped_by", "state", "entry_timing", "exit_timing"]
     with path.open("w", encoding="utf-8", newline="") as f:

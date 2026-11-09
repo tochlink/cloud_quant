@@ -1,17 +1,20 @@
-"""持久化纸面账本（CSV，存于 data/paper/，跨进程/重启保留）。
+"""持久化纸面账本 —— SQLite 为唯一数据源（data/qtw.sqlite），CSV 只是导出物。
 
 记账模型（1 倍保证金）：
   realized = 起始资金 + 已实现盈亏 − 手续费
   equity   = realized + Σ 未实现盈亏
   可用现金 = equity − Σ |持仓名义|（现货占用资金，永续空头占用等额保证金）
+成交价必须来自交易所公共行情（现货最新价 / 永续标记价），本模块不产生任何价格。
 """
 from __future__ import annotations
 
 import csv
 import threading
 from dataclasses import asdict, dataclass, fields
+from pathlib import Path
 
-from .paths import PAPER_DIR, ensure_dirs
+from . import db
+from .paths import PAPER_DIR
 from .timeutil import iso, utcnow
 
 _LOCK = threading.RLock()
@@ -31,6 +34,8 @@ class Position:
     notional_entry: float
     fees_paid: float
     signal_bar: str
+    venue: str = ""
+    mark_source: str = ""
 
     @property
     def direction(self) -> int:
@@ -41,85 +46,105 @@ class Position:
 
 
 FILL_COLS = ["fill_id", "time", "symbol", "market", "side", "action", "qty", "price", "price_kind",
-             "notional_usdt", "fee_usdt", "realized_pnl_usdt", "reason", "mode", "venue"]
+             "notional_usdt", "fee_usdt", "realized_pnl_usdt", "reason", "mode", "venue", "data_source", "price_time"]
 LEDGER_COLS = ["time", "equity_usdt", "realized_usdt", "unrealized_usdt", "cash_free_usdt", "gross_exposure_usdt",
                "net_exposure_usdt", "positions", "note"]
 POS_COLS = [f.name for f in fields(Position)]
+ORDER_COLS = ["time", "mode", "venue", "symbol", "market", "action", "qty", "ref_price", "status", "detail"]
 
 
-def _read(path, cols):
-    if not path.exists():
-        return []
-    with path.open(encoding="utf-8", newline="") as f:
-        return list(csv.DictReader(f))
+def _ins(conn, table: str, row: dict):
+    cols = list(row)
+    conn.execute(f"INSERT INTO {table}({','.join(cols)}) VALUES({','.join('?' * len(cols))})", tuple(row[c] for c in cols))
 
 
-def _write(path, cols, rows):
-    tmp = path.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
-        w.writeheader()
-        w.writerows(rows)
-    tmp.replace(path)
+def migrate_csv(conn, src: Path = PAPER_DIR) -> dict:
+    """首次启动：把旧版 data/paper/*.csv 纸面账本导入 SQLite（只做一次），然后把目录改名备份。"""
+    if db.meta_get("migrated_paper_csv", conn) or not (src / "state.csv").exists():
+        return {}
+    n = {}
 
+    def rd(name):
+        p = src / name
+        if not p.exists():
+            return []
+        with p.open(encoding="utf-8", newline="") as f:
+            return list(csv.DictReader(f))
 
-def _append(path, cols, row):
-    new = not path.exists()
-    with path.open("a", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
-        if new:
-            w.writeheader()
-        w.writerow(row)
+    with db.tx(conn) as c:
+        if c.execute("SELECT COUNT(*) FROM paper_state").fetchone()[0]:
+            db.meta_set("migrated_paper_csv", "skipped: sqlite already had a book", c)
+            return {}
+        for r in rd("state.csv"):
+            c.execute("INSERT OR REPLACE INTO paper_state(key,value) VALUES(?,?)", (r["key"], r["value"]))
+        pos = rd("positions.csv")
+        for r in pos:
+            _ins(c, "paper_positions", {k: r.get(k, "") for k in POS_COLS if k in r})
+        fills = rd("fills.csv")
+        for r in fills:
+            _ins(c, "paper_fills", {k: r[k] for k in FILL_COLS if k in r})
+        led = rd("ledger.csv")
+        for r in led:
+            _ins(c, "paper_ledger", {k: r[k] for k in LEDGER_COLS if k in r})
+        for r in rd("stop_blocks.csv"):
+            c.execute("INSERT OR REPLACE INTO paper_blocks VALUES(?,?)", (r["symbol"], int(r["blocked_signal"])))
+        orders = rd("orders.csv")
+        for r in orders:
+            _ins(c, "orders", {k: r[k] for k in ORDER_COLS if k in r})
+        n = {"positions": len(pos), "fills": len(fills), "ledger": len(led), "orders": len(orders)}
+        db.meta_set("migrated_paper_csv", f"{iso(utcnow())} {n}", c)
+    src.rename(src.with_name(src.name + ".migrated-to-sqlite"))
+    return n
 
 
 class PaperBook:
-    def __init__(self, starting_equity: float = 1000.0, fee_bps: float = 4.0, directory=None):
-        self.dir = directory or PAPER_DIR
-        ensure_dirs()
-        self.dir.mkdir(parents=True, exist_ok=True)
+    def __init__(self, starting_equity: float = 1000.0, fee_bps: float = 4.0, conn=None):
+        self.conn = conn or db.connect()
         self.fee = fee_bps / 10_000
-        self.f_state, self.f_pos = self.dir / "state.csv", self.dir / "positions.csv"
-        self.f_fills, self.f_ledger = self.dir / "fills.csv", self.dir / "ledger.csv"
-        self.f_blocks = self.dir / "stop_blocks.csv"
+        self.migrated = migrate_csv(self.conn) if conn is None else {}
         self.load(starting_equity)
 
     # ---------- 持久化 ----------
+    def _q(self, sql, args=()):
+        return db.query(sql, args, self.conn)
+
     def load(self, starting_equity: float):
         with _LOCK:
-            st = {r["key"]: r["value"] for r in _read(self.f_state, ["key", "value"])}
+            st = {r["key"]: r["value"] for r in self._q("SELECT key, value FROM paper_state")}
             self.starting = float(st.get("starting_equity_usdt", starting_equity))
             self.realized = float(st.get("realized_usdt", self.starting))
             self.created = st.get("created_at", iso(utcnow()))
-            self.positions: dict[str, Position] = {}
-            for r in _read(self.f_pos, POS_COLS):
-                kw = {k: (float(r[k]) if k in ("qty", "entry_price", "stop_price", "mark_price", "notional_entry",
-                                                "fees_paid") else r[k]) for k in POS_COLS}
-                self.positions[r["symbol"]] = Position(**kw)
-            self.blocks = {r["symbol"]: int(r["blocked_signal"]) for r in _read(self.f_blocks, [])}
-            if not self.f_state.exists():
+            self.positions = {r["symbol"]: Position(**{k: r[k] for k in POS_COLS}) for r in
+                              self._q("SELECT * FROM paper_positions")}
+            for p in self.positions.values():
+                p.venue, p.mark_source = p.venue or "", p.mark_source or ""
+            self.blocks = {r["symbol"]: int(r["blocked_signal"]) for r in self._q("SELECT * FROM paper_blocks")}
+            if not st:
                 self.save()
 
+    def _save(self, c):
+        for k, v in (("starting_equity_usdt", self.starting), ("realized_usdt", self.realized),
+                     ("created_at", self.created), ("updated_at", iso(utcnow()))):
+            c.execute("INSERT OR REPLACE INTO paper_state(key,value) VALUES(?,?)", (k, str(v)))
+        c.execute("DELETE FROM paper_positions")
+        for p in self.positions.values():
+            _ins(c, "paper_positions", asdict(p))
+        c.execute("DELETE FROM paper_blocks")
+        for k, v in self.blocks.items():
+            c.execute("INSERT INTO paper_blocks VALUES(?,?)", (k, int(v)))
+
     def save(self):
-        with _LOCK:
-            _write(self.f_state, ["key", "value"], [
-                {"key": "starting_equity_usdt", "value": self.starting},
-                {"key": "realized_usdt", "value": self.realized},
-                {"key": "created_at", "value": self.created},
-                {"key": "updated_at", "value": iso(utcnow())},
-            ])
-            _write(self.f_pos, POS_COLS, [asdict(p) for p in self.positions.values()])
-            _write(self.f_blocks, ["symbol", "blocked_signal"],
-                   [{"symbol": k, "blocked_signal": v} for k, v in self.blocks.items()])
+        with _LOCK, db.tx(self.conn) as c:
+            self._save(c)
 
     def reset(self, starting_equity: float):
-        with _LOCK:
-            for f in (self.f_state, self.f_pos, self.f_fills, self.f_ledger, self.f_blocks):
-                if f.exists():
-                    f.unlink()
+        with _LOCK, db.tx(self.conn) as c:
+            for t in ("paper_state", "paper_positions", "paper_blocks", "paper_fills", "paper_ledger"):
+                c.execute(f"DELETE FROM {t}")
             self.created = iso(utcnow())
             self.starting = self.realized = float(starting_equity)
             self.positions, self.blocks = {}, {}
-            self.save()
+            self._save(c)
 
     # ---------- 记账 ----------
     def equity(self) -> float:
@@ -131,51 +156,62 @@ class PaperBook:
     def net(self) -> float:
         return sum(p.direction * p.qty * p.mark_price for p in self.positions.values())
 
-    def mark(self, symbol: str, price: float, when: str):
+    def mark(self, symbol: str, price: float, when: str, source: str = ""):
         if symbol in self.positions:
-            self.positions[symbol].mark_price, self.positions[symbol].mark_time = price, when
+            p = self.positions[symbol]
+            p.mark_price, p.mark_time, p.mark_source = price, when, source or p.mark_source
 
-    def _fill(self, **kw):
-        n = len(_read(self.f_fills, FILL_COLS)) + 1
-        _append(self.f_fills, FILL_COLS, {"fill_id": n, **kw})
-
-    def open(self, *, symbol, market, side, qty, price, price_kind, stop, signal_bar, reason, venue, mode="paper"):
-        with _LOCK:
+    def open(self, *, symbol, market, side, qty, price, price_kind, stop, signal_bar, reason, venue, mode="paper",
+             data_source="", price_time=""):
+        with _LOCK, db.tx(self.conn) as c:
             notional = qty * price
             fee = notional * self.fee
             self.realized -= fee
             now = iso(utcnow())
-            self.positions[symbol] = Position(symbol, market, side, qty, price, now, stop, price, now, notional, fee, signal_bar)
-            self._fill(time=now, symbol=symbol, market=market, side="buy" if side == "long" else "sell",
-                       action="open", qty=qty, price=price, price_kind=price_kind, notional_usdt=notional,
-                       fee_usdt=fee, realized_pnl_usdt=-fee, reason=reason, mode=mode, venue=venue)
-            self.save()
+            self.positions[symbol] = Position(symbol, market, side, qty, price, now, stop, price, now, notional, fee,
+                                              signal_bar, venue, data_source)
+            _ins(c, "paper_fills", dict(time=now, symbol=symbol, market=market, side="buy" if side == "long" else "sell",
+                                        action="open", qty=qty, price=price, price_kind=price_kind, notional_usdt=notional,
+                                        fee_usdt=fee, realized_pnl_usdt=-fee, reason=reason, mode=mode, venue=venue,
+                                        data_source=data_source, price_time=price_time))
+            self._save(c)
 
-    def close(self, symbol: str, price: float, price_kind: str, reason: str, venue: str, mode="paper") -> float:
-        with _LOCK:
+    def close(self, symbol: str, price: float, price_kind: str, reason: str, venue: str, mode="paper",
+              data_source="", price_time="") -> float:
+        with _LOCK, db.tx(self.conn) as c:
             p = self.positions.pop(symbol)
             notional = p.qty * price
             fee = notional * self.fee
             pnl = p.upnl(price)
             self.realized += pnl - fee
-            self._fill(time=iso(utcnow()), symbol=symbol, market=p.market, side="sell" if p.side == "long" else "buy",
-                       action="close", qty=p.qty, price=price, price_kind=price_kind, notional_usdt=notional,
-                       fee_usdt=fee, realized_pnl_usdt=pnl - fee, reason=reason, mode=mode, venue=venue)
-            self.save()
+            _ins(c, "paper_fills", dict(time=iso(utcnow()), symbol=symbol, market=p.market,
+                                        side="sell" if p.side == "long" else "buy", action="close", qty=p.qty, price=price,
+                                        price_kind=price_kind, notional_usdt=notional, fee_usdt=fee,
+                                        realized_pnl_usdt=pnl - fee, reason=reason, mode=mode, venue=venue,
+                                        data_source=data_source, price_time=price_time))
+            self._save(c)
             return pnl - fee
 
     def snapshot(self, note: str = "") -> dict:
-        with _LOCK:
+        with _LOCK, db.tx(self.conn) as c:
             eq = self.equity()
             row = {"time": iso(utcnow()), "equity_usdt": eq, "realized_usdt": self.realized,
-                   "unrealized_usdt": eq - self.realized, "cash_free_usdt": (0.0 if abs(eq - self.gross()) < 1e-6 else eq - self.gross()),
+                   "unrealized_usdt": eq - self.realized, "cash_free_usdt": eq - self.gross(),
                    "gross_exposure_usdt": self.gross(), "net_exposure_usdt": self.net(),
                    "positions": len(self.positions), "note": note}
-            _append(self.f_ledger, LEDGER_COLS, row)
+            _ins(c, "paper_ledger", row)
+            self._save(c)  # 同时持久化最新标记价
             return row
 
     def fills(self) -> list[dict]:
-        return _read(self.f_fills, FILL_COLS)
+        return self._q(f"SELECT {','.join(FILL_COLS)} FROM paper_fills ORDER BY fill_id")
 
     def ledger(self) -> list[dict]:
-        return _read(self.f_ledger, LEDGER_COLS)
+        return self._q(f"SELECT {','.join(LEDGER_COLS)} FROM paper_ledger ORDER BY id")
+
+    def log_order(self, **kw):
+        row = {"time": iso(utcnow()), **{k: kw.get(k) for k in ORDER_COLS if k != "time"}}
+        db.execute(f"INSERT INTO orders({','.join(row)}) VALUES({','.join('?' * len(row))})", tuple(row.values()), self.conn)
+
+    def orders(self, limit: int = 300) -> list[dict]:
+        return self._q(f"SELECT {','.join(ORDER_COLS)} FROM orders ORDER BY id DESC LIMIT ?", (limit,))
