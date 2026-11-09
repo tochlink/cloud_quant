@@ -284,6 +284,100 @@ def test_abort_ws_transport_sync_from_watchdog_path(monkeypatch):
     assert "watchdog" in states["okx_public"]["last_error"]
 
 
+class _SslRaceWS:
+    """Mimic websockets 15 ClientConnection bits the watchdog used to poke.
+
+    Closing recv_messages while SSLProtocol._do_read still delivers a frame
+    makes Assembler.put raise EOFError — asyncio logs that as
+    "Fatal error on SSL protocol". The abort helper must not close the
+    assembler or call set_recv_exc; connection_lost does that after abort.
+    """
+
+    def __init__(self):
+        self.aborted = False
+        self.transport = self
+        self.recv_messages = self
+        self.assembler_closed = False
+        self.recv_exc = None
+        self.shutdown_how = None
+
+    def is_closing(self):
+        return self.aborted
+
+    def abort(self):
+        self.aborted = True
+
+    def close(self):
+        self.assembler_closed = True
+
+    def set_recv_exc(self, exc):
+        self.recv_exc = exc
+
+    def get_extra_info(self, name):
+        return self if name == "socket" else None
+
+    def shutdown(self, how):
+        self.shutdown_how = how
+
+
+def test_abort_does_not_close_assembler_or_set_recv_exc(monkeypatch):
+    """Watchdog/supervisor abort must not race SSLProtocol.data_received."""
+    states = {}
+
+    def fake_state(name, **kw):
+        st = states.setdefault(name, {"name": name, "status": "connected", "last_msg": "", "reconnects": 0})
+        st.update(kw)
+
+    monkeypatch.setattr(stream, "_conn_state", fake_state)
+    stream._ws_refs.clear()
+    ws = _SslRaceWS()
+    stream._ws_refs["okx_public"] = ws
+    assert stream._abort_ws_transport_sync(ws, "okx_public", reason="zombie: watchdog abort") is True
+    assert ws.aborted is True
+    assert ws.shutdown_how == stream.socket.SHUT_RDWR
+    assert ws.assembler_closed is False
+    assert ws.recv_exc is None
+    assert "okx_public" not in stream._ws_refs
+    assert states["okx_public"]["status"] == "reconnecting"
+
+
+def test_abort_schedules_transport_abort_on_live_stream_loop(monkeypatch):
+    """When the stream loop is running, abort() must run there, not inline."""
+    states = {}
+    called = {"n": 0}
+
+    def fake_state(name, **kw):
+        st = states.setdefault(name, {"name": name, "status": "connected"})
+        st.update(kw)
+
+    def fake_soon(fn, *args):
+        called["n"] += 1
+        called["fn"] = fn
+        called["args"] = args
+
+    class _Loop:
+        def is_running(self):
+            return True
+
+        def call_soon_threadsafe(self, fn, *args):
+            fake_soon(fn, *args)
+
+    monkeypatch.setattr(stream, "_conn_state", fake_state)
+    monkeypatch.setattr(stream, "_loop", _Loop())
+    stream._ws_refs.clear()
+    ws = _SslRaceWS()
+    stream._ws_refs["gate_spot"] = ws
+    assert stream._abort_ws_transport_sync(ws, "gate_spot", reason="zombie: watchdog abort") is True
+    assert ws.shutdown_how == stream.socket.SHUT_RDWR
+    assert ws.aborted is False  # scheduled, not run inline
+    assert ws.assembler_closed is False
+    assert ws.recv_exc is None
+    assert called["n"] == 1
+    assert called["fn"] is stream._abort_transport_only
+    called["fn"](*called["args"])
+    assert ws.aborted is True
+
+
 def test_watchdog_tick_aborts_when_loop_stalled(monkeypatch):
     """If the asyncio heartbeat is stale, side-thread abort must not wait for supervisor."""
     states = {}

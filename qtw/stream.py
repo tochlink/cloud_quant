@@ -19,7 +19,7 @@
   * WebSocket 握手除库自带 open_timeout 外再包一层 wait_for，避免 DNS / 半开 TCP 让状态一直停在 connecting（此时还没有 _ws_refs，僵尸踢除无法中断）。
   * supervisor 每轮检查僵尸连接：last_msg 过旧仍标 connected 时强制中断套接字（优先 transport.abort，避免 close 握手挂起），并行踢掉并标 reconnecting，迫使 _run_ws 走重连；刚连上时写入 last_msg，空 last_msg 则用 connected_at 计龄；踢掉后立刻 REST 填一次标记价，不等 10 秒轮询。
   * supervisor 读配置走线程池（run_in_executor），避免 S.load()/SQLite 锁被纸面写库或 K 线缓存占用时卡住 asyncio，导致四条 WS 同时假死、zombie age 远超 ZOMBIE_SEC。
-  * 侧线程 watchdog：supervisor 的僵尸踢除跑在 asyncio 循环内；若事件循环被卡住，踢除本身也无法执行，last_msg 会拖到 90s+。watchdog 独立扫描；循环心跳过旧或僵尸年龄超过 ZOMBIE+宽限时，直接 transport.abort()（websockets 15 ClientConnection 实例属性）；loop 已冻结时用 watchdog 线程同步 REST 填隙，健康循环仍经 run_coroutine_threadsafe 调度；abort 失败时再 threadsafe 调度 close()。start() 在行情线程已存活时也会补拉 watchdog。
+  * 侧线程 watchdog：supervisor 的僵尸踢除跑在 asyncio 循环内；若事件循环被卡住，踢除本身也无法执行，last_msg 会拖到 90s+。watchdog 独立扫描；循环心跳过旧或僵尸年龄超过 ZOMBIE+宽限时，先 shutdown 底层 TCP 套接字（线程安全），再经 call_soon_threadsafe 在行情循环上 transport.abort()，由 connection_lost 关闭 recv_messages。不要在 watchdog 线程调用 set_recv_exc / recv_messages.close：那会与 SSLProtocol._do_read → Assembler.put 竞态，触发 Fatal error on SSL protocol，并在踢除后诱发新一轮 loop stall。loop 已冻结时用后台线程 REST 填隙，健康循环仍经 run_coroutine_threadsafe 调度；abort 失败时再 threadsafe 调度 close()。start() 在行情线程已存活时也会补拉 watchdog。
   * 报价回调（纸面 mark）不在 asyncio 线程同步执行：经单线程队列派发，避免 PaperBook._LOCK / SQLite 写锁卡住 recv/ping/zombie kick（曾出现 last_msg 龄到 200s+ 而 watchdog 日志缺失的假死）。
   * supervisor / watchdog 踢僵尸时记录 last_zombie_kick_age_sec / last_zombie_max_age_sec，供 /api/health 与打磨例程一眼看出「上次踢除多久前、当时最大静默龄」。
   * REST 填隙用独立线程池 + 短超时报价客户端，并在填隙期间刷新 loop heartbeat；watchdog 在 rest_fill_inflight 时不把心跳迟滞当成 loop stall（仍会踢超过 ZOMBIE+宽限的真僵尸），避免「填隙拖心跳 → 误杀重连中的套接字 → 再填隙」的正反馈。
@@ -908,42 +908,101 @@ async def _rest_fallback(symbols):
         await _rest_fill_stale(symbols, preferred_venue=pref)
 
 
-def _abort_ws_transport_sync(ws, name: str, *, reason: str = "zombie: forced close") -> bool:
-    """Hard-abort a websocket transport without awaiting (safe from watchdog thread).
+def _ws_raw_socket(ws):
+    """Best-effort TCP socket under a websockets ClientConnection / transport."""
+    transport = getattr(ws, "transport", None)
+    getter = getattr(transport, "get_extra_info", None) if transport is not None else None
+    if callable(getter):
+        try:
+            sock = getter("socket")
+            if sock is not None:
+                return sock
+        except Exception:  # noqa: BLE001
+            pass
+    return getattr(ws, "socket", None)
 
-    Returns True if the socket was hard-stopped (transport.abort and/or
-    recv wakeup). Always flips status to reconnecting and drops
-    ``_ws_refs[name]`` when it still points at ``ws``.
 
-    websockets 15 ``ClientConnection`` stores ``transport`` as an instance
-    attribute (set in ``connection_made``); class ``dir()`` does not list it.
-    When abort is unavailable, poke ``set_recv_exc`` + ``recv_messages.close``
-    and schedule an async ``close()`` on the stream loop as a fallback.
-    """
-    _conn_state(name, status="reconnecting", last_error=reason)
-    if _ws_refs.get(name) is ws:
-        _ws_refs.pop(name, None)
-    stopped = False
+def _shutdown_ws_socket(ws, name: str) -> bool:
+    """Thread-safe kernel shutdown so a wedged peer unblocks without touching SSLProtocol."""
+    sock = _ws_raw_socket(ws)
+    if sock is None:
+        return False
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+        return True
+    except Exception:
+        try:
+            sock.close()
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.info("%s zombie socket shutdown: %s", name, type(e).__name__)
+            return False
+
+
+def _abort_transport_only(ws, name: str) -> bool:
+    """Call transport.abort() (must run on the stream loop when the loop is alive)."""
     transport = getattr(ws, "transport", None)
     try:
         if transport is not None and not transport.is_closing():
             transport.abort()
-            stopped = True
+            return True
     except Exception as e:  # noqa: BLE001
         log.info("%s zombie abort: %s", name, type(e).__name__)
-    # Wake a hung recv() even when transport.abort is missing/noop.
+    return False
+
+
+def _on_stream_loop() -> bool:
+    loop = _loop
+    if loop is None:
+        return False
     try:
-        set_exc = getattr(ws, "set_recv_exc", None)
-        if set_exc is not None:
-            set_exc(ConnectionError(reason))
-            stopped = True
-        recv_messages = getattr(ws, "recv_messages", None)
-        close_asm = getattr(recv_messages, "close", None) if recv_messages is not None else None
-        if close_asm is not None:
-            close_asm()
-            stopped = True
-    except Exception as e:  # noqa: BLE001
-        log.info("%s zombie recv wake: %s", name, type(e).__name__)
+        return asyncio.get_running_loop() is loop
+    except RuntimeError:
+        return False
+
+
+def _abort_ws_transport_sync(ws, name: str, *, reason: str = "zombie: forced close") -> bool:
+    """Hard-abort a websocket transport without awaiting (safe from watchdog thread).
+
+    Returns True if the socket was hard-stopped (raw-socket shutdown and/or
+    transport.abort). Always flips status to reconnecting and drops
+    ``_ws_refs[name]`` when it still points at ``ws``.
+
+    websockets 15 ``ClientConnection`` stores ``transport`` as an instance
+    attribute (set in ``connection_made``); class ``dir()`` does not list it.
+
+    Do **not** call ``set_recv_exc`` / ``recv_messages.close()`` from this
+    helper. ``Assembler.close()`` makes a later ``put()`` raise ``EOFError``
+    ("stream of frames ended"). When that happens inside
+    ``SSLProtocol._do_read`` → ``data_received`` (the loop may still be
+    delivering a buffered frame after a cross-thread abort), asyncio logs
+    ``Fatal error on SSL protocol`` and the SSL stack can wedge — observed
+    2026-11-10 07:11 CST+8, followed by a 98s loop stall at 07:12. The
+    assembler is closed correctly by ``connection_lost`` after abort.
+
+    From the watchdog thread: shutdown the raw TCP socket (kernel-level,
+    thread-safe) and schedule ``transport.abort()`` on the stream loop via
+    ``call_soon_threadsafe``. Direct ``transport.abort()`` only when we are
+    already on that loop, or no loop is running (tests / dead loop).
+    When abort is unavailable, schedule an async ``close()`` as a fallback.
+    """
+    _conn_state(name, status="reconnecting", last_error=reason)
+    if _ws_refs.get(name) is ws:
+        _ws_refs.pop(name, None)
+    stopped = _shutdown_ws_socket(ws, name)
+    if _on_stream_loop():
+        stopped = _abort_transport_only(ws, name) or stopped
+    else:
+        loop = _loop
+        if loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(_abort_transport_only, ws, name)
+                stopped = True
+            except Exception as e:  # noqa: BLE001
+                log.info("%s zombie abort schedule: %s", name, type(e).__name__)
+                stopped = _abort_transport_only(ws, name) or stopped
+        else:
+            stopped = _abort_transport_only(ws, name) or stopped
     if not stopped:
         loop = _loop
         if loop is not None and loop.is_running():
