@@ -21,6 +21,7 @@
   * supervisor 读配置走线程池（run_in_executor），避免 S.load()/SQLite 锁被纸面写库或 K 线缓存占用时卡住 asyncio，导致四条 WS 同时假死、zombie age 远超 ZOMBIE_SEC。
   * 侧线程 watchdog：supervisor 的僵尸踢除跑在 asyncio 循环内；若事件循环被卡住，踢除本身也无法执行，last_msg 会拖到 90s+。watchdog 独立扫描；循环心跳过旧或僵尸年龄超过 ZOMBIE+宽限时，直接 transport.abort()（websockets 15 ClientConnection 实例属性），并经 call_soon / run_coroutine_threadsafe 触发 REST 填隙；abort 失败时再 threadsafe 调度 close()。start() 在行情线程已存活时也会补拉 watchdog。
   * 报价回调（纸面 mark）不在 asyncio 线程同步执行：经单线程队列派发，避免 PaperBook._LOCK / SQLite 写锁卡住 recv/ping/zombie kick（曾出现 last_msg 龄到 200s+ 而 watchdog 日志缺失的假死）。
+  * supervisor / watchdog 踢僵尸时记录 last_zombie_kick_age_sec / last_zombie_max_age_sec，供 /api/health 与打磨例程一眼看出「上次踢除多久前、当时最大静默龄」。
   * REST 填隙优先当前纸面行情源（settings.venue），同批内有限并发，避免僵尸踢掉后纸面标记价排在另一所 32 路串行 REST 后面。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
@@ -86,11 +87,23 @@ _last_ws_at: dict[str, float] = {}  # venue -> wall time of last *_ws quote for 
 _ws_refs: dict[str, object] = {}  # live websocket objects (stream-loop only) for zombie close
 _watch_symbols: list[str] = []  # last subscribed symbols (for watchdog REST fill)
 _watch_venue: str | None = None
+_last_zombie_kick_at: float = 0.0  # wall time of last supervisor/watchdog zombie abort
+_last_zombie_max_age_sec: float | None = None  # max last_msg age among sockets in that kick
 
 
 def _bump():
     global _version
     _version += 1
+
+
+def _note_zombie_kick(ages: list[float] | None = None) -> None:
+    """Record when a zombie abort ran (for /api/health polish probes)."""
+    global _last_zombie_kick_at, _last_zombie_max_age_sec
+    _last_zombie_kick_at = time.time()
+    if ages:
+        _last_zombie_max_age_sec = round(max(ages), 1)
+    else:
+        _last_zombie_max_age_sec = None
 
 
 def version() -> int:
@@ -262,10 +275,13 @@ def status(venue: str | None = None) -> dict:
         last_ws = max(last_ws_map.values(), default=0.0)
     mode, live, rest = _freshness(q_use, c_use, last_ws, now)
     hb = _loop_heartbeat
+    kick_at = _last_zombie_kick_at
     out = {"mode": mode, "connections": conns, "quotes_ws_fresh": live, "quotes_rest_fresh": rest,
            "quotes_total": len(q_use), "rest_errors": rest_err, "running": bool(_thread and _thread.is_alive()),
            "watchdog_running": bool(_watchdog_thread and _watchdog_thread.is_alive()),
-           "loop_heartbeat_age_sec": round(time.time() - hb, 1) if hb else None}
+           "loop_heartbeat_age_sec": round(time.time() - hb, 1) if hb else None,
+           "last_zombie_kick_age_sec": round(time.time() - kick_at, 1) if kick_at else None,
+           "last_zombie_max_age_sec": _last_zombie_max_age_sec}
     if v:
         out["venue"] = v
     return out
@@ -785,6 +801,7 @@ def _watchdog_tick() -> int:
             f"{hb_age:.0f}s old" if hb_age is not None else "missing",
             len(jobs),
         )
+    _note_zombie_kick([age for _, _, age in jobs])
     for name, ws, age in jobs:
         log.warning("%s zombie (last_msg %.0fs ago > %ss), watchdog forcing abort", name, age, ZOMBIE_SEC)
         _abort_ws_transport_sync(ws, name, reason="zombie: watchdog abort")
@@ -826,9 +843,10 @@ async def _kick_zombies(symbols: list[str] | None = None, *, preferred_venue: st
             _conn_state(name, status="reconnecting", last_error="zombie: no live socket ref")
             continue
         log.warning("%s zombie (last_msg %.0fs ago > %ss), forcing socket close", name, age, ZOMBIE_SEC)
-        jobs.append(_force_close_ws(ws, name))
+        jobs.append((_force_close_ws(ws, name), age))
     if jobs:
-        await asyncio.gather(*jobs, return_exceptions=True)
+        _note_zombie_kick([a for _, a in jobs])
+        await asyncio.gather(*[j for j, _ in jobs], return_exceptions=True)
         if symbols:
             try:
                 n = await _rest_fill_stale(symbols, preferred_venue=preferred_venue)

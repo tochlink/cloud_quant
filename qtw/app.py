@@ -189,13 +189,37 @@ def health():
     """Lightweight smoke probe. No secrets, no vault, no full settings dump.
 
     Used by ensure_up.sh / the 10-minute polish routine. Includes venue,
-    live-gate booleans, stream watchdog, and persist_running so monitors can
-    confirm paper mode and background stop-poll without /api/status.
+    live-gate booleans, stream watchdog, persist_running, a compact paper
+    snapshot, and BTC perp mark so monitors can confirm paper mode + live
+    prices in one call without /api/status or inventing quotes.
     """
     cfg = S.load()
     st = stream.status(cfg["venue"])
     w = worker.status()
     live_ok, _reasons = guard.check(cfg, cfg["venue"])
+    paper = None
+    btc_perp = None
+    try:
+        bk = engine.book(cfg)
+        paper = {
+            "equity": round(float(bk.equity()), 4),
+            "positions": len(bk.positions),
+            "starting_equity": float(bk.starting),
+        }
+    except Exception:  # noqa: BLE001
+        log.exception("health paper snapshot failed")
+    try:
+        snap = stream.snapshot(cfg["venue"])
+        rec = (snap.get("prices") or {}).get("BTCUSDT", {}).get("perp")
+        if isinstance(rec, dict) and rec.get("price") is not None:
+            btc_perp = {
+                "price": float(rec["price"]),
+                "kind": rec.get("kind") or "mark",
+                "age_sec": rec.get("age_sec"),
+                "source": rec.get("source") or "",
+            }
+    except Exception:  # noqa: BLE001
+        log.exception("health btc_perp snapshot failed")
     return ok({
         "ok": True,
         "mode": "live" if S.live_armed(cfg) else "paper",
@@ -209,10 +233,14 @@ def health():
             "quotes_rest_fresh": st.get("quotes_rest_fresh"),
             "watchdog_running": bool(st.get("watchdog_running")),
             "loop_heartbeat_age_sec": st.get("loop_heartbeat_age_sec"),
+            "last_zombie_kick_age_sec": st.get("last_zombie_kick_age_sec"),
+            "last_zombie_max_age_sec": st.get("last_zombie_max_age_sec"),
         },
         "quotes_ws_fresh": st.get("quotes_ws_fresh"),
         "worker": {"running": bool(w.get("running"))},
         "persist_running": bool(_persist_thread and _persist_thread.is_alive()),
+        "paper": paper,
+        "btc_perp": btc_perp,
         "time": iso(utcnow()),
         "time_sh": sh(utcnow()),
     })

@@ -83,7 +83,7 @@ cd /workspace/quant-trading-web
 * 收盘确认的 K 线（`confirm=1` / `w=true`）写入 SQLite `candles` 表（`data_source=okx_public_ws / gate_public_ws`）；未收盘 K 线只用于图表最后一根的实时跳动。
 * 纸面持仓按同一交易所、同一市场的实时价格计价（现货多 → 现货最新价，永续空 → 永续标记价），每 15 秒落库；落库后对 SQLite WAL 做 `PASSIVE` checkpoint（不阻塞并发读），约每 5 分钟再尝试 `TRUNCATE` 真正缩小 `-wal` 文件（此前仅 PASSIVE 时曾观察到数 MB 的空 WAL）。约每 10 分钟裁剪 K 线缓存（每序列保留最近 1200 根）与账本快照（保留最近约 7 天），避免 24/7 无限膨胀。`mark()` 与落库共用锁，避免 WS 计价与 `save` 竞态。
 * 页面通过 **SSE `/api/stream`** 每 1.5 秒收到更新：顶部状态（实时 / 部分重连 / 恢复中 / REST 兜底）、右栏价格与盈亏、总览权益、信号卡片价格、K 线最后一根。
-* 冒烟：`GET /api/health` 返回 `ok`、纸面/实盘 `mode`、`venue`、`live_enabled` / `live_gate_open`、`stream.mode`（含 recovering）/ `stream.running`、`quotes_ws_fresh`、`watchdog_running` / `loop_heartbeat_age_sec`、`worker.running`、`persist_running`、`time` / `time_sh`；不含密钥或完整设置。`ensure_up.sh` 与 10 分钟打磨例程用它做保活探测。
+* 冒烟：`GET /api/health` 返回 `ok`、纸面/实盘 `mode`、`venue`、`live_enabled` / `live_gate_open`、`stream.mode`（含 recovering）/ `stream.running`、`quotes_ws_fresh`、`watchdog_running` / `loop_heartbeat_age_sec` / `last_zombie_kick_age_sec` / `last_zombie_max_age_sec`、`worker.running`、`persist_running`、精简 `paper`（equity / positions / starting_equity）、`btc_perp`（标记价 / age / source）、`time` / `time_sh`；不含密钥或完整设置。`ensure_up.sh` 与 10 分钟打磨例程用它做保活探测；`ensure_up.sh` 还要求 `live_enabled` 与 `live_gate_open` 均为 false 才算 healthy。
 * 监控只读别名（复用现有数据，不另造行情或账本计算）：
   * `GET /api/paper` — 纸面账本快照（权益、敞口、持仓、近期成交、账本）
   * `GET /api/positions` — 当前持仓与权益 / 敞口

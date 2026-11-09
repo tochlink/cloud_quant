@@ -19,7 +19,8 @@ export QTW_ALLOW_LIVE_ORDERS="${QTW_ALLOW_LIVE_ORDERS:-0}"
 healthy() {
   local body
   body="$(curl -fsS -m 3 "${HEALTH_URL}" 2>/dev/null || true)"
-  [[ -n "${body}" ]] && grep -q '"ok"[[:space:]]*:[[:space:]]*true' <<<"${body}"
+  # Require ok + live still forbidden (polish must never treat an armed gate as healthy).
+  [[ -n "${body}" ]]     && grep -q '"ok"[[:space:]]*:[[:space:]]*true' <<<"${body}"     && grep -q '"live_enabled"[[:space:]]*:[[:space:]]*false' <<<"${body}"     && grep -q '"live_gate_open"[[:space:]]*:[[:space:]]*false' <<<"${body}"
 }
 
 print_health() {
