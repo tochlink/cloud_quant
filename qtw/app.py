@@ -235,6 +235,8 @@ def health():
             "loop_heartbeat_age_sec": st.get("loop_heartbeat_age_sec"),
             "rest_fill_inflight": bool(st.get("rest_fill_inflight")),
             "stall_suspect_count": st.get("stall_suspect_count"),
+            "host_freeze_count": st.get("host_freeze_count"),
+            "last_host_freeze_gap_sec": st.get("last_host_freeze_gap_sec"),
             "ws_conn_max_age_sec": st.get("ws_conn_max_age_sec"),
             "early_stall_fill_count": st.get("early_stall_fill_count"),
             "last_early_stall_fill_age_sec": st.get("last_early_stall_fill_age_sec"),

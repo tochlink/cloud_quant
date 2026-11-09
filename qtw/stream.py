@@ -84,6 +84,11 @@ FILLING_STALL_SEC = 45.0
 # the watchdog. Stops a 2s tick from stacking 32-quote HTTP rounds that pin
 # the watchdog and leave sockets un-aborted for a full quiet window.
 EARLY_FILL_COOLDOWN_SEC = 15.0
+# If the watchdog thread itself did not tick for this long (interval is 2s),
+# the whole process/host was frozen (VM pause, box suspend, SIGSTOP) — not an
+# asyncio-only stall. Logged and counted separately so health telemetry does
+# not blame the stream code for time the process never ran.
+HOST_FREEZE_GAP_SEC = 15.0
 
 _lock = threading.RLock()
 _quotes: dict[tuple, Quote] = {}
@@ -109,6 +114,9 @@ _last_zombie_max_age_sec: float | None = None  # max last_msg age among sockets 
 _io_pool: concurrent.futures.ThreadPoolExecutor | None = None  # dedicated REST/candle/settings IO
 _rest_fill_depth = 0  # >0 while _rest_fill_stale runs (watchdog must not false-stall)
 _rest_fill_started_at: float = 0.0  # wall time when depth went 0→1 (stuck-fill detector)
+_host_freeze_count = 0  # watchdog-thread gaps > HOST_FREEZE_GAP_SEC (process/host frozen)
+_last_host_freeze_at: float = 0.0
+_last_host_freeze_gap_sec: float | None = None
 _stall_suspect_count = 0  # watchdog mass-abort / stall recoveries (health polish)
 _early_stall_fill_count = 0  # sync REST fills while loop heartbeat was stalled
 _last_early_stall_fill_at: float = 0.0  # wall time of last sync stall fill
@@ -366,6 +374,9 @@ def status(venue: str | None = None) -> dict:
            "loop_heartbeat_age_sec": round(time.time() - hb, 1) if hb else None,
            "rest_fill_inflight": int(_rest_fill_depth) > 0,
            "stall_suspect_count": int(_stall_suspect_count),
+           "host_freeze_count": int(_host_freeze_count),
+           "last_host_freeze_gap_sec": _last_host_freeze_gap_sec,
+           "last_host_freeze_age_sec": round(time.time() - _last_host_freeze_at, 1) if _last_host_freeze_at else None,
            "ws_conn_max_age_sec": round(max(ages), 1) if ages else None,
            "early_stall_fill_count": int(_early_stall_fill_count),
            "early_fill_inflight": bool(_early_fill_inflight),
@@ -1143,8 +1154,34 @@ def _watchdog_tick() -> int:
     return len(jobs)
 
 
+def _note_watchdog_gap(prev: float, now: float) -> bool:
+    """Record a host/process freeze when the watchdog itself missed ticks.
+
+    Returns True when ``now - prev`` exceeds ``HOST_FREEZE_GAP_SEC``.
+    """
+    global _host_freeze_count, _last_host_freeze_at, _last_host_freeze_gap_sec
+    if not prev:
+        return False
+    gap = now - prev
+    if gap <= HOST_FREEZE_GAP_SEC:
+        return False
+    _host_freeze_count += 1
+    _last_host_freeze_at = now
+    _last_host_freeze_gap_sec = round(gap, 1)
+    log.warning(
+        "host/process freeze detected: watchdog idle %.0fs (> %.0fs) [freeze#%d]; "
+        "following stall recovery is resume-after-freeze, not a stream bug",
+        gap, HOST_FREEZE_GAP_SEC, _host_freeze_count,
+    )
+    return True
+
+
 def _watchdog_main() -> None:
+    last = time.time()
     while not _stop.wait(WATCHDOG_INTERVAL_SEC):
+        now = time.time()
+        _note_watchdog_gap(last, now)
+        last = now
         try:
             _watchdog_tick()
         except Exception:  # noqa: BLE001
