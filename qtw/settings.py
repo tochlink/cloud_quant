@@ -1,0 +1,116 @@
+"""非敏感配置（data/settings.yaml）。API 密钥不在这里，见 qtw/vault.py。"""
+from __future__ import annotations
+
+import copy
+import threading
+from typing import Any
+
+import yaml
+
+from .paths import DATA_DIR, ensure_dirs
+
+LIVE_CONFIRM_PHRASE = "我已了解实盘交易可能亏损全部资金"
+
+DEFAULTS: dict[str, Any] = {
+    "venue": "okx",  # okx | gate —— 行情与（未来的）实盘交易所
+    "symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"],
+    "strategy": {
+        "rule_id": "dual_ma_trend_4h_v1",
+        "interval": "4h",
+        "fast_ma": 20,
+        "slow_ma": 60,
+        "atr_period": 14,
+        "atr_stop_mult": 2.0,
+        "lookback_bars": 200,
+    },
+    "risk": {
+        "starting_equity_usdt": 1000.0,
+        "max_risk_per_trade": 0.05,
+        "max_weight_per_name": 0.20,
+        "max_gross_exposure": 1.0,  # 总敞口 ≤ 1 倍权益
+        "perp_leverage": 1,  # v1 保守：永续 1 倍保证金，不放大
+        "allow_spot_long": True,
+        "allow_perp_short": True,
+    },
+    "fees": {"taker_bps": 4.0},
+    "worker": {"enabled": False, "interval_sec": 300},
+    "live": {
+        "mode": "paper",  # paper | live
+        "live_enabled": False,
+        "confirm_phrase": "",
+        "okx_demo": True,  # OKX 模拟盘 (x-simulated-trading: 1)
+        "gate_testnet": True,
+    },
+}
+
+_LOCK = threading.RLock()
+PATH = DATA_DIR / "settings.yaml"
+
+
+def _merge(base: dict, over: dict) -> dict:
+    out = copy.deepcopy(base)
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def load() -> dict:
+    with _LOCK:
+        ensure_dirs()
+        if PATH.exists():
+            data = yaml.safe_load(PATH.read_text(encoding="utf-8")) or {}
+        else:
+            data = {}
+        return _merge(DEFAULTS, data)
+
+
+def validate(s: dict) -> dict:
+    st, rk = s["strategy"], s["risk"]
+    if st["interval"] not in ("15m", "1h", "4h", "1d"):
+        raise ValueError("K 线周期只支持 15m / 1h / 4h / 1d")
+    st["fast_ma"], st["slow_ma"], st["atr_period"] = int(st["fast_ma"]), int(st["slow_ma"]), int(st["atr_period"])
+    if not (2 <= st["fast_ma"] < st["slow_ma"] <= 400):
+        raise ValueError("需要 2 ≤ 快线 < 慢线 ≤ 400")
+    st["atr_stop_mult"] = float(st["atr_stop_mult"])
+    if not 0.5 <= st["atr_stop_mult"] <= 10:
+        raise ValueError("ATR 止损倍数需在 0.5–10 之间")
+    rk["max_risk_per_trade"] = float(rk["max_risk_per_trade"])
+    rk["max_weight_per_name"] = float(rk["max_weight_per_name"])
+    if not 0 < rk["max_risk_per_trade"] <= 0.05:
+        raise ValueError("单笔风险上限不能超过 5%（已约定规则）")
+    if not 0 < rk["max_weight_per_name"] <= 0.20:
+        raise ValueError("单币权重上限不能超过 20%（已约定规则）")
+    if float(rk["max_gross_exposure"]) > 1.0 or int(rk["perp_leverage"]) != 1:
+        raise ValueError("v1 仅支持 1 倍总敞口与 1 倍永续保证金")
+    if s["venue"] not in ("okx", "gate"):
+        raise ValueError("交易所只能是 okx 或 gate")
+    syms = [x.strip().upper().replace("/", "").replace("-", "") for x in s["symbols"] if x.strip()]
+    syms = [x if x.endswith("USDT") else x + "USDT" for x in syms]
+    if not 1 <= len(syms) <= 30:
+        raise ValueError("标的数量需在 1–30 之间")
+    s["symbols"] = list(dict.fromkeys(syms))
+    if s["live"]["mode"] not in ("paper", "live"):
+        raise ValueError("模式只能是 paper 或 live")
+    s["worker"]["interval_sec"] = max(60, int(s["worker"]["interval_sec"]))
+    return s
+
+
+def save(s: dict) -> dict:
+    with _LOCK:
+        s = validate(_merge(DEFAULTS, s))
+        ensure_dirs()
+        PATH.write_text(yaml.safe_dump(s, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        return s
+
+
+def update(patch: dict) -> dict:
+    with _LOCK:
+        return save(_merge(load(), patch))
+
+
+def live_armed(s: dict) -> bool:
+    lv = s["live"]
+    return lv["mode"] == "live" and bool(lv["live_enabled"]) and lv.get("confirm_phrase") == LIVE_CONFIRM_PHRASE
