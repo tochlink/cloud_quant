@@ -314,8 +314,13 @@ def test_watchdog_tick_aborts_when_loop_stalled(monkeypatch):
             }
             stream._ws_refs[name] = _HangCloseWS()
 
+    stream._early_fill_inflight = False
+    stream._last_early_stall_fill_at = 0.0
     n = stream._watchdog_tick()
     assert n == 2
+    deadline = time.time() + 1.0
+    while time.time() < deadline and filled["n"] != 1:
+        time.sleep(0.01)
     assert filled["n"] == 1
     for name in ("okx_public", "gate_spot"):
         assert states[name]["status"] == "reconnecting"
