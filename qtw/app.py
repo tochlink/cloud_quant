@@ -144,21 +144,31 @@ def status():
 
 @app.get("/api/health")
 def health():
-    """Lightweight smoke probe. No secrets, no vault, no full settings dump."""
+    """Lightweight smoke probe. No secrets, no vault, no full settings dump.
+
+    Used by ensure_up.sh / the 10-minute polish routine. Includes venue and
+    live-gate booleans so monitors can confirm paper mode without /api/status.
+    """
     cfg = S.load()
     st = stream.status(cfg["venue"])
     w = worker.status()
+    live_ok, _reasons = guard.check(cfg, cfg["venue"])
     return ok({
         "ok": True,
         "mode": "live" if S.live_armed(cfg) else "paper",
+        "venue": cfg["venue"],
+        "live_enabled": bool(cfg.get("live", {}).get("live_enabled")),
+        "live_gate_open": bool(live_ok),
         "stream": {
             "mode": st.get("mode"),
+            "running": bool(st.get("running")),
             "quotes_ws_fresh": st.get("quotes_ws_fresh"),
             "quotes_rest_fresh": st.get("quotes_rest_fresh"),
         },
         "quotes_ws_fresh": st.get("quotes_ws_fresh"),
         "worker": {"running": bool(w.get("running"))},
         "time": iso(utcnow()),
+        "time_sh": sh(utcnow()),
     })
 
 

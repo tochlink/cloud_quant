@@ -12,11 +12,12 @@
 
 ```bash
 cd /workspace/quant-trading-web
-./start.sh            # 首次自动创建 .venv 并安装依赖
+./start.sh            # 首次自动创建 .venv 并安装依赖；若已在跑则幂等退出
+./ensure_up.sh        # 24/7 保活：health 已 ok 则跳过，否则 nohup 后台拉起并写 data/qtw.pid / data/server.log
 # 打开 http://127.0.0.1:8787
 ```
 
-可选：`QTW_PORT=9000 ./start.sh` 换端口；`QTW_MASTER_PASSPHRASE='你的口令' ./start.sh` 用口令派生主密钥（见“密钥存储”）。
+可选：`QTW_PORT=9000 ./start.sh` 换端口；`QTW_MASTER_PASSPHRASE='你的口令' ./start.sh` 用口令派生主密钥（见“密钥存储”）。`ensure_up.sh` 默认强制 `QTW_ALLOW_LIVE_ORDERS=0`（除非你事先已显式 export=1）。
 
 命令行（不开页面也能用）：
 
@@ -82,7 +83,7 @@ cd /workspace/quant-trading-web
 * 收盘确认的 K 线（`confirm=1` / `w=true`）写入 SQLite `candles` 表（`data_source=okx_public_ws / gate_public_ws`）；未收盘 K 线只用于图表最后一根的实时跳动。
 * 纸面持仓按同一交易所、同一市场的实时价格计价（现货多 → 现货最新价，永续空 → 永续标记价），每 15 秒落库；落库后对 SQLite WAL 做 `PASSIVE` checkpoint（不阻塞并发读）。
 * 页面通过 **SSE `/api/stream`** 每 1.5 秒收到更新：顶部状态（实时 / 部分重连 / 恢复中 / REST 兜底）、右栏价格与盈亏、总览权益、信号卡片价格、K 线最后一根。
-* 冒烟：`GET /api/health` 返回 `ok`、纸面/实盘 `mode`、`stream.mode`（含 recovering）、`quotes_ws_fresh`、`worker.running`、时间；不含密钥或完整设置。
+* 冒烟：`GET /api/health` 返回 `ok`、纸面/实盘 `mode`、`venue`、`live_enabled` / `live_gate_open`、`stream.mode`（含 recovering）/ `stream.running`、`quotes_ws_fresh`、`worker.running`、`time` / `time_sh`；不含密钥或完整设置。`ensure_up.sh` 与 10 分钟打磨例程用它做保活探测。
 * 监控只读别名（复用现有数据，不另造行情或账本计算）：
   * `GET /api/paper` — 纸面账本快照（权益、敞口、持仓、近期成交、账本）
   * `GET /api/positions` — 当前持仓与权益 / 敞口
