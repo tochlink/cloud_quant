@@ -17,7 +17,7 @@ from .paper import ORDER_COLS, PaperBook
 from .paths import OUTPUT_DIR
 from .risk import scale_to_room, size
 from .strategy import combine, indicators, last_cross, market_of, side_of
-from .timeutil import iso, la, utcnow
+from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
 ADVICE = {1: "做多", -1: "做空", 0: "空仓"}
@@ -127,8 +127,10 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             "spot_close": float(ind["spot"]["close"].iloc[-1]) if "spot" in ind else None,
             "perp_close": float(ind["perp"]["close"].iloc[-1]) if "perp" in ind else None,
             "as_of": iso(as_of.to_pydatetime()), "as_of_la": la(as_of.to_pydatetime()),
+            "as_of_sh": sh(as_of.to_pydatetime()),
             "signal_since": iso(cross.to_pydatetime()) if cross is not None else "",
             "next_check": iso((as_of + step).to_pydatetime()), "next_check_la": la((as_of + step).to_pydatetime()),
+            "next_check_sh": sh((as_of + step).to_pydatetime()),
             "venue": venue, "data_source": src.attrs.get("data_source", ""), "source_host": src.attrs.get("source_host", ""),
             "fetched_at": src.attrs.get("fetched_at", ""), "candle_cache": src.attrs.get("cache", ""),
             "error": "", "warning": "；".join(warn),
@@ -149,7 +151,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         blocked = bk.blocks.get(sym) == sig and sig != 0
         if pos and pos.side == side:
             entry = f"持有中：{pos.entry_time} 以 {pos.entry_price:g} 入场"
-            exit_ = f"出现反向/归零信号（下次收盘检查 {row['next_check_la']}）或价格触及止损 {pos.stop_price:g} 时离场"
+            exit_ = f"出现反向/归零信号（下次收盘检查 {row['next_check_sh']}）或价格触及止损 {pos.stop_price:g} 时离场"
             row["stop_price"] = pos.stop_price
             state = "holding"
         elif sig == 0:
@@ -182,7 +184,8 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             r["target_qty"] = p.qty
             r["target_weight"] = r["target_notional_usdt"] / eq if eq else 0
             r["risk_usdt"] = abs(p.qty * (p.stop_price - p.mark_price)) if p.direction * (p.mark_price - p.stop_price) > 0 else 0.0
-    return {"generated_at": iso(utcnow()), "generated_at_la": la(utcnow()), "venue": venue, "equity": eq,
+    return {"generated_at": iso(utcnow()), "generated_at_la": la(utcnow()), "generated_at_sh": sh(utcnow()),
+            "venue": venue, "equity": eq,
             "rows": rows, "errors": errs}
 
 
@@ -298,7 +301,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
             events.append(f"{s} 开{('多·现货' if r['side'] == 'long' else '空·永续')} {qty:.6g} @ {px:g}，止损 {z.stop_price:.6g}")
         snap = bk.snapshot(note or ("; ".join(events)[:240] if events else "无变化"))
         export_paper_csv(cfg)
-        return {"time": snap["time"], "time_la": la(utcnow()), "events": events, "errors": errors, "snapshot": snap}
+        return {"time": snap["time"], "time_la": la(utcnow()), "time_sh": sh(utcnow()), "events": events, "errors": errors, "snapshot": snap}
 
 
 def kill_switch(cfg: dict | None = None) -> dict:

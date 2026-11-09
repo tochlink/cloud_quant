@@ -37,10 +37,14 @@ const sgn = (x, d = 2) => { if (x == null || !isFinite(x)) return "—"; if (Mat
 const cls = (x) => (x > 0 ? "pos" : x < 0 ? "neg" : "");
 const t = (iso) => (iso ? PT.short(iso) : "—");
 const tFull = (iso, sec) => (iso ? PT.full(iso, sec) : "—");
-/* 后端文案里的 ISO / PST 时间统一改写成 “MM-DD HH:mm PT” */
+/* 后端文案里的 ISO / 旧 PST / CST+8 时间统一改写成 “MM-DD HH:mm 北京时间” */
 const ptText = (s) => String(s ?? "")
   .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})/g, (m) => PT.short(m))
-  .replace(/\d{4}-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::\d{2})? P[SD]T/g, "$1-$2 $3:$4 PT");
+  .replace(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})? P[SD]T/g, (m) => {
+    const d = new Date(m.replace(" PST", " GMT-0800").replace(" PDT", " GMT-0700"));
+    return isNaN(d) ? m : PT.short(d);
+  })
+  .replace(/\d{4}-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::\d{2})? (?:CST\+8|北京时间)/g, "$1-$2 $3:$4 北京时间");
 const sideCn = (s) => ({ long: "做多", short: "做空", flat: "空仓" }[s] || s);
 const mktCn = (m) => ({ spot: "现货", perp: "USDT 永续" }[m] || m);
 const VN = { okx: "OKX", gate: "Gate.io" };
@@ -281,7 +285,7 @@ async function pageSignals() {
         </div>
       </div>
       <div class="chart-box" id="candleChart"><div class="empty">加载中…</div></div>
-      <div class="chart-legend"><span><i style="background:#2cc4c9"></i>快线 SMA${s.fast_ma}</span><span><i style="background:#6c5ce7"></i>慢线 SMA${s.slow_ma}</span><span>▲▼ 收盘确认的均线交叉</span><span class="muted">时间为 PT · 图表 TradingView Lightweight Charts™</span></div>
+      <div class="chart-legend"><span><i style="background:#2cc4c9"></i>快线 SMA${s.fast_ma}</span><span><i style="background:#6c5ce7"></i>慢线 SMA${s.slow_ma}</span><span>▲▼ 收盘确认的均线交叉</span><span class="muted">时间为北京时间 · 图表 TradingView Lightweight Charts™</span></div>
     </div>
     <div class="sec-title sig-title"><div><h3>当前信号与进出场建议</h3><div class="note">策略 ${esc(s.rule_id)}：${s.interval} 已收盘 K 线上 SMA${s.fast_ma} / SMA${s.slow_ma} 判断方向。做多用现货，做空用 USDT 永续（1 倍）。点击卡片在上方图表查看。</div></div>
       <a class="link" href="/api/export/signals.csv" title="下载全部信号 CSV">下载 CSV</a></div>
@@ -356,7 +360,7 @@ function applyRange() {
 }
 function renderChartSrc() {
   const c = S.chart, el = $("#chartSrc"); if (!c || !el) return;
-  const live = c._liveAt ? `实时更新于 ${PT.clock(new Date(c._liveAt))}:${String(new Date(c._liveAt).getSeconds()).padStart(2, "0")} PT（${c._liveKind}）` : "等待实时推送…";
+  const live = c._liveAt ? `实时更新于 ${PT.clock(new Date(c._liveAt))}:${String(new Date(c._liveAt).getSeconds()).padStart(2, "0")} 北京时间（${c._liveKind}）` : "等待实时推送…";
   el.innerHTML = `<span class="live-dot ${c._liveAt && Date.now() - c._liveAt < 30000 ? "on" : ""}"></span>${live} · ${c._n} 根已收盘 K 线来自 ${esc(c._src)}`;
 }
 
@@ -411,9 +415,9 @@ function pagePositions() {
   $("#page").innerHTML = `<div class="metrics" style="margin-bottom:18px"><div class="metric feature"><small>纸面权益</small><b class="num">${f2(d.equity)}</b></div><div class="metric"><small>可用现金</small><b class="num">${f2(d.cash_free)}</b></div><div class="metric"><small>总敞口 / 净敞口</small><b class="num">${f2(d.gross, 0)} / ${sgn(d.net, 0)}</b></div><div class="metric"><small>未实现盈亏</small><b class="num ${cls(d.unrealized)}">${sgn(d.unrealized)}</b></div></div>
   <div class="panel"><div class="sec-title"><h3>当前纸面持仓（${d.positions.length}）</h3><a class="btn ghost sm" href="/api/export/paper_positions.csv">${ic("dl")}导出 CSV</a></div>
   ${d.positions.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>标的</th><th>方向</th><th>数量</th><th>入场价</th><th>入场时间</th><th>最新价</th><th>止损价</th><th>名义</th><th>权重</th><th>未实现</th></tr></thead><tbody>
-  ${d.positions.map((p) => `<tr><td><div style="display:flex;gap:10px;align-items:center">${coin(p.symbol)}<b>${p.symbol}</b></div></td><td><span class="pill ${p.side}">${sideCn(p.side)} · ${mktCn(p.market)}</span></td><td class="num">${fp(p.qty)}</td><td class="num">${fp(p.entry_price)}</td><td>${tFull(p.entry_time)}</td><td class="num">${fp(p.mark_price)}</td><td class="num">${fp(p.stop_price)}</td><td class="num">${f2(p.notional)}</td><td class="num">${pct(p.weight, 1)}</td><td class="num ${cls(p.upnl)}">${sgn(p.upnl)}</td></tr>`).join("")}</tbody></table></div>`
+  ${d.positions.map((p) => `<tr><td><div style="display:flex;gap:10px;align-items:center">${coin(p.symbol)}<b>${p.symbol}</b></div></td><td><span class="pill ${p.side}">${sideCn(p.side)} · ${mktCn(p.market)}</span></td><td class="num">${fp(p.qty)}</td><td class="num">${fp(p.entry_price)}</td><td>${tFull(p.entry_time)}</td><td class="num">${fp(p.mark_price)}<br><small class="muted">${esc(p.mark_source || "—")}</small></td><td class="num">${fp(p.stop_price)}</td><td class="num">${f2(p.notional)}</td><td class="num">${pct(p.weight, 1)}</td><td class="num ${cls(p.upnl)}">${sgn(p.upnl)}</td></tr>`).join("")}</tbody></table></div>`
   : '<div class="empty">当前空仓。开启自动交易或点击右上角「跑一轮」执行一次系统化周期。</div>'}
-  <div class="note" style="margin-top:10px">纸面账本持久化保存在 data/paper/（重启不丢失）。永续空头按 1 倍保证金计，占用等额现金。</div></div>`;
+  <div class="note" style="margin-top:10px">纸面账本持久化保存在 data/qtw.sqlite（重启不丢失；CSV 仅为导出）。永续空头按 1 倍保证金计，占用等额现金。</div></div>`;
 }
 
 /* ---------- 成交 ---------- */
@@ -573,7 +577,7 @@ function pageHelp() {
   <li>离场：收盘出现反向或归零信号，或价格触及 <b>${s.atr_stop_mult}×ATR${s.atr_period}</b> 止损；止损后等信号方向改变才再入场。</li></ul></section>
   <section><h4>仓位与风控</h4><ul><li>风险预算 = 权益 × ${pct(st.risk.max_risk_per_trade, 0)}；名义 = 风险预算 ÷ 止损百分比。</li><li>单币名义 ≤ 权益 × ${pct(st.risk.max_weight_per_name, 0)}；总敞口 ≤ 1× 权益，同时入场按比例缩放。</li><li>永续空头按 1 倍保证金占用现金；空头价格上涨时名义会超过权益，可用现金显示为负属正常记账，此时不会开新仓。</li></ul></section>
   <section><h4>页面</h4><ul><li><b>总览</b>：权益、现金 / 敞口 / 未实现、最近成交、回撤与胜率。</li><li><b>信号</b>：K 线实时图与每个币的做多 / 做空 / 空仓建议、仓位、止损。</li><li><b>回测</b>：真实历史 K 线回测与 CSV 导出。</li><li><b>持仓 / 成交</b>：纸面账本与订单日志。</li><li><b>风控</b>：自动交易开关、紧急停止、参数与标的池。</li><li><b>设置</b>：行情源、加密密钥、实盘闸门。</li></ul></section>
-  <section><h4>数据与时间</h4><ul><li>所有时间按 America/Los_Angeles 显示，标注 <b>PT</b>。</li><li>数据库：<code>data/qtw.sqlite</code>；API 密钥只存在加密文件 <code>data/secrets.enc</code>。</li><li>CSV 导出：<code>output/</code> 与 <code>output/backtest/</code>。图表：TradingView Lightweight Charts™。</li></ul></section>
+  <section><h4>数据与时间</h4><ul><li>所有时间按 <b>Asia/Shanghai（北京时间）</b> 显示。</li><li>数据库：<code>data/qtw.sqlite</code>；API 密钥只存在加密文件 <code>data/secrets.enc</code>。</li><li>CSV 导出：<code>output/</code> 与 <code>output/backtest/</code>。图表：TradingView Lightweight Charts™。</li></ul></section>
   <section><h4>局限</h4><ul><li>回测未计资金费率与滑点；历史表现不代表未来。</li><li>实盘模式没有与交易所持仓对账；实盘前请先在 OKX 模拟盘 / Gate 合约测试网验证。</li><li>按 <code>Esc</code> 关闭弹窗 / 右侧抽屉。</li></ul></section></div>`;
 }
 

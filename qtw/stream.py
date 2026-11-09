@@ -12,6 +12,7 @@
   * 断线指数退避自动重连；某个价格超过 20 秒没有 WS 更新 → 用官方公共 REST 拉取（data_source=*_public_rest）。
   * 应用层心跳：OKX 文本 ping/pong；Gate JSON 的 channel 以 .pong 结尾（不是字符串 "pong"）。二者都视为连接活跃并刷新 last_msg，不交给行情 handle。
     recv 超时后先再发一次 ping 并多等一轮，仍无消息才重连，避免短暂静默导致连接一起抖动。
+    发出订阅 / ping 也有超时：半开 TCP 让 send 挂起时会主动重连，避免状态仍是 connected 但 last_msg 数分钟不刷新。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
 """
@@ -168,6 +169,7 @@ def _forming_put(venue, market, symbol, interval, open_ms, o, h, l, c, closed, s
 # ---------------------------------------------------------------- 连接
 RECV_WAIT_SEC = 25
 PING_EVERY_SEC = 20
+SEND_WAIT_SEC = 10
 
 
 def is_keepalive(raw) -> bool:
@@ -216,6 +218,14 @@ def _note_activity(name: str) -> None:
             st["last_msg"] = ts
 
 
+async def _send(ws, payload):
+    """Send with a timeout so a half-open socket cannot freeze the recv loop."""
+    try:
+        await asyncio.wait_for(ws.send(payload), SEND_WAIT_SEC)
+    except asyncio.TimeoutError:
+        raise ConnectionError(f"{SEND_WAIT_SEC} 秒内未能发出心跳/订阅（连接可能已半开）") from None
+
+
 async def _run_ws(name, urls, subscribe_msgs, handle, ping):
     import websockets
     backoff, i = 1.0, 0
@@ -229,13 +239,13 @@ async def _run_ws(name, urls, subscribe_msgs, handle, ping):
             # are handled by the grace-retry below.
             async with websockets.connect(url, open_timeout=10, ping_interval=None, close_timeout=3, max_size=2**22) as ws:
                 for m in subscribe_msgs():
-                    await ws.send(m)
+                    await _send(ws, m)
                 _conn_state(name, status="connected", connected_at=iso(utcnow()), last_error="")
                 backoff, was_connected = 1.0, True
                 last_ping = time.time()
                 while True:
                     if time.time() - last_ping > PING_EVERY_SEC:
-                        await ws.send(ping())
+                        await _send(ws, ping())
                         last_ping = time.time()
                     try:
                         raw = await asyncio.wait_for(ws.recv(), RECV_WAIT_SEC)
@@ -243,7 +253,7 @@ async def _run_ws(name, urls, subscribe_msgs, handle, ping):
                         # Grace retry: one extra app-level ping + one more recv wait
                         # so a brief quiet period does not flap all sockets at once.
                         try:
-                            await ws.send(ping())
+                            await _send(ws, ping())
                             last_ping = time.time()
                             raw = await asyncio.wait_for(ws.recv(), RECV_WAIT_SEC)
                         except asyncio.TimeoutError:

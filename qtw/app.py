@@ -25,7 +25,7 @@ from .market import MarketDataError
 from .market import cache as mcache
 from .paths import OUTPUT_DIR, STATIC_DIR, ensure_dirs
 from .strategy import indicators
-from .timeutil import iso, la, utcnow
+from .timeutil import iso, la, sh, utcnow
 
 setup_logging()
 log = logging.getLogger("qtw")
@@ -90,7 +90,7 @@ def _startup():
 def status():
     cfg = S.load()
     live_ok, reasons = guard.check(cfg, cfg["venue"])
-    return ok({"version": __version__, "time": iso(utcnow()), "time_la": la(utcnow()), "settings": cfg,
+    return ok({"version": __version__, "time": iso(utcnow()), "time_la": la(utcnow()), "time_sh": sh(utcnow()), "settings": cfg,
                "mode": "live" if S.live_armed(cfg) else "paper", "live_gate_open": live_ok,
                "live_block_reasons": reasons, "worker": worker.status(), "vault": vault.status(),
                "stream": stream.status(), "db": {"path": str(db.db_path()), "counts": db.counts()},
@@ -128,6 +128,7 @@ def dashboard():
     eq = bk.equity()
     positions = [{"symbol": p.symbol, "market": p.market, "side": p.side, "qty": p.qty, "entry_price": p.entry_price,
                   "entry_time": p.entry_time, "mark_price": p.mark_price, "mark_time": p.mark_time,
+                  "mark_source": p.mark_source, "venue": p.venue,
                   "stop_price": p.stop_price, "notional": p.qty * p.mark_price,
                   "weight": (p.qty * p.mark_price / eq) if eq else 0, "upnl": p.upnl()}
                  for p in bk.positions.values()]
@@ -145,7 +146,7 @@ def dashboard():
     week_ledger = [r for r in ledger if r["time"].replace("Z", "+00:00") >= week_ago]
     week_start_eq = float(week_ledger[0]["equity_usdt"]) if week_ledger else bk.starting
     return ok({
-        "time": iso(utcnow()), "time_la": la(utcnow()), "mode": "live" if S.live_armed(cfg) else "paper",
+        "time": iso(utcnow()), "time_la": la(utcnow()), "time_sh": sh(utcnow()), "mode": "live" if S.live_armed(cfg) else "paper",
         "venue": cfg["venue"], "starting_equity": bk.starting, "equity": eq, "realized": bk.realized,
         "unrealized": eq - bk.realized, "cash_free": max(0.0, eq - bk.gross()) if abs(eq - bk.gross()) < 1e-6 else eq - bk.gross(), "gross": bk.gross(), "net": bk.net(),
         "total_pnl": eq - bk.starting, "total_return": eq / bk.starting - 1,
@@ -318,6 +319,7 @@ def _bt_payload(run: dict, eqdf: pd.DataFrame, trades: pd.DataFrame) -> dict:
     step = max(1, len(eqdf) // 800)
     return {"run_id": run["run_id"], "summary": run["summary"], "data_errors": run.get("data_errors", {}),
             "generated_at": run["created_at"], "generated_at_la": la(pd.Timestamp(run["created_at"]).to_pydatetime()),
+            "generated_at_sh": sh(pd.Timestamp(run["created_at"]).to_pydatetime()),
             "equity": [{"time": int(pd.Timestamp(r.time).timestamp()), "equity": r.equity, "drawdown": r.drawdown}
                        for r in eqdf.iloc[::step].itertuples()],
             "trades": trades.to_dict("records")}
