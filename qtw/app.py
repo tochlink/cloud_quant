@@ -6,6 +6,7 @@ import logging
 import math
 import threading
 from datetime import datetime, timedelta, timezone
+from contextlib import asynccontextmanager
 from typing import Any
 
 import pandas as pd
@@ -30,9 +31,10 @@ from .timeutil import iso, la, sh, utcnow
 setup_logging()
 log = logging.getLogger("qtw")
 ensure_dirs()
-app = FastAPI(title="QTW 量化交易控制台", version=__version__)
 _bt_lock = threading.Lock()
 _last_bt: dict[str, Any] = {}
+_persist_thread: threading.Thread | None = None
+_persist_stop = threading.Event()
 
 
 def clean(o):
@@ -56,9 +58,7 @@ def ok(data) -> JSONResponse:
 
 
 def _mark_persister():
-    import time as _t
-    while True:
-        _t.sleep(15)
+    while not _persist_stop.wait(15):
         try:
             engine.persist_marks()
         except Exception:  # noqa: BLE001
@@ -75,8 +75,22 @@ def _mark_persister():
             log.debug("wal checkpoint skipped", exc_info=True)
 
 
-@app.on_event("startup")
-def _startup():
+def _start_persist():
+    global _persist_thread
+    if _persist_thread and _persist_thread.is_alive():
+        return
+    _persist_stop.clear()
+    _persist_thread = threading.Thread(target=_mark_persister, name="qtw-mark-persist", daemon=True)
+    _persist_thread.start()
+
+
+def _stop_persist():
+    _persist_stop.set()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup / shutdown via lifespan (replaces deprecated on_event handlers)."""
     db.connect()
     cfg = S.save(S.load())  # 确保非敏感设置落在 SQLite
     bk = engine.book(cfg)
@@ -84,11 +98,36 @@ def _startup():
         log.info("已把旧版 CSV 纸面账本迁移到 SQLite：%s", bk.migrated)
     stream.on_quote(engine.mark_from_stream)
     stream.start()
-    threading.Thread(target=_mark_persister, name="qtw-mark-persist", daemon=True).start()
-    if cfg["worker"]["enabled"]:
+    _start_persist()
+    # Tests set QTW_FORBID_LIVE=1 (conftest). Skip auto worker so lifespan does not
+    # hold CYCLE_LOCK / open network during unrelated unit tests.
+    import os as _os
+    if cfg["worker"]["enabled"] and _os.environ.get("QTW_FORBID_LIVE") != "1":
         worker.start()
+    elif cfg["worker"]["enabled"]:
+        log.info("QTW_FORBID_LIVE=1：跳过自动启动 worker（测试/安全模式；可手动 /api/worker/start）")
     log.info("QTW %s 已启动；模式=%s；实盘闸门=%s", __version__, cfg["live"]["mode"],
              "通过" if guard.check(cfg, cfg["venue"])[0] else "关闭")
+    try:
+        yield
+    finally:
+        worker.stop()
+        _stop_persist()
+        stream.stop()
+        # Drop the process-wide paper-book singleton so TestClient lifespan
+        # cannot leave CYCLE_LOCK / live positions poisoning later unit tests.
+        with engine._BOOK_LOCK:
+            engine._BOOK = None
+            engine._MARK["venue"] = None
+            engine._MARK["dirty"] = False
+        try:
+            db.checkpoint_wal("PASSIVE")
+        except Exception:  # noqa: BLE001
+            log.debug("shutdown wal checkpoint skipped", exc_info=True)
+        log.info("QTW 已关闭（worker / stream / persist 已请求停止）")
+
+
+app = FastAPI(title="QTW 量化交易控制台", version=__version__, lifespan=lifespan)
 
 
 # ---------------- 状态 / 总览 ----------------
@@ -157,6 +196,8 @@ def _dashboard_data() -> dict:
         "venue": cfg["venue"], "starting_equity": bk.starting, "equity": eq, "realized": bk.realized,
         "unrealized": eq - bk.realized, "cash_free": max(0.0, eq - bk.gross()) if abs(eq - bk.gross()) < 1e-6 else eq - bk.gross(), "gross": bk.gross(), "net": bk.net(),
         "total_pnl": eq - bk.starting, "total_return": eq / bk.starting - 1,
+        # realized = 起始资金 + 已实现盈亏 − 手续费（账面资本）；realized_pnl 才是净已实现
+        "book_capital": bk.realized, "realized_pnl": bk.realized - bk.starting,
         "week": {"pnl": eq - week_start_eq,
                  "gains": sum(float(f["realized_pnl_usdt"]) for f in week_fills if float(f["realized_pnl_usdt"]) > 0),
                  "losses": sum(float(f["realized_pnl_usdt"]) for f in week_fills if float(f["realized_pnl_usdt"]) < 0),
@@ -180,7 +221,8 @@ def _paper_payload() -> dict:
     d = _dashboard_data()
     return {k: d[k] for k in (
         "time", "time_la", "time_sh", "mode", "venue", "starting_equity", "equity",
-        "realized", "unrealized", "cash_free", "gross", "net", "total_pnl", "total_return",
+        "realized", "book_capital", "realized_pnl", "unrealized", "cash_free", "gross", "net",
+        "total_pnl", "total_return",
         "week", "positions", "recent_fills", "ledger", "max_drawdown", "closed_trades",
         "win_rate", "worker",
     )}
@@ -564,9 +606,17 @@ async def sse():
 
 
 @app.get("/api/stream/status")
+@app.get("/api/market/status")
 def stream_status():
+    """Live WS/REST stream health. /api/market/status is a monitoring alias."""
     cfg = S.load()
     return ok(stream.status(cfg["venue"]))
+
+
+@app.get("/api/config")
+def config_alias():
+    """Monitoring alias → non-secret settings (same as GET /api/settings)."""
+    return ok(S.load())
 
 
 EXPORTS = {"signals": "signals.csv", "paper_positions": "paper_positions.csv", "paper_fills": "paper_fills.csv",

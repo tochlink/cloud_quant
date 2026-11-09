@@ -65,6 +65,7 @@ _conns: dict[str, dict] = {}
 _version = 0
 _thread: threading.Thread | None = None
 _loop: asyncio.AbstractEventLoop | None = None
+_stop = threading.Event()  # set by stop(); supervisor exits cleanly for lifespan shutdown
 _rest_errors: dict[str, str] = {}
 _on_quote = []  # 回调：用于给纸面持仓实时计价
 _last_ws_at: dict[str, float] = {}  # venue -> wall time of last *_ws quote for that venue
@@ -678,7 +679,7 @@ async def _load_settings():
 async def _supervisor():
     cur, tasks = None, []
     syms: list[str] = []
-    while True:
+    while not _stop.is_set():
         # S.load() hits SQLite under db._LOCK. Paper save / candle upsert / WAL
         # checkpoint can hold that lock for seconds; doing it inline here used to
         # stall the whole stream loop so all four sockets looked connected while
@@ -698,22 +699,51 @@ async def _supervisor():
             cur = want
             log.info("实时行情订阅：%d 个标的 · %s · OKX + Gate（现货 + 永续）", len(syms), interval)
         await _kick_zombies(syms, preferred_venue=cfg.get("venue"))
-        await asyncio.sleep(5)
+        # Interruptible sleep so stop() can end the supervisor without waiting a full 5s.
+        for _ in range(50):
+            if _stop.is_set():
+                break
+            await asyncio.sleep(0.1)
+    for t in tasks:
+        t.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    with _lock:
+        _conns.clear()
+        _forming.clear()
+        _ws_refs.clear()
+    log.info("实时行情 supervisor 已停止")
 
 
 def start():
     global _thread, _loop
     if _thread and _thread.is_alive():
         return
+    _stop.clear()
 
     def run():
         global _loop
         _loop = asyncio.new_event_loop()
         asyncio.set_event_loop(_loop)
-        _loop.run_until_complete(_supervisor())
+        try:
+            _loop.run_until_complete(_supervisor())
+        finally:
+            try:
+                _loop.close()
+            except Exception:  # noqa: BLE001
+                pass
+            _loop = None
 
     _thread = threading.Thread(target=run, name="qtw-stream", daemon=True)
     _thread.start()
+
+
+def stop(timeout: float = 3.0) -> None:
+    """Ask the stream supervisor to exit (used by FastAPI lifespan shutdown)."""
+    _stop.set()
+    t = _thread
+    if t and t.is_alive():
+        t.join(timeout=timeout)
 
 
 def interval_ms(interval: str) -> int:

@@ -65,3 +65,22 @@ def test_monitoring_aliases_return_existing_data():
         assert "symbol" in row and "market" in row and "price" in row
         nested = q["prices"][row["symbol"]][row["market"]]
         assert nested["price"] == row["price"]
+
+    stream = client.get("/api/stream/status")
+    assert stream.status_code == 200
+    st = stream.json()
+    assert "mode" in st and "connections" in st
+
+    market = client.get("/api/market/status")
+    assert market.status_code == 200
+    assert market.json()["mode"] == st["mode"]
+    assert market.json()["quotes_ws_fresh"] == st["quotes_ws_fresh"]
+
+    cfg = client.get("/api/config")
+    assert cfg.status_code == 200
+    settings = client.get("/api/settings")
+    assert settings.status_code == 200
+    assert cfg.json() == settings.json()
+    assert "live" in cfg.json()
+    assert cfg.json()["live"]["live_enabled"] is False
+

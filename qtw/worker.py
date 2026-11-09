@@ -43,9 +43,13 @@ def start():
         _thread.start()
 
 
-def stop():
+def stop(timeout: float = 8.0) -> None:
+    """Signal the worker loop to exit and wait for the in-flight cycle to finish."""
     _stop.set()
-    _state["running"] = False
+    t = _thread
+    if t and t.is_alive():
+        t.join(timeout=timeout)
+    _state["running"] = bool(t and t.is_alive() and not _stop.is_set())
 
 
 def status() -> dict:
