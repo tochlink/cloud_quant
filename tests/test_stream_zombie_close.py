@@ -243,20 +243,16 @@ def test_rest_fill_stale_runs_preferred_venue_before_secondary(monkeypatch):
             self.source_host = "example.test"
             self.exchange = venue.upper()
 
-    class FakeClient:
-        def __init__(self, venue):
-            self.venue = venue
-
-        def quote(self, sym, mkt):
-            order.append(self.venue)
-            import time as _t
-            # Secondary venue is slower; if we awaited it first, preferred would lag.
-            if self.venue == "gate":
-                _t.sleep(0.05)
-            return Q(self.venue, sym, mkt)
+    def fake_gap_fill(venue, sym, mkt):
+        order.append(venue)
+        import time as _t
+        # Secondary venue is slower; if we awaited it first, preferred would lag.
+        if venue == "gate":
+            _t.sleep(0.05)
+        return Q(venue, sym, mkt)
 
     monkeypatch.setattr(stream, "latest", lambda *a, **k: None)
-    monkeypatch.setattr(stream, "get_client", lambda venue: FakeClient(venue))
+    monkeypatch.setattr(stream, "_quote_for_gap_fill", fake_gap_fill)
     monkeypatch.setattr(stream, "_put", lambda q: None)
     stream._rest_errors.clear()
 

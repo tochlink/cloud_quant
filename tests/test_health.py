@@ -21,6 +21,7 @@ def test_health_reports_paper_gate_and_stream_without_secrets():
     assert "quotes_rest_fresh" in body["stream"]
     assert "watchdog_running" in body["stream"]
     assert "loop_heartbeat_age_sec" in body["stream"]
+    assert "rest_fill_inflight" in body["stream"]
     assert body["quotes_ws_fresh"] == body["stream"]["quotes_ws_fresh"]
     assert isinstance(body["worker"]["running"], bool)
     assert "persist_running" in body
