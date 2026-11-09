@@ -316,8 +316,9 @@ def annotate_conn(conn: dict, *, now: float | None = None, zombie_sec: float = Z
     """Copy a connection row and mark zombie sockets as status=stale for API/UI."""
     c = dict(conn)
     age = _activity_age_sec(c, now)
-    if age is not None:
-        c["last_msg_age_sec"] = round(age, 1)
+    # Always emit the key: a reconnecting socket with no last_msg / connected_at
+    # has age=None. SSE used to KeyError when the field was omitted.
+    c["last_msg_age_sec"] = round(age, 1) if age is not None else None
     if c.get("status") == "connected" and (age is None or age > zombie_sec):
         c["status"] = "stale"
     return c

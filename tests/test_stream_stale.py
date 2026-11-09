@@ -29,6 +29,20 @@ def test_annotate_conn_marks_zombie_as_stale():
 def test_annotate_conn_connected_without_last_msg_is_stale():
     c = annotate_conn({"name": "gate_spot", "status": "connected", "last_msg": ""}, now=1_700_000_000)
     assert c["status"] == "stale"
+    assert "last_msg_age_sec" in c
+    assert c["last_msg_age_sec"] is None
+
+
+def test_annotate_conn_reconnecting_without_timestamps_still_has_age_key():
+    """Disconnect/reconnect (e.g. gaierror) often has empty last_msg and connected_at."""
+    c = annotate_conn(
+        {"name": "okx_public", "status": "reconnecting", "url": "", "last_msg": "",
+         "connected_at": "", "reconnects": 1, "last_error": "gaierror"},
+        now=1_700_000_000,
+    )
+    assert c["status"] == "reconnecting"
+    assert "last_msg_age_sec" in c
+    assert c["last_msg_age_sec"] is None
 
 
 def test_stale_sockets_do_not_count_as_up_in_mode():
