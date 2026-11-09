@@ -609,6 +609,7 @@ function liveState() {
   if (S.esDown) return ["warn", `重连中 · ${V}`];
   if (L && S.liveAt && Date.now() - S.liveAt > 30000) return ["bad", `数据延迟 · ${Math.round((Date.now() - S.liveAt) / 1000)} 秒无更新`];
   const mine = (src.conns || []).filter((c) => c.name.startsWith(src.venue));
+  if ((src.conns || []).some((c) => c.status === "stale")) return ["warn", `连接无响应 · ${V}`];
   if (src.mode === "ws") return mine.length && mine.every((c) => c.status === "connected") ? ["ok", `实时 · ${V}`] : ["warn", `实时 · ${V} 部分重连`];
   // WS sockets reconnecting / quote gap filled by REST — not a full REST-only fallback
   if (src.mode === "recovering") return ["warn", `恢复中 · ${V}`];
@@ -651,8 +652,8 @@ function connectLive() {
 }
 $("#livePill").onclick = () => {
   const L = S.live, conns = L ? L.connections : S.status?.stream?.connections || [], sm = L ? L.stream : S.status?.stream || {};
-  modal(`<h3>实时行情连接</h3><div class="note" style="margin-bottom:8px">官方公共接口，无需 API Key。当前行情源：<b>${VN[S.status.settings.venue]}</b></div><div class="conn-list">${conns.map((c) => `<div><b class="${c.status === "connected" ? "ok" : "bad"}">●</b> ${esc(c.name)} · ${c.status === "connected" ? "已连接" : esc(c.status)}${c.last_msg ? ` · 最后消息 ${tFull(c.last_msg, true)}` : ""}${c.reconnects ? ` · 累计重连 ${c.reconnects} 次` : ""}<br><span class="src">${esc(c.url)}</span>${c.last_error ? `<br><span class="src neg">${esc(c.last_error)}</span>` : ""}</div>`).join("") || "暂无连接信息"}</div>
-   <div class="note" style="margin-top:10px">模式 ${sm.mode ?? "—"} · WebSocket 新鲜报价 ${sm.quotes_ws_fresh ?? "—"} 个 · REST 兜底 ${sm.quotes_rest_fresh ?? "—"} 个。价格超过 20 秒无 WS 更新时自动改用官方 REST；重连窗口内标为「恢复中」而非误报 REST；获取失败只报错，不会编造价格。${Object.keys(sm.rest_errors || {}).length ? "<br><span class='neg'>REST 错误：" + Object.entries(sm.rest_errors).slice(0, 4).map(([k, v]) => esc(k + " " + v)).join("；") + "</span>" : ""}</div>
+  modal(`<h3>实时行情连接</h3><div class="note" style="margin-bottom:8px">官方公共接口，无需 API Key。当前行情源：<b>${VN[S.status.settings.venue]}</b></div><div class="conn-list">${conns.map((c) => { const lab = ({connected:"已连接",connecting:"连接中",reconnecting:"重连中",stale:"无响应",stopped:"已停止"})[c.status] || c.status; const ok = c.status === "connected"; return `<div><b class="${ok ? "ok" : "bad"}">●</b> ${esc(c.name)} · ${esc(lab)}${c.last_msg ? ` · 最后消息 ${tFull(c.last_msg, true)}` : ""}${c.last_msg_age_sec != null ? `（${Math.round(c.last_msg_age_sec)} 秒前）` : ""}${c.reconnects ? ` · 累计重连 ${c.reconnects} 次` : ""}<br><span class="src">${esc(c.url)}</span>${c.last_error ? `<br><span class="src neg">${esc(c.last_error)}</span>` : ""}</div>`; }).join("") || "暂无连接信息"}</div>
+   <div class="note" style="margin-top:10px">模式 ${sm.mode ?? "—"} · WebSocket 新鲜报价 ${sm.quotes_ws_fresh ?? "—"} 个 · REST 兜底 ${sm.quotes_rest_fresh ?? "—"} 个。价格超过 20 秒无 WS 更新时自动改用官方 REST；重连窗口内标为「恢复中」而非误报 REST；已连接但长时间无消息标为「无响应」；获取失败只报错，不会编造价格。${Object.keys(sm.rest_errors || {}).length ? "<br><span class='neg'>REST 错误：" + Object.entries(sm.rest_errors).slice(0, 4).map(([k, v]) => esc(k + " " + v)).join("；") + "</span>" : ""}</div>
    <div class="acts"><button class="btn" data-close>关闭</button></div>`, (m) => (m.querySelector("[data-close]").onclick = closeModal));
 };
 

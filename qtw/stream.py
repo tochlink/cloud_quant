@@ -3,7 +3,7 @@
 连接（每个交易所现货 / 永续各一条，外加 OKX K 线 business 通道）：
   OKX  public   wss://ws.okx.com/ws/v5/public（优先 443；被拦时再试 :8443 / wsaws）
        频道：tickers（现货 BTC-USDT…）、mark-price（永续 BTC-USDT-SWAP…）
-  OKX  business wss://ws.okx.com:8443/ws/v5/business  频道：candle4H（现货 + 永续）
+  OKX  business wss://ws.okx.com/ws/v5/business（优先 443；回退 :8443 / wsaws）  频道：candle4H（现货 + 永续）
   Gate spot     wss://api.gateio.ws/ws/v4/            频道：spot.tickers、spot.candlesticks
   Gate futures  wss://fx-ws.gateio.ws/v4/ws/usdt       频道：futures.tickers（含 mark_price）、futures.candlesticks
 规则：
@@ -13,6 +13,8 @@
   * 应用层心跳：OKX 文本 ping/pong；Gate JSON 的 channel 以 .pong 结尾（不是字符串 "pong"）。二者都视为连接活跃并刷新 last_msg，不交给行情 handle。
     recv 超时后先再发一次 ping 并多等一轮，仍无消息才重连，避免短暂静默导致连接一起抖动。
     发出订阅 / ping 也有超时：半开 TCP 让 send 挂起时会主动重连，避免状态仍是 connected 但 last_msg 数分钟不刷新。
+  * 已收盘 K 线写入 SQLite 放到线程池，避免 db 锁/WAL 卡住 asyncio 事件循环，导致四条连接同时假死（status=connected 但 last_msg 数分钟不刷新）。
+  * status() 把「已连接但 last_msg 超过 ZOMBIE_SEC」标为 stale，不计入 up，避免 UI 误报实时。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
 """
@@ -41,6 +43,12 @@ STALE_SEC = 20
 # After the last WS quote, keep mode as ws/recovering this long so a reconnect
 # storm (sockets flap, REST briefly fills marks) does not flash "rest" in health/UI.
 WS_MODE_HOLD_SEC = 90
+RECV_WAIT_SEC = 25
+PING_EVERY_SEC = 20
+SEND_WAIT_SEC = 10
+# connected + last_msg older than this → report as stale (recv/grace should have
+# reconnected already; if the event loop was blocked, status must not lie).
+ZOMBIE_SEC = RECV_WAIT_SEC * 2 + PING_EVERY_SEC  # 70
 
 _lock = threading.RLock()
 _quotes: dict[tuple, Quote] = {}
@@ -117,14 +125,39 @@ def classify_mode(*, live: int, rest: int, up: int, trying: int, recent_ws: bool
     return "down"
 
 
+def _last_msg_age_sec(conn: dict, now: float | None = None) -> float | None:
+    """Seconds since conn['last_msg'], or None if missing/unparseable."""
+    lm = conn.get("last_msg") or ""
+    if not lm:
+        return None
+    try:
+        ts = datetime.fromisoformat(lm.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+    return (now if now is not None else time.time()) - ts
+
+
+def annotate_conn(conn: dict, *, now: float | None = None, zombie_sec: float = ZOMBIE_SEC) -> dict:
+    """Copy a connection row and mark zombie sockets as status=stale for API/UI."""
+    c = dict(conn)
+    age = _last_msg_age_sec(c, now)
+    if age is not None:
+        c["last_msg_age_sec"] = round(age, 1)
+    if c.get("status") == "connected" and (age is None or age > zombie_sec):
+        c["status"] = "stale"
+    return c
+
+
 def status() -> dict:
     with _lock:
-        conns = [dict(v) for v in _conns.values()]
+        raw = [dict(v) for v in _conns.values()]
         now = time.time()
         q = list(_quotes.values())
         last_ws = _last_ws_at
+    conns = [annotate_conn(c, now=now) for c in raw]
     live = sum(1 for x in q if x.data_source.endswith("_ws") and (now - x.ts.timestamp()) < STALE_SEC)
     rest = sum(1 for x in q if x.data_source.endswith("_rest") and (now - x.ts.timestamp()) < 60)
+    # stale sockets must not count as "up" or we keep advertising a live WS path
     up = sum(1 for c in conns if c["status"] == "connected")
     trying = sum(1 for c in conns if c["status"] in ("connected", "reconnecting", "connecting"))
     recent_ws = bool(last_ws) and (now - last_ws) < WS_MODE_HOLD_SEC
@@ -149,14 +182,36 @@ def _ms(x) -> datetime:
     return datetime.fromtimestamp(int(float(x)) / 1000, tz=timezone.utc)
 
 
+_STORE_SQL = (
+    "INSERT INTO candles(venue,market,symbol,interval,open_time,open,high,low,close,volume,data_source,source_host,fetched_at) "
+    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(venue,market,symbol,interval,open_time) DO UPDATE SET "
+    "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,volume=excluded.volume,"
+    "data_source=excluded.data_source,source_host=excluded.source_host,fetched_at=excluded.fetched_at"
+)
+
+
+def _store_closed_sync(args: tuple) -> None:
+    try:
+        db.execute(_STORE_SQL, args)
+    except Exception:  # noqa: BLE001
+        log.exception("candle store failed")
+
+
 def _store_closed(venue, market, symbol, interval, open_ms, o, h, l, c, v, source, host):
-    db.execute(
-        "INSERT INTO candles(venue,market,symbol,interval,open_time,open,high,low,close,volume,data_source,source_host,fetched_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(venue,market,symbol,interval,open_time) DO UPDATE SET "
-        "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,volume=excluded.volume,"
-        "data_source=excluded.data_source,source_host=excluded.source_host,fetched_at=excluded.fetched_at",
-        (venue, market, symbol, interval, int(open_ms), float(o), float(h), float(l), float(c), float(v or 0), source, host,
-         iso(utcnow())))
+    """Persist a confirmed closed candle without blocking the WS event loop.
+
+    SQLite writes share a process-wide lock with the paper book / worker. Doing
+    them inline inside recv handlers freezes ping/pong and wait_for timeouts, so
+    all sockets can sit at status=connected with a multi-minute-old last_msg.
+    """
+    args = (venue, market, symbol, interval, int(open_ms), float(o), float(h), float(l), float(c),
+            float(v or 0), source, host, iso(utcnow()))
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _store_closed_sync(args)
+        return
+    loop.run_in_executor(None, _store_closed_sync, args)
 
 
 def _forming_put(venue, market, symbol, interval, open_ms, o, h, l, c, closed, source):
@@ -167,11 +222,6 @@ def _forming_put(venue, market, symbol, interval, open_ms, o, h, l, c, closed, s
 
 
 # ---------------------------------------------------------------- 连接
-RECV_WAIT_SEC = 25
-PING_EVERY_SEC = 20
-SEND_WAIT_SEC = 10
-
-
 def is_keepalive(raw) -> bool:
     """True for OKX/Gate application-level ping/pong frames (not market data).
 
