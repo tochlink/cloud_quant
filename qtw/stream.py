@@ -19,13 +19,13 @@
   * WebSocket 握手除库自带 open_timeout 外再包一层 wait_for，避免 DNS / 半开 TCP 让状态一直停在 connecting（此时还没有 _ws_refs，僵尸踢除无法中断）。
   * supervisor 每轮检查僵尸连接：last_msg 过旧仍标 connected 时强制中断套接字（优先 transport.abort，避免 close 握手挂起），并行踢掉并标 reconnecting，迫使 _run_ws 走重连；刚连上时写入 last_msg，空 last_msg 则用 connected_at 计龄；踢掉后立刻 REST 填一次标记价，不等 10 秒轮询。
   * supervisor 读配置走线程池（run_in_executor），避免 S.load()/SQLite 锁被纸面写库或 K 线缓存占用时卡住 asyncio，导致四条 WS 同时假死、zombie age 远超 ZOMBIE_SEC。
-  * 侧线程 watchdog：supervisor 的僵尸踢除跑在 asyncio 循环内；若事件循环被卡住，踢除本身也无法执行，last_msg 会拖到 90s+。watchdog 独立扫描；循环心跳过旧或僵尸年龄超过 ZOMBIE+宽限时，直接 transport.abort()（websockets 15 ClientConnection 实例属性），并经 call_soon / run_coroutine_threadsafe 触发 REST 填隙；abort 失败时再 threadsafe 调度 close()。start() 在行情线程已存活时也会补拉 watchdog。
+  * 侧线程 watchdog：supervisor 的僵尸踢除跑在 asyncio 循环内；若事件循环被卡住，踢除本身也无法执行，last_msg 会拖到 90s+。watchdog 独立扫描；循环心跳过旧或僵尸年龄超过 ZOMBIE+宽限时，直接 transport.abort()（websockets 15 ClientConnection 实例属性）；loop 已冻结时用 watchdog 线程同步 REST 填隙，健康循环仍经 run_coroutine_threadsafe 调度；abort 失败时再 threadsafe 调度 close()。start() 在行情线程已存活时也会补拉 watchdog。
   * 报价回调（纸面 mark）不在 asyncio 线程同步执行：经单线程队列派发，避免 PaperBook._LOCK / SQLite 写锁卡住 recv/ping/zombie kick（曾出现 last_msg 龄到 200s+ 而 watchdog 日志缺失的假死）。
   * supervisor / watchdog 踢僵尸时记录 last_zombie_kick_age_sec / last_zombie_max_age_sec，供 /api/health 与打磨例程一眼看出「上次踢除多久前、当时最大静默龄」。
   * REST 填隙用独立线程池 + 短超时报价客户端，并在填隙期间刷新 loop heartbeat；watchdog 在 rest_fill_inflight 时不把心跳迟滞当成 loop stall（仍会踢超过 ZOMBIE+宽限的真僵尸），避免「填隙拖心跳 → 误杀重连中的套接字 → 再填隙」的正反馈。
   * 若 rest_fill_inflight 持续超过 FILLING_STALL_SEC（填隙协程卡在已冻结的 loop 上、depth 无法清零），取消 filling 护盾，按真 stall 处理。
   * `_note_activity`（recv/pong）也刷新 loop heartbeat：supervisor 卡在 S.load/DB 时，只要事件循环仍在处理帧就不误报 stall。
-  * 真 stall 时用更短的 STALL_ZOMBIE_SEC 门槛踢套接字，并在尚无僵尸前就调度 REST 填隙，缩短纸面标记价空白窗。
+  * 真 stall 时用更短的 STALL_ZOMBIE_SEC 门槛踢套接字；尚无僵尸前就从 **watchdog 线程同步** REST 填隙（不经冻结的 asyncio loop 的 run_coroutine_threadsafe），避免纸面标记价空白窗卡在已死事件循环上。
   * REST 填隙优先当前纸面行情源（settings.venue），同批内有限并发，避免僵尸踢掉后纸面标记价排在另一所 32 路串行 REST 后面。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
@@ -104,6 +104,9 @@ _io_pool: concurrent.futures.ThreadPoolExecutor | None = None  # dedicated REST/
 _rest_fill_depth = 0  # >0 while _rest_fill_stale runs (watchdog must not false-stall)
 _rest_fill_started_at: float = 0.0  # wall time when depth went 0→1 (stuck-fill detector)
 _stall_suspect_count = 0  # watchdog mass-abort / stall recoveries (health polish)
+_early_stall_fill_count = 0  # sync REST fills while loop heartbeat was stalled
+_last_early_stall_fill_at: float = 0.0  # wall time of last sync stall fill
+_last_early_stall_fill_n: int = 0  # quotes filled in that sync pass
 GAP_FILL_TIMEOUT_SEC = 5.0
 GAP_FILL_RETRIES = 2
 GAP_FILL_BACKOFF_SEC = 0.25
@@ -328,12 +331,19 @@ def status(venue: str | None = None) -> dict:
     mode, live, rest = _freshness(q_use, c_use, last_ws, now)
     hb = _loop_heartbeat
     kick_at = _last_zombie_kick_at
+    ages = [c.get("last_msg_age_sec") for c in c_use
+            if c.get("status") in ("connected", "stale") and c.get("last_msg_age_sec") is not None]
+    early_at = _last_early_stall_fill_at
     out = {"mode": mode, "connections": conns, "quotes_ws_fresh": live, "quotes_rest_fresh": rest,
            "quotes_total": len(q_use), "rest_errors": rest_err, "running": bool(_thread and _thread.is_alive()),
            "watchdog_running": bool(_watchdog_thread and _watchdog_thread.is_alive()),
            "loop_heartbeat_age_sec": round(time.time() - hb, 1) if hb else None,
            "rest_fill_inflight": int(_rest_fill_depth) > 0,
            "stall_suspect_count": int(_stall_suspect_count),
+           "ws_conn_max_age_sec": round(max(ages), 1) if ages else None,
+           "early_stall_fill_count": int(_early_stall_fill_count),
+           "last_early_stall_fill_age_sec": round(time.time() - early_at, 1) if early_at else None,
+           "last_early_stall_fill_n": int(_last_early_stall_fill_n) if early_at else None,
            "last_zombie_kick_age_sec": round(time.time() - kick_at, 1) if kick_at else None,
            "last_zombie_max_age_sec": _last_zombie_max_age_sec}
     if v:
@@ -739,6 +749,100 @@ async def _rest_fill_stale(symbols, venues=("okx", "gate"), *, preferred_venue: 
         _bump_loop_heartbeat()
 
 
+
+def _rest_fill_stale_sync(symbols, venues=("okx", "gate"), *, preferred_venue: str | None = None) -> int:
+    """Watchdog-thread REST gap-fill that does not need the asyncio loop.
+
+    When the stream event loop is frozen, ``run_coroutine_threadsafe(_rest_fill_stale)``
+    only queues work that never runs until the loop recovers — leaving paper marks
+    blank for the whole stall. This path uses the dedicated IO pool from the
+    watchdog thread and ``_put``s official public REST quotes directly.
+    """
+    global _rest_fill_depth, _rest_fill_started_at
+    if not symbols:
+        return 0
+    order = _venue_fill_order(preferred_venue, venues)
+    jobs: list[tuple[str, str, str]] = []
+    for venue in order:
+        for sym in symbols:
+            for mkt in ("spot", "perp"):
+                if latest(venue, sym, mkt, STALE_SEC):
+                    continue
+                jobs.append((venue, sym, mkt))
+    if not jobs:
+        return 0
+    pool = _ensure_io_pool()
+    _rest_fill_depth += 1
+    if _rest_fill_depth == 1:
+        _rest_fill_started_at = time.time()
+    try:
+        pref = (preferred_venue or "").strip().lower()
+        primary = [j for j in jobs if j[0] == pref] if pref else list(jobs)
+        secondary = [j for j in jobs if j not in primary] if pref else []
+        filled = 0
+        # Cap wait so a wedged host cannot pin the watchdog forever.
+        per_batch_timeout = GAP_FILL_TIMEOUT_SEC * (GAP_FILL_RETRIES + 1) + 2.0
+        for batch in (primary, secondary):
+            if not batch:
+                continue
+            futs = {
+                pool.submit(_quote_for_gap_fill, v, s, m): (v, s, m)
+                for v, s, m in batch
+            }
+            try:
+                done, not_done = concurrent.futures.wait(
+                    futs.keys(), timeout=per_batch_timeout,
+                    return_when=concurrent.futures.ALL_COMPLETED,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("watchdog sync REST wait failed")
+                done, not_done = set(), set(futs.keys())
+            for fut in not_done:
+                fut.cancel()
+            for fut in done:
+                v, s, m = futs[fut]
+                key = f"{v}:{s}:{m}"
+                try:
+                    q = fut.result()
+                    _put(q)
+                    _rest_errors.pop(key, None)
+                    filled += 1
+                except Exception as e:  # noqa: BLE001
+                    _rest_errors[key] = str(e)[:200]
+        return filled
+    finally:
+        _rest_fill_depth = max(0, _rest_fill_depth - 1)
+        if _rest_fill_depth == 0:
+            _rest_fill_started_at = 0.0
+
+
+def _watchdog_rest_fill(*, stalled: bool) -> int:
+    """Fill stale marks after a watchdog decision.
+
+    Stall path: sync fill from this thread (loop may be dead).
+    Healthy path: schedule async fill on the live stream loop.
+    """
+    global _early_stall_fill_count, _last_early_stall_fill_at, _last_early_stall_fill_n
+    if not stalled:
+        _schedule_rest_fill_from_watchdog()
+        return 0
+    syms = list(_watch_symbols)
+    pref = _watch_venue
+    try:
+        n = _rest_fill_stale_sync(syms, preferred_venue=pref)
+    except Exception:  # noqa: BLE001
+        log.exception("watchdog sync REST fill failed")
+        return 0
+    _early_stall_fill_count += 1
+    _last_early_stall_fill_at = time.time()
+    _last_early_stall_fill_n = int(n)
+    if n:
+        log.info("watchdog: sync REST filled %d stale quotes (loop stall)", n)
+    else:
+        log.info("watchdog: sync REST fill on stall (0 stale / no symbols)")
+    return n
+
+
 async def _rest_fallback(symbols):
     """WS 价格过期（>20 秒）时，用官方公共 REST 拉取真实报价；失败只记录错误。"""
     while True:
@@ -857,10 +961,11 @@ def _watchdog_tick() -> int:
     past that grace window, abort transports immediately.
 
     Stall path uses ``STALL_ZOMBIE_SEC`` (shorter than ``ZOMBIE_SEC``) so a
-    frozen loop recovers paper marks in ~30s instead of waiting a full quiet
-    window. A wedged ``rest_fill_inflight`` older than ``FILLING_STALL_SEC``
-    drops the filling shield (depth can stick if the fill task never runs
-    finally on a dead loop).
+    frozen loop recovers sockets in ~30s instead of waiting a full quiet
+    window, and runs a **synchronous** REST gap-fill from this thread so paper
+    marks do not depend on the frozen asyncio loop. A wedged
+    ``rest_fill_inflight`` older than ``FILLING_STALL_SEC`` drops the filling
+    shield (depth can stick if the fill task never runs finally on a dead loop).
     """
     global _stall_suspect_count
     now = time.time()
@@ -899,9 +1004,10 @@ def _watchdog_tick() -> int:
             continue
         jobs.append((name, ws, age))
     # Even before sockets cross the zombie floor: if the loop heartbeat is dead,
-    # REST-fill marks so the paper book does not sit on multi-minute blanks.
+    # REST-fill marks from THIS thread so the paper book does not wait on a
+    # frozen asyncio loop (run_coroutine_threadsafe would only queue work).
     if stalled and not jobs:
-        _schedule_rest_fill_from_watchdog()
+        _watchdog_rest_fill(stalled=True)
         return 0
     if not jobs:
         return 0
@@ -920,7 +1026,7 @@ def _watchdog_tick() -> int:
             name, age, age_floor,
         )
         _abort_ws_transport_sync(ws, name, reason="zombie: watchdog abort")
-    _schedule_rest_fill_from_watchdog()
+    _watchdog_rest_fill(stalled=stalled)
     return len(jobs)
 
 
