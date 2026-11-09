@@ -63,6 +63,10 @@ def _mark_persister():
             engine.persist_marks()
         except Exception:  # noqa: BLE001
             log.exception("persist marks failed")
+        try:
+            db.checkpoint_wal("PASSIVE")
+        except Exception:  # noqa: BLE001
+            log.debug("wal checkpoint skipped", exc_info=True)
 
 
 @app.on_event("startup")
@@ -91,6 +95,22 @@ def status():
                "live_block_reasons": reasons, "worker": worker.status(), "vault": vault.status(),
                "stream": stream.status(), "db": {"path": str(db.db_path()), "counts": db.counts()},
                "confirm_phrase_required": S.LIVE_CONFIRM_PHRASE})
+
+
+@app.get("/api/health")
+def health():
+    """Lightweight smoke probe. No secrets, no vault, no full settings dump."""
+    cfg = S.load()
+    st = stream.status()
+    w = worker.status()
+    return ok({
+        "ok": True,
+        "mode": "live" if S.live_armed(cfg) else "paper",
+        "stream": {"mode": st.get("mode")},
+        "quotes_ws_fresh": st.get("quotes_ws_fresh"),
+        "worker": {"running": bool(w.get("running"))},
+        "time": iso(utcnow()),
+    })
 
 
 def _closed_trades(fills: list[dict]) -> list[dict]:

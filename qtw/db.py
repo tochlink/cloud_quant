@@ -147,3 +147,20 @@ def counts(conn=None) -> dict:
 
 def dumps(o) -> str:
     return json.dumps(o, ensure_ascii=False, default=str)
+
+
+def checkpoint_wal(mode: str = "PASSIVE") -> tuple[int, int, int]:
+    """Move durable WAL frames into the main DB without blocking readers.
+
+    PASSIVE never waits on other readers or writers (it may no-op if the WAL
+    is busy). Returns sqlite's (busy, log, checkpointed) triple.
+    """
+    if mode not in ("PASSIVE", "RESTART", "FULL", "TRUNCATE"):
+        mode = "PASSIVE"
+    c = connect()
+    with _LOCK:
+        row = c.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+    if not row:
+        return (0, 0, 0)
+    return (int(row[0]), int(row[1]), int(row[2]))
+

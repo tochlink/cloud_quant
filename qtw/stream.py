@@ -10,6 +10,8 @@
   * 只保存交易所真实推送的数据；收盘确认的 K 线（OKX confirm=1 / Gate w=true）写入 SQLite candles 表，
     data_source = okx_public_ws / gate_public_ws；未收盘 K 线只推给前端图表，不参与信号。
   * 断线指数退避自动重连；某个价格超过 20 秒没有 WS 更新 → 用官方公共 REST 拉取（data_source=*_public_rest）。
+  * 应用层心跳：OKX 文本 ping/pong；Gate JSON 的 channel 以 .pong 结尾（不是字符串 "pong"）。二者都视为连接活跃并刷新 last_msg，不交给行情 handle。
+    recv 超时后先再发一次 ping 并多等一轮，仍无消息才重连，避免短暂静默导致连接一起抖动。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
 """
 from __future__ import annotations
@@ -135,6 +137,56 @@ def _forming_put(venue, market, symbol, interval, open_ms, o, h, l, c, closed, s
 
 
 # ---------------------------------------------------------------- 连接
+RECV_WAIT_SEC = 25
+PING_EVERY_SEC = 20
+
+
+def is_keepalive(raw) -> bool:
+    """True for OKX/Gate application-level ping/pong frames (not market data).
+
+    OKX replies to the text ``ping`` with the text ``pong`` (sometimes
+    ``{"event": "pong"}``). Gate replies to ``{"channel": "spot.ping"}`` /
+    ``futures.ping`` with JSON whose ``channel`` ends in ``.pong``.
+    These count as connection activity and must not be passed to handlers.
+    """
+    if raw is None:
+        return False
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            raw = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+    if not isinstance(raw, str):
+        return False
+    text = raw.strip()
+    if text in ("pong", "ping"):
+        return True
+    if not text.startswith("{"):
+        return False
+    try:
+        msg = json.loads(text)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(msg, dict):
+        return False
+    ch = msg.get("channel")
+    if ch is None and isinstance(msg.get("arg"), dict):
+        ch = msg["arg"].get("channel")
+    ch = str(ch or "")
+    if ch.endswith(".pong") or ch.endswith(".ping") or ch == "pong":
+        return True
+    return msg.get("event") in ("pong", "ping")
+
+
+def _note_activity(name: str) -> None:
+    """Refresh last_msg so status/UI see pongs as well as market data."""
+    ts = iso(utcnow())
+    with _lock:
+        st = _conns.get(name)
+        if st is not None:
+            st["last_msg"] = ts
+
+
 async def _run_ws(name, urls, subscribe_msgs, handle, ping):
     import websockets
     backoff, i = 1.0, 0
@@ -143,6 +195,9 @@ async def _run_ws(name, urls, subscribe_msgs, handle, ping):
         was_connected = False
         _conn_state(name, status="connecting", url=url)
         try:
+            # Keep library protocol ping disabled: OKX/Gate use app-level ping/pong
+            # and we do not want a second heartbeat to interfere. Quiet stretches
+            # are handled by the grace-retry below.
             async with websockets.connect(url, open_timeout=10, ping_interval=None, close_timeout=3, max_size=2**22) as ws:
                 for m in subscribe_msgs():
                     await ws.send(m)
@@ -150,16 +205,24 @@ async def _run_ws(name, urls, subscribe_msgs, handle, ping):
                 backoff, was_connected = 1.0, True
                 last_ping = time.time()
                 while True:
-                    if time.time() - last_ping > 20:
+                    if time.time() - last_ping > PING_EVERY_SEC:
                         await ws.send(ping())
                         last_ping = time.time()
                     try:
-                        raw = await asyncio.wait_for(ws.recv(), 25)
+                        raw = await asyncio.wait_for(ws.recv(), RECV_WAIT_SEC)
                     except asyncio.TimeoutError:
-                        raise ConnectionError("25 秒未收到消息")
-                    if raw == "pong":
+                        # Grace retry: one extra app-level ping + one more recv wait
+                        # so a brief quiet period does not flap all sockets at once.
+                        try:
+                            await ws.send(ping())
+                            last_ping = time.time()
+                            raw = await asyncio.wait_for(ws.recv(), RECV_WAIT_SEC)
+                        except asyncio.TimeoutError:
+                            raise ConnectionError(f"{RECV_WAIT_SEC} 秒未收到消息（grace ping 后仍无响应）") from None
+                    _note_activity(name)
+                    if is_keepalive(raw):
+                        _bump()
                         continue
-                    _conns[name]["last_msg"] = iso(utcnow())
                     try:
                         handle(json.loads(raw), url)
                     except Exception as e:  # noqa: BLE001
@@ -239,6 +302,8 @@ def _gate_tasks(symbols, interval):
 
     def handler(prefix, market, name):
         def h(m, url):
+            if str(m.get("channel") or "").endswith(".pong"):
+                return
             if m.get("event") != "update":
                 if m.get("error"):
                     _conn_state(name, last_error=str(m.get("error"))[:200])

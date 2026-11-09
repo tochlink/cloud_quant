@@ -75,9 +75,11 @@ cd /workspace/quant-trading-web
 | Gate | `wss://fx-ws.gateio.ws/v4/ws/usdt` | `futures.tickers`（mark_price）、`futures.candlesticks` |
 
 * 两个交易所都订阅整个标的池；断线指数退避自动重连；任何价格 20 秒没有 WS 更新就改用官方 REST 拉取（`*_public_rest`）。
+* 心跳：OKX 文本 `pong`、Gate JSON（`channel` 以 `.pong` 结尾，例如 `spot.pong` / `futures.pong`）都算连接活跃并刷新 `last_msg`，不交给行情处理函数。recv 超时会先再发一次应用层 ping 并多等一轮，避免短暂静默就重连。
 * 收盘确认的 K 线（`confirm=1` / `w=true`）写入 SQLite `candles` 表（`data_source=okx_public_ws / gate_public_ws`）；未收盘 K 线只用于图表最后一根的实时跳动。
-* 纸面持仓按同一交易所、同一市场的实时价格计价（现货多 → 现货最新价，永续空 → 永续标记价），每 15 秒落库。
+* 纸面持仓按同一交易所、同一市场的实时价格计价（现货多 → 现货最新价，永续空 → 永续标记价），每 15 秒落库；落库后对 SQLite WAL 做 `PASSIVE` checkpoint（不阻塞并发读）。
 * 页面通过 **SSE `/api/stream`** 每 1.5 秒收到更新：顶部“实时 · WebSocket”状态（点击查看每条连接）、右栏价格与盈亏、总览权益、信号卡片价格、K 线最后一根。
+* 冒烟：`GET /api/health` 返回 `ok`、纸面/实盘 `mode`、`stream.mode`、`quotes_ws_fresh`、`worker.running`、时间；不含密钥或完整设置。
 
 ## 自动交易与紧急停止
 
