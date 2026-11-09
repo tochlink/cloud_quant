@@ -1,18 +1,18 @@
 /* 小型 SVG 图表（摘要卡片用）+ lightweight-charts 封装 */
 (function () {
-  /* 统一时间格式：全部按 kean 所在时区 America/Los_Angeles 显示，并带 “PT” 标签 */
-  const TZ = "America/Los_Angeles", _f = {};
+  /* 统一时间格式：按 kean 所在时区 Asia/Shanghai 显示，标注“北京时间” */
+  const TZ = "Asia/Shanghai", LABEL = "北京时间", _f = {};
   function parts(d, o) {
     const k = JSON.stringify(o);
     const f = _f[k] || (_f[k] = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, hourCycle: "h23", ...o }));
     return Object.fromEntries(f.formatToParts(d).map((p) => [p.type, p.value]));
   }
   const toD = (x) => (x instanceof Date ? x : typeof x === "number" ? new Date(x * 1000) : new Date(x));
-  window.PT = {
-    tz: TZ,
+  window.PT = { /* 显示时区助手（历史名字 PT，现为北京时间） */
+    tz: TZ, label: LABEL,
     hour(d = new Date()) { return +parts(d, { hour: "2-digit" }).hour; },
-    short(x) { const d = toD(x); if (isNaN(d)) return String(x); const p = parts(d, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }); return `${p.month}-${p.day} ${p.hour}:${p.minute} PT`; },
-    full(x, sec) { const d = toD(x); if (isNaN(d)) return String(x); const p = parts(d, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", ...(sec ? { second: "2-digit" } : {}) }); return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}${sec ? ":" + p.second : ""} PT`; },
+    short(x) { const d = toD(x); if (isNaN(d)) return String(x); const p = parts(d, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }); return `${p.month}-${p.day} ${p.hour}:${p.minute} ${LABEL}`; },
+    full(x, sec) { const d = toD(x); if (isNaN(d)) return String(x); const p = parts(d, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", ...(sec ? { second: "2-digit" } : {}) }); return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}${sec ? ":" + p.second : ""} ${LABEL}`; },
     clock(x) { const d = toD(x); const p = parts(d, { hour: "2-digit", minute: "2-digit" }); return `${p.hour}:${p.minute}`; },
     tick(ts, type) { const d = toD(ts); const p = parts(d, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
       return type === 0 ? p.year : type === 1 ? `${p.year}-${p.month}` : type === 2 ? `${p.month}-${p.day}` : `${p.hour}:${p.minute}`; },

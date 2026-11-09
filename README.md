@@ -55,6 +55,7 @@ cd /workspace/quant-trading-web
 | 总敞口 | ≤ 1 × 权益；同时入场多个币时等比缩放 |
 | 手续费假设 | taker 4 bps |
 | 交付格式 | CSV |
+| 界面时区 | Asia/Shanghai（北京时间）；API 另附 `*_la`（美西）与 `*_sh`（北京时间） |
 
 ## 策略：`dual_ma_trend_4h_v1`
 
@@ -75,7 +76,7 @@ cd /workspace/quant-trading-web
 | Gate | `wss://fx-ws.gateio.ws/v4/ws/usdt` | `futures.tickers`（mark_price）、`futures.candlesticks` |
 
 * 两个交易所都订阅整个标的池；断线指数退避自动重连；任何价格 20 秒没有 WS 更新就改用官方 REST 拉取（`*_public_rest`）。
-* 心跳：OKX 文本 `pong`、Gate JSON（`channel` 以 `.pong` 结尾，例如 `spot.pong` / `futures.pong`）都算连接活跃并刷新 `last_msg`，不交给行情处理函数。recv 超时会先再发一次应用层 ping 并多等一轮，避免短暂静默就重连。
+* 心跳：OKX 文本 `pong`、Gate JSON（`channel` 以 `.pong` 结尾，例如 `spot.pong` / `futures.pong`）都算连接活跃并刷新 `last_msg`，不交给行情处理函数。recv 超时会先再发一次应用层 ping 并多等一轮，避免短暂静默就重连。发出订阅 / ping 也有超时，半开连接导致 send 挂起时会主动重连。
 * `stream.mode` 带迟滞：`ws`（有新鲜 WS 报价）→ `recovering`（插座仍在 / 刚重连、REST 短暂填隙）→ `rest`（WS 路径真正不可用、仅 REST）→ `down`。重连风暴时不会立刻误报「REST 兜底」。
 * 收盘确认的 K 线（`confirm=1` / `w=true`）写入 SQLite `candles` 表（`data_source=okx_public_ws / gate_public_ws`）；未收盘 K 线只用于图表最后一根的实时跳动。
 * 纸面持仓按同一交易所、同一市场的实时价格计价（现货多 → 现货最新价，永续空 → 永续标记价），每 15 秒落库；落库后对 SQLite WAL 做 `PASSIVE` checkpoint（不阻塞并发读）。
