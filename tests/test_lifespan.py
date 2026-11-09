@@ -22,6 +22,11 @@ def test_lifespan_starts_healthy_paper_mode():
         body = h.json()
         assert body["ok"] is True
         assert body["mode"] == "paper"
+        assert body["venue"] in ("okx", "gate")
+        assert body["live_enabled"] is False
+        assert body["live_gate_open"] is False
+        assert "running" in body["stream"]
+        assert "time_sh" in body and "CST+8" in body["time_sh"]
         st = client.get("/api/status").json()
         assert st["live_gate_open"] is False
         assert st["settings"]["live"]["live_enabled"] is False
