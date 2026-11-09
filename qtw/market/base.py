@@ -27,6 +27,9 @@ class Quote:
     kind: str  # last | mark
     ts: datetime
     venue: str
+    source_host: str = ""
+    data_source: str = ""
+    fetched_at: str = ""
 
 
 class HttpJson:
@@ -35,6 +38,7 @@ class HttpJson:
         self.timeout = timeout
         self.max_retries = max_retries
         self.backoff = backoff
+        self.last_host = ""
         self.s = requests.Session()
         self.s.headers.update({"User-Agent": "qtw/2.0 (+public market data)", "Accept": "application/json"})
 
@@ -49,6 +53,7 @@ class HttpJson:
                     time.sleep(self.backoff * (attempt + 1))
                     continue
                 if r.status_code == 200:
+                    self.last_host = base.split("/")[2]
                     return r.json()
                 if r.status_code in (403, 451):
                     # 地区限制：换下一个官方域名，不重试同一个

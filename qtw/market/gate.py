@@ -17,6 +17,7 @@ def pair(sym: str) -> str:
 
 class GatePublic:
     venue = "Gate"
+    data_source = "gate_public_rest"
 
     def __init__(self):
         self.http = HttpJson(BASES)
@@ -48,7 +49,18 @@ class GatePublic:
         df = pd.DataFrame(rows, columns=["open_time", "open", "high", "low", "close", "volume"])
         if not df.empty:
             df["open_time"] = pd.to_datetime(df["open_time"], unit="s", utc=True)
-        return finalize(df, interval).tail(limit).reset_index(drop=True)
+        return self._tag(finalize(df, interval).tail(limit).reset_index(drop=True), market)
+
+    def _tag(self, df, market):
+        from qtw.timeutil import iso, utcnow
+        df.attrs.update(venue=self.venue.lower(), market=market, data_source=self.data_source,
+                        source_host=self.http.last_host, fetched_at=iso(utcnow()))
+        return df
+
+    def _q(self, q: Quote) -> Quote:
+        from qtw.timeutil import iso, utcnow
+        q.source_host, q.data_source, q.fetched_at = self.http.last_host, self.data_source, iso(utcnow())
+        return q
 
     def quote(self, symbol: str, market: str) -> Quote:
         now = datetime.now(timezone.utc)
@@ -56,11 +68,11 @@ class GatePublic:
             d = self.http.get("/spot/tickers", {"currency_pair": pair(symbol)})
             if not d:
                 raise MarketDataError(f"Gate 无 {symbol} 现货报价")
-            return Quote(symbol, "spot", float(d[0]["last"]), "last", now, self.venue)
+            return self._q(Quote(symbol, "spot", float(d[0]["last"]), "last", now, self.venue))
         d = self.http.get(f"/futures/usdt/contracts/{pair(symbol)}")
         if not d or "mark_price" not in d:
             raise MarketDataError(f"Gate 无 {symbol} 永续标记价")
-        return Quote(symbol, "perp", float(d["mark_price"]), "mark", now, self.venue)
+        return self._q(Quote(symbol, "perp", float(d["mark_price"]), "mark", now, self.venue))
 
     def perp_spec(self, symbol: str) -> dict:
         d = self.http.get(f"/futures/usdt/contracts/{pair(symbol)}")

@@ -39,3 +39,14 @@ def last_cross(ind: pd.DataFrame) -> pd.Timestamp | None:
     ch = s.ne(s.shift(1)) & s.shift(1).notna()
     idx = ch[ch].index
     return ind.loc[idx[-1], "close_time"] if len(idx) else None
+
+
+def combine(spot_sig, perp_sig):
+    """现货与永续各自在自己的已收盘 K 线上算 dual-MA，再合成：
+      现货 = +1 且永续 ≠ -1 → +1（现货做多）
+      永续 = -1 且现货 ≠ +1 → -1（永续做空）
+      其余（含冲突：现货多 / 永续空）→ 0 空仓
+    """
+    s = np.asarray(spot_sig, dtype=int)
+    p = np.asarray(perp_sig, dtype=int)
+    return np.where((s == 1) & (p != -1), 1, np.where((p == -1) & (s != 1), -1, 0)).astype(int)
