@@ -15,6 +15,7 @@
     发出订阅 / ping 也有超时：半开 TCP 让 send 挂起时会主动重连，避免状态仍是 connected 但 last_msg 数分钟不刷新。
   * 已收盘 K 线写入 SQLite 放到线程池，避免 db 锁/WAL 卡住 asyncio 事件循环，导致四条连接同时假死（status=connected 但 last_msg 数分钟不刷新）。
   * status() 把「已连接但 last_msg 超过 ZOMBIE_SEC」标为 stale，不计入 up，避免 UI 误报实时。
+  * supervisor 每轮检查僵尸连接：last_msg 过旧仍标 connected 时主动 close 套接字，迫使 _run_ws 走重连（兜底 recv/wait_for 未触发的半开连接）。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
 """
@@ -60,6 +61,7 @@ _loop: asyncio.AbstractEventLoop | None = None
 _rest_errors: dict[str, str] = {}
 _on_quote = []  # 回调：用于给纸面持仓实时计价
 _last_ws_at: float = 0.0  # monotonic-ish wall time of last *_ws quote
+_ws_refs: dict[str, object] = {}  # live websocket objects (stream-loop only) for zombie close
 
 
 def _bump():
@@ -288,34 +290,39 @@ async def _run_ws(name, urls, subscribe_msgs, handle, ping):
             # and we do not want a second heartbeat to interfere. Quiet stretches
             # are handled by the grace-retry below.
             async with websockets.connect(url, open_timeout=10, ping_interval=None, close_timeout=3, max_size=2**22) as ws:
-                for m in subscribe_msgs():
-                    await _send(ws, m)
-                _conn_state(name, status="connected", connected_at=iso(utcnow()), last_error="")
-                backoff, was_connected = 1.0, True
-                last_ping = time.time()
-                while True:
-                    if time.time() - last_ping > PING_EVERY_SEC:
-                        await _send(ws, ping())
-                        last_ping = time.time()
-                    try:
-                        raw = await asyncio.wait_for(ws.recv(), RECV_WAIT_SEC)
-                    except asyncio.TimeoutError:
-                        # Grace retry: one extra app-level ping + one more recv wait
-                        # so a brief quiet period does not flap all sockets at once.
-                        try:
+                _ws_refs[name] = ws
+                try:
+                    for m in subscribe_msgs():
+                        await _send(ws, m)
+                    _conn_state(name, status="connected", connected_at=iso(utcnow()), last_error="")
+                    backoff, was_connected = 1.0, True
+                    last_ping = time.time()
+                    while True:
+                        if time.time() - last_ping > PING_EVERY_SEC:
                             await _send(ws, ping())
                             last_ping = time.time()
+                        try:
                             raw = await asyncio.wait_for(ws.recv(), RECV_WAIT_SEC)
                         except asyncio.TimeoutError:
-                            raise ConnectionError(f"{RECV_WAIT_SEC} 秒未收到消息（grace ping 后仍无响应）") from None
-                    _note_activity(name)
-                    if is_keepalive(raw):
-                        _bump()
-                        continue
-                    try:
-                        handle(json.loads(raw), url)
-                    except Exception as e:  # noqa: BLE001
-                        log.warning("%s handle error: %s", name, e)
+                            # Grace retry: one extra app-level ping + one more recv wait
+                            # so a brief quiet period does not flap all sockets at once.
+                            try:
+                                await _send(ws, ping())
+                                last_ping = time.time()
+                                raw = await asyncio.wait_for(ws.recv(), RECV_WAIT_SEC)
+                            except asyncio.TimeoutError:
+                                raise ConnectionError(f"{RECV_WAIT_SEC} 秒未收到消息（grace ping 后仍无响应）") from None
+                        _note_activity(name)
+                        if is_keepalive(raw):
+                            _bump()
+                            continue
+                        try:
+                            handle(json.loads(raw), url)
+                        except Exception as e:  # noqa: BLE001
+                            log.warning("%s handle error: %s", name, e)
+                finally:
+                    if _ws_refs.get(name) is ws:
+                        _ws_refs.pop(name, None)
         except asyncio.CancelledError:
             _conn_state(name, status="stopped")
             raise
@@ -328,6 +335,7 @@ async def _run_ws(name, urls, subscribe_msgs, handle, ping):
                 i += 1  # 这个地址连不上就换下一个官方地址；连上过的地址断线后先原地重连
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
+
 
 
 def _host(url):
@@ -449,6 +457,31 @@ async def _rest_fallback(symbols):
                         _rest_errors[key] = str(e)[:200]
 
 
+async def _kick_zombies():
+    """Close sockets that look connected but have been silent past ZOMBIE_SEC.
+
+    recv/grace should already reconnect; this is a safety net when the library
+    recv wait never returns while the event loop is otherwise healthy.
+    """
+    now = time.time()
+    with _lock:
+        rows = [(n, dict(st)) for n, st in _conns.items()]
+    for name, st in rows:
+        if st.get("status") != "connected":
+            continue
+        age = _last_msg_age_sec(st, now)
+        if age is None or age <= ZOMBIE_SEC:
+            continue
+        ws = _ws_refs.get(name)
+        if ws is None:
+            continue
+        log.warning("%s zombie (last_msg %.0fs ago > %ss), forcing socket close", name, age, ZOMBIE_SEC)
+        try:
+            await asyncio.wait_for(ws.close(), 3)
+        except Exception as e:  # noqa: BLE001
+            log.info("%s zombie close: %s", name, type(e).__name__)
+
+
 async def _supervisor():
     cur, tasks = None, []
     while True:
@@ -460,11 +493,13 @@ async def _supervisor():
             with _lock:
                 _conns.clear()
                 _forming.clear()
+                _ws_refs.clear()
             syms, interval = list(want[0]), want[1]
             coros = _okx_tasks(syms, interval) + _gate_tasks(syms, interval) + [_rest_fallback(syms)]
             tasks = [asyncio.create_task(c) for c in coros]
             cur = want
             log.info("实时行情订阅：%d 个标的 · %s · OKX + Gate（现货 + 永续）", len(syms), interval)
+        await _kick_zombies()
         await asyncio.sleep(15)
 
 

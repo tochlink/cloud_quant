@@ -39,3 +39,10 @@ def test_stale_sockets_do_not_count_as_up_in_mode():
     assert classify_mode(live=0, rest=32, up=0, trying=2, recent_ws=True) == "recovering"
     # Trying with neither up nor recent_ws, but REST present → rest (not fake recovering)
     assert classify_mode(live=0, rest=32, up=0, trying=2, recent_ws=False) == "rest"
+
+
+def test_zombie_kick_helper_is_exported():
+    # Safety-net close path must stay importable for the supervisor loop.
+    from qtw import stream as st
+    assert callable(getattr(st, "_kick_zombies", None))
+    assert isinstance(getattr(st, "_ws_refs"), dict)

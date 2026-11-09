@@ -608,8 +608,9 @@ function liveState() {
   const V = VN[src.venue] || src.venue;
   if (S.esDown) return ["warn", `重连中 · ${V}`];
   if (L && S.liveAt && Date.now() - S.liveAt > 30000) return ["bad", `数据延迟 · ${Math.round((Date.now() - S.liveAt) / 1000)} 秒无更新`];
+  // Only judge the selected venue's sockets — Gate being stale must not flash「无响应」on OKX (and vice versa).
   const mine = (src.conns || []).filter((c) => c.name.startsWith(src.venue));
-  if ((src.conns || []).some((c) => c.status === "stale")) return ["warn", `连接无响应 · ${V}`];
+  if (mine.some((c) => c.status === "stale")) return ["warn", `连接无响应 · ${V}`];
   if (src.mode === "ws") return mine.length && mine.every((c) => c.status === "connected") ? ["ok", `实时 · ${V}`] : ["warn", `实时 · ${V} 部分重连`];
   // WS sockets reconnecting / quote gap filled by REST — not a full REST-only fallback
   if (src.mode === "recovering") return ["warn", `恢复中 · ${V}`];
