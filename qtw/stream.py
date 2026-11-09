@@ -1,0 +1,333 @@
+"""官方公共 WebSocket 实时行情（无需 API Key）+ REST 轮询兜底。
+
+连接（每个交易所现货 / 永续各一条，外加 OKX K 线 business 通道）：
+  OKX  public   wss://ws.okx.com:8443/ws/v5/public（端口被拦时自动换 wss://ws.okx.com/ws/v5/public、wsaws）
+       频道：tickers（现货 BTC-USDT…）、mark-price（永续 BTC-USDT-SWAP…）
+  OKX  business wss://ws.okx.com:8443/ws/v5/business  频道：candle4H（现货 + 永续）
+  Gate spot     wss://api.gateio.ws/ws/v4/            频道：spot.tickers、spot.candlesticks
+  Gate futures  wss://fx-ws.gateio.ws/v4/ws/usdt       频道：futures.tickers（含 mark_price）、futures.candlesticks
+规则：
+  * 只保存交易所真实推送的数据；收盘确认的 K 线（OKX confirm=1 / Gate w=true）写入 SQLite candles 表，
+    data_source = okx_public_ws / gate_public_ws；未收盘 K 线只推给前端图表，不参与信号。
+  * 断线指数退避自动重连；某个价格超过 20 秒没有 WS 更新 → 用官方公共 REST 拉取（data_source=*_public_rest）。
+  * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import threading
+import time
+from datetime import datetime, timezone
+
+from . import db
+from . import settings as S
+from .market.base import INTERVAL_MS, MarketDataError, Quote, get_client
+from .timeutil import iso, utcnow
+
+log = logging.getLogger("qtw.stream")
+
+OKX_PUBLIC = ["wss://ws.okx.com:8443/ws/v5/public", "wss://ws.okx.com/ws/v5/public", "wss://wsaws.okx.com:8443/ws/v5/public"]
+OKX_BUSINESS = ["wss://ws.okx.com:8443/ws/v5/business", "wss://ws.okx.com/ws/v5/business", "wss://wsaws.okx.com:8443/ws/v5/business"]
+GATE_SPOT = ["wss://api.gateio.ws/ws/v4/"]
+GATE_FUT = ["wss://fx-ws.gateio.ws/v4/ws/usdt"]
+OKX_BAR = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1Dutc"}
+STALE_SEC = 20
+
+_lock = threading.RLock()
+_quotes: dict[tuple, Quote] = {}
+_forming: dict[tuple, dict] = {}
+_conns: dict[str, dict] = {}
+_version = 0
+_thread: threading.Thread | None = None
+_loop: asyncio.AbstractEventLoop | None = None
+_rest_errors: dict[str, str] = {}
+_on_quote = []  # 回调：用于给纸面持仓实时计价
+
+
+def _bump():
+    global _version
+    _version += 1
+
+
+def version() -> int:
+    return _version
+
+
+def _put(q: Quote):
+    with _lock:
+        _quotes[(q.venue.lower(), q.symbol, q.market)] = q
+        _bump()
+    for cb in _on_quote:
+        try:
+            cb(q)
+        except Exception:  # noqa: BLE001
+            log.exception("quote callback failed")
+
+
+def on_quote(cb):
+    _on_quote.append(cb)
+
+
+def latest(venue: str, symbol: str, market: str, max_age_sec: float = 30) -> Quote | None:
+    with _lock:
+        q = _quotes.get((venue.lower(), symbol, market))
+    if q is None:
+        return None
+    if (datetime.now(timezone.utc) - q.ts).total_seconds() > max_age_sec:
+        return None
+    return q
+
+
+def _conn_state(name: str, **kw):
+    with _lock:
+        st = _conns.setdefault(name, {"name": name, "status": "connecting", "url": "", "connected_at": "", "last_msg": "",
+                                      "reconnects": 0, "last_error": "", "channels": []})
+        st.update(kw)
+        _bump()
+
+
+def status() -> dict:
+    with _lock:
+        conns = [dict(v) for v in _conns.values()]
+        now = time.time()
+        q = list(_quotes.values())
+    live = sum(1 for x in q if x.data_source.endswith("_ws") and (now - x.ts.timestamp()) < STALE_SEC)
+    rest = sum(1 for x in q if x.data_source.endswith("_rest") and (now - x.ts.timestamp()) < 60)
+    up = sum(1 for c in conns if c["status"] == "connected")
+    mode = "ws" if up and live else ("rest" if rest else "down")
+    return {"mode": mode, "connections": conns, "quotes_ws_fresh": live, "quotes_rest_fresh": rest,
+            "quotes_total": len(q), "rest_errors": dict(_rest_errors), "running": bool(_thread and _thread.is_alive())}
+
+
+def snapshot(venue: str) -> dict:
+    now = time.time()
+    with _lock:
+        items = [(k, v) for k, v in _quotes.items() if k[0] == venue]
+        forming = {f"{k[1]}:{k[2]}:{k[3]}": v for k, v in _forming.items() if k[0] == venue}
+    prices: dict = {}
+    for (v, sym, mkt), q in items:
+        prices.setdefault(sym, {})[mkt] = {"price": q.price, "kind": q.kind, "ts": iso(q.ts), "source": q.data_source,
+                                          "age_sec": round(now - q.ts.timestamp(), 1)}
+    return {"venue": venue, "prices": prices, "forming": forming}
+
+
+def _ms(x) -> datetime:
+    return datetime.fromtimestamp(int(float(x)) / 1000, tz=timezone.utc)
+
+
+def _store_closed(venue, market, symbol, interval, open_ms, o, h, l, c, v, source, host):
+    db.execute(
+        "INSERT INTO candles(venue,market,symbol,interval,open_time,open,high,low,close,volume,data_source,source_host,fetched_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(venue,market,symbol,interval,open_time) DO UPDATE SET "
+        "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,volume=excluded.volume,"
+        "data_source=excluded.data_source,source_host=excluded.source_host,fetched_at=excluded.fetched_at",
+        (venue, market, symbol, interval, int(open_ms), float(o), float(h), float(l), float(c), float(v or 0), source, host,
+         iso(utcnow())))
+
+
+def _forming_put(venue, market, symbol, interval, open_ms, o, h, l, c, closed, source):
+    with _lock:
+        _forming[(venue, interval, symbol, market)] = {"time": int(open_ms) // 1000, "open": float(o), "high": float(h),
+                                                      "low": float(l), "close": float(c), "closed": closed, "source": source}
+        _bump()
+
+
+# ---------------------------------------------------------------- 连接
+async def _run_ws(name, urls, subscribe_msgs, handle, ping):
+    import websockets
+    backoff, i = 1.0, 0
+    while True:
+        url = urls[i % len(urls)]
+        was_connected = False
+        _conn_state(name, status="connecting", url=url)
+        try:
+            async with websockets.connect(url, open_timeout=10, ping_interval=None, close_timeout=3, max_size=2**22) as ws:
+                for m in subscribe_msgs():
+                    await ws.send(m)
+                _conn_state(name, status="connected", connected_at=iso(utcnow()), last_error="")
+                backoff, was_connected = 1.0, True
+                last_ping = time.time()
+                while True:
+                    if time.time() - last_ping > 20:
+                        await ws.send(ping())
+                        last_ping = time.time()
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), 25)
+                    except asyncio.TimeoutError:
+                        raise ConnectionError("25 秒未收到消息")
+                    if raw == "pong":
+                        continue
+                    _conns[name]["last_msg"] = iso(utcnow())
+                    try:
+                        handle(json.loads(raw), url)
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("%s handle error: %s", name, e)
+        except asyncio.CancelledError:
+            _conn_state(name, status="stopped")
+            raise
+        except Exception as e:  # noqa: BLE001
+            with _lock:
+                _conns[name]["reconnects"] += 1
+            _conn_state(name, status="reconnecting", last_error=f"{type(e).__name__}: {str(e)[:160]}")
+            log.info("%s 断开（%s），%.0f 秒后重连", name, type(e).__name__, backoff)
+            if not was_connected:
+                i += 1  # 这个地址连不上就换下一个官方地址；连上过的地址断线后先原地重连
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+
+
+def _host(url):
+    return url.split("/")[2]
+
+
+def _okx_tasks(symbols, interval):
+    spot = [f"{s[:-4]}-USDT" for s in symbols]
+    swap = [f"{s[:-4]}-USDT-SWAP" for s in symbols]
+    rev = {**{a: (s, "spot") for a, s in zip(spot, symbols)}, **{a: (s, "perp") for a, s in zip(swap, symbols)}}
+    bar = OKX_BAR[interval]
+
+    def sub_pub():
+        args = [{"channel": "tickers", "instId": x} for x in spot] + [{"channel": "mark-price", "instId": x} for x in swap]
+        return [json.dumps({"op": "subscribe", "args": args})]
+
+    def sub_bus():
+        return [json.dumps({"op": "subscribe", "args": [{"channel": f"candle{bar}", "instId": x} for x in spot + swap]})]
+
+    def h_pub(m, url):
+        arg = m.get("arg", {})
+        for d in m.get("data", []) or []:
+            sym, mkt = rev.get(d.get("instId"), (None, None))
+            if not sym:
+                continue
+            if arg.get("channel") == "tickers" and mkt == "spot":
+                _put(Quote(sym, "spot", float(d["last"]), "last", _ms(d["ts"]), "OKX", _host(url), "okx_public_ws", iso(utcnow())))
+            elif arg.get("channel") == "mark-price" and mkt == "perp":
+                _put(Quote(sym, "perp", float(d["markPx"]), "mark", _ms(d["ts"]), "OKX", _host(url), "okx_public_ws", iso(utcnow())))
+        if m.get("event") == "error":
+            _conn_state("okx_public", last_error=str(m)[:200])
+
+    def h_bus(m, url):
+        sym, mkt = rev.get(m.get("arg", {}).get("instId"), (None, None))
+        for d in m.get("data", []) or []:
+            if not sym:
+                continue
+            closed = len(d) > 8 and str(d[8]) == "1"
+            _forming_put("okx", mkt, sym, interval, d[0], d[1], d[2], d[3], d[4], closed, "okx_public_ws")
+            if closed:
+                _store_closed("okx", mkt, sym, interval, d[0], d[1], d[2], d[3], d[4], d[5], "okx_public_ws", _host(url))
+
+    _conn_state("okx_public", channels=["tickers(spot)", "mark-price(swap)"])
+    _conn_state("okx_business", channels=[f"candle{bar}(spot+swap)"])
+    return [_run_ws("okx_public", OKX_PUBLIC, sub_pub, h_pub, lambda: "ping"),
+            _run_ws("okx_business", OKX_BUSINESS, sub_bus, h_bus, lambda: "ping")]
+
+
+def _gate_tasks(symbols, interval):
+    pairs = [f"{s[:-4]}_USDT" for s in symbols]
+    rev = dict(zip(pairs, symbols))
+
+    def subs(prefix):
+        def f():
+            t = int(time.time())
+            out = [json.dumps({"time": t, "channel": f"{prefix}.tickers", "event": "subscribe", "payload": pairs})]
+            out += [json.dumps({"time": t, "channel": f"{prefix}.candlesticks", "event": "subscribe", "payload": [interval, p]})
+                    for p in pairs]
+            return out
+        return f
+
+    def handler(prefix, market, name):
+        def h(m, url):
+            if m.get("event") != "update":
+                if m.get("error"):
+                    _conn_state(name, last_error=str(m.get("error"))[:200])
+                return
+            ch, res = m.get("channel"), m.get("result")
+            ts = _ms(m.get("time_ms") or int(time.time() * 1000))
+            if ch == f"{prefix}.tickers":
+                for r in res if isinstance(res, list) else [res]:
+                    sym = rev.get(r.get("currency_pair") or r.get("contract"))
+                    if not sym:
+                        continue
+                    if market == "spot":
+                        _put(Quote(sym, "spot", float(r["last"]), "last", ts, "Gate", _host(url), "gate_public_ws", iso(utcnow())))
+                    elif r.get("mark_price"):
+                        _put(Quote(sym, "perp", float(r["mark_price"]), "mark", ts, "Gate", _host(url), "gate_public_ws", iso(utcnow())))
+            elif ch == f"{prefix}.candlesticks":
+                for r in res if isinstance(res, list) else [res]:
+                    n = r.get("n", "")
+                    sym = rev.get(n.split("_", 1)[1] if "_" in n else "")
+                    if not sym:
+                        continue
+                    closed = bool(r.get("w"))
+                    om = int(r["t"]) * 1000
+                    _forming_put("gate", market, sym, interval, om, r["o"], r["h"], r["l"], r["c"], closed, "gate_public_ws")
+                    if closed:
+                        _store_closed("gate", market, sym, interval, om, r["o"], r["h"], r["l"], r["c"], r.get("a") or r.get("v") or 0,
+                                      "gate_public_ws", _host(url))
+        return h
+
+    _conn_state("gate_spot", channels=["spot.tickers", f"spot.candlesticks({interval})"])
+    _conn_state("gate_futures", channels=["futures.tickers(mark_price)", f"futures.candlesticks({interval})"])
+    return [_run_ws("gate_spot", GATE_SPOT, subs("spot"), handler("spot", "spot", "gate_spot"),
+                    lambda: json.dumps({"time": int(time.time()), "channel": "spot.ping"})),
+            _run_ws("gate_futures", GATE_FUT, subs("futures"), handler("futures", "perp", "gate_futures"),
+                    lambda: json.dumps({"time": int(time.time()), "channel": "futures.ping"}))]
+
+
+async def _rest_fallback(symbols):
+    """WS 价格过期（>20 秒）时，用官方公共 REST 拉取真实报价；失败只记录错误。"""
+    loop = asyncio.get_running_loop()
+    while True:
+        await asyncio.sleep(10)
+        for venue in ("okx", "gate"):
+            for sym in symbols:
+                for mkt in ("spot", "perp"):
+                    if latest(venue, sym, mkt, STALE_SEC):
+                        continue
+                    key = f"{venue}:{sym}:{mkt}"
+                    try:
+                        q = await loop.run_in_executor(None, get_client(venue).quote, sym, mkt)
+                        _put(q)
+                        _rest_errors.pop(key, None)
+                    except (MarketDataError, Exception) as e:  # noqa: BLE001
+                        _rest_errors[key] = str(e)[:200]
+
+
+async def _supervisor():
+    cur, tasks = None, []
+    while True:
+        cfg = S.load()
+        want = (tuple(cfg["symbols"]), cfg["strategy"]["interval"])
+        if want != cur:
+            for t in tasks:
+                t.cancel()
+            with _lock:
+                _conns.clear()
+                _forming.clear()
+            syms, interval = list(want[0]), want[1]
+            coros = _okx_tasks(syms, interval) + _gate_tasks(syms, interval) + [_rest_fallback(syms)]
+            tasks = [asyncio.create_task(c) for c in coros]
+            cur = want
+            log.info("实时行情订阅：%d 个标的 · %s · OKX + Gate（现货 + 永续）", len(syms), interval)
+        await asyncio.sleep(15)
+
+
+def start():
+    global _thread, _loop
+    if _thread and _thread.is_alive():
+        return
+
+    def run():
+        global _loop
+        _loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_loop)
+        _loop.run_until_complete(_supervisor())
+
+    _thread = threading.Thread(target=run, name="qtw-stream", daemon=True)
+    _thread.start()
+
+
+def interval_ms(interval: str) -> int:
+    return INTERVAL_MS[interval]

@@ -7,10 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("QTW_DATA_DIR", ROOT / "data"))
 OUTPUT_DIR = Path(os.environ.get("QTW_OUTPUT_DIR", ROOT / "output"))
-PAPER_DIR = DATA_DIR / "paper"
+PAPER_DIR = DATA_DIR / "paper"  # 仅用于旧版 CSV 账本迁移
 STATIC_DIR = ROOT / "static"
 
 
 def ensure_dirs() -> None:
-    for d in (DATA_DIR, OUTPUT_DIR, PAPER_DIR, OUTPUT_DIR / "backtest"):
+    for d in (DATA_DIR, OUTPUT_DIR, OUTPUT_DIR / "backtest"):
         d.mkdir(parents=True, exist_ok=True)
