@@ -1,0 +1,290 @@
+"""系统化信号 → 进出场时机 → 纸面执行（默认）/ 实盘（三重闸门）。"""
+from __future__ import annotations
+
+import csv
+import logging
+import threading
+
+import pandas as pd
+
+from . import settings as S
+from .live import guard
+from .market import MarketDataError, get_client
+from .market import cache as mcache
+from .market.base import INTERVAL_MS
+from .paper import PaperBook, _append
+from .paths import OUTPUT_DIR, PAPER_DIR
+from .risk import scale_to_room, size
+from .strategy import indicators, last_cross, market_of, side_of
+from .timeutil import iso, la, utcnow
+
+log = logging.getLogger(__name__)
+ADVICE = {1: "做多", -1: "做空", 0: "空仓"}
+MARKET_CN = {"spot": "现货", "perp": "USDT 永续", "-": "—"}
+ORDER_COLS = ["time", "mode", "venue", "symbol", "market", "action", "qty", "ref_price", "status", "detail"]
+_BOOK: PaperBook | None = None
+_BOOK_LOCK = threading.Lock()
+CYCLE_LOCK = threading.Lock()
+
+
+def book(cfg: dict | None = None) -> PaperBook:
+    global _BOOK
+    with _BOOK_LOCK:
+        if _BOOK is None:
+            cfg = cfg or S.load()
+            _BOOK = PaperBook(cfg["risk"]["starting_equity_usdt"], cfg["fees"]["taker_bps"])
+        elif cfg:
+            _BOOK.fee = cfg["fees"]["taker_bps"] / 10_000
+        return _BOOK
+
+
+def _quote(venue: str, sym: str, market: str):
+    q = get_client(venue).quote(sym, market)
+    return q.price, q.kind, q.ts
+
+
+def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
+    st, rk = cfg["strategy"], cfg["risk"]
+    venue = cfg["venue"]
+    need = max(st["lookback_bars"], st["slow_ma"] + st["atr_period"] + 5)
+    data, errs = mcache.many(venue, cfg["symbols"], st["interval"], need)
+    bk = book(cfg)
+    eq = bk.equity()
+    step = pd.Timedelta(milliseconds=INTERVAL_MS[st["interval"]])
+    rows = []
+    for sym in cfg["symbols"]:
+        if sym not in data or len(data[sym]) < st["slow_ma"] + 1:
+            rows.append({"symbol": sym, "error": errs.get(sym, "K 线不足")})
+            continue
+        ind = indicators(data[sym], st["fast_ma"], st["slow_ma"], st["atr_period"])
+        last = ind.iloc[-1]
+        sig = int(last["signal"])
+        side, mkt = side_of(sig), market_of(sig)
+        cross = last_cross(ind)
+        as_of = last["close_time"]
+        row = {
+            "symbol": sym, "rule_id": st["rule_id"], "signal": sig, "advice": ADVICE[sig], "side": side,
+            "market": mkt, "market_cn": MARKET_CN[mkt], "bar_close": float(last["close"]),
+            "sma_fast": float(last["sma_fast"]), "sma_slow": float(last["sma_slow"]), "atr": float(last["atr"]),
+            "as_of": iso(as_of.to_pydatetime()), "as_of_la": la(as_of.to_pydatetime()),
+            "signal_since": iso(cross.to_pydatetime()) if cross is not None else "",
+            "next_check": iso((as_of + step).to_pydatetime()), "next_check_la": la((as_of + step).to_pydatetime()),
+            "error": "",
+        }
+        px, kind = float(last["close"]), "bar_close"
+        if with_quotes and mkt != "-":
+            try:
+                px, kind, _ = _quote(venue, sym, mkt)
+            except MarketDataError as e:
+                row["error"] = f"报价失败：{e}"
+        row["ref_price"], row["ref_price_kind"] = px, kind
+        pos = bk.positions.get(sym)
+        z = size(side=side, equity=eq, price=px, atr=row["atr"], max_risk=rk["max_risk_per_trade"],
+                 max_weight=rk["max_weight_per_name"], atr_mult=st["atr_stop_mult"])
+        row.update({"target_notional_usdt": z.notional, "target_qty": z.qty, "target_weight": z.weight,
+                    "stop_price": z.stop_price, "stop_pct": z.stop_pct, "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
+        blocked = bk.blocks.get(sym) == sig and sig != 0
+        if pos and pos.side == side:
+            entry = f"持有中：{pos.entry_time} 以 {pos.entry_price:g} 入场"
+            exit_ = f"出现反向/归零信号（下次收盘检查 {row['next_check_la']}）或价格触及止损 {pos.stop_price:g} 时离场"
+            row["stop_price"] = pos.stop_price
+            state = "holding"
+        elif sig == 0:
+            entry, exit_, state = "无信号，保持空仓", "—", "flat"
+        elif blocked:
+            entry = "已止损，观望中：等待信号方向改变后再入场"
+            exit_, state = "—", "blocked"
+        else:
+            entry = f"信号自 {row['signal_since'] or '数据起点'} 生效 → 下一个执行周期按最新{('现货价' if mkt == 'spot' else '标记价')}入场"
+            exit_ = f"止损 {z.stop_price:.6g}（{st['atr_stop_mult']}×ATR）；或收盘出现反向交叉时离场"
+            state = "entry_pending"
+        row.update({"entry_timing": entry, "exit_timing": exit_, "state": state,
+                    "position_side": pos.side if pos else "flat"})
+        rows.append(row)
+    # 待入场标的：按剩余总敞口等比缩放后的建议仓位
+    pend = {r["symbol"]: r for r in rows if r.get("state") == "entry_pending"}
+    alloc = scale_to_room({s: r["target_notional_usdt"] for s, r in pend.items()},
+                          eq * rk["max_gross_exposure"] - bk.gross(), bk.fee)
+    for s, r in pend.items():
+        if alloc[s] < r["target_notional_usdt"] - 1e-9:
+            r["capped_by"] = "gross"
+        r["target_notional_usdt"] = alloc[s]
+        r["target_qty"] = alloc[s] / r["ref_price"] if r["ref_price"] else 0
+        r["target_weight"] = alloc[s] / eq if eq else 0
+        r["risk_usdt"] = alloc[s] * r["stop_pct"]
+    for r in rows:  # 已持仓的显示实际仓位
+        p = bk.positions.get(r["symbol"])
+        if p and r.get("state") == "holding":
+            r["target_notional_usdt"] = abs(p.qty * p.mark_price)
+            r["target_qty"] = p.qty
+            r["target_weight"] = r["target_notional_usdt"] / eq if eq else 0
+            r["risk_usdt"] = abs(p.qty * (p.stop_price - p.mark_price)) if p.direction * (p.mark_price - p.stop_price) > 0 else 0.0
+    return {"generated_at": iso(utcnow()), "generated_at_la": la(utcnow()), "venue": venue, "equity": eq,
+            "rows": rows, "errors": errs}
+
+
+def _log_order(**kw):
+    _append(PAPER_DIR / "orders.csv", ORDER_COLS, {"time": iso(utcnow()), **kw})
+
+
+def _trader(cfg):
+    from . import vault
+    keys = vault.get_keys(cfg["venue"])
+    if not keys:
+        return None
+    if cfg["venue"] == "okx":
+        from .live.okx import OkxTrader
+        return OkxTrader(keys, demo=cfg["live"]["okx_demo"])
+    from .live.gate import GateTrader
+    return GateTrader(keys, testnet=cfg["live"]["gate_testnet"])
+
+
+def _route(cfg, sym, market, action, qty, price):
+    """纸面执行之外，若实盘闸门全部通过才会发单；否则只记录被拦截原因。"""
+    mode = "live" if S.live_armed(cfg) else "paper"
+    if mode == "paper":
+        _log_order(mode="paper", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,
+                   ref_price=price, status="paper_filled", detail="纸面成交")
+        return
+    ok, reasons = guard.check(cfg, cfg["venue"])
+    if not ok:
+        _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,
+                   ref_price=price, status="blocked", detail="；".join(reasons))
+        return
+    try:
+        tr = _trader(cfg)
+        spec = get_client(cfg["venue"]).perp_spec(sym) if market == "perp" else None
+        res = tr.place_order(cfg, sym, market, action, qty, price, spec)
+        _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,
+                   ref_price=price, status="sent", detail=str(res)[:300])
+    except Exception as e:  # noqa: BLE001
+        _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,
+                   ref_price=price, status="error", detail=str(e)[:300])
+
+
+def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
+    with CYCLE_LOCK:
+        cfg = cfg or S.load()
+        bk = book(cfg)
+        venue, st, rk = cfg["venue"], cfg["strategy"], cfg["risk"]
+        sig = compute_signals(cfg, with_quotes=False)
+        events, errors = [], dict(sig["errors"])
+        rows = {r["symbol"]: r for r in sig["rows"] if not r.get("error")}
+        # 1) 用最新公共价格给持仓计价
+        prices = {}
+        for s, p in list(bk.positions.items()):
+            try:
+                px, kind, _ = _quote(venue, s, p.market)
+                prices[s] = (px, kind)
+                bk.mark(s, px, iso(utcnow()))
+            except MarketDataError as e:
+                errors[s] = f"报价失败：{e}"
+        # 2) 离场：信号改变 / 触及止损
+        for s, p in list(bk.positions.items()):
+            if s not in prices or s not in rows:
+                continue
+            px, kind = prices[s]
+            want = rows[s]["side"]
+            reason = None
+            if want != p.side:
+                reason = "信号反转" if want != "flat" else "信号转空仓"
+            elif (p.side == "long" and px <= p.stop_price) or (p.side == "short" and px >= p.stop_price):
+                reason = "ATR止损"
+                bk.blocks[s] = p.direction
+            if reason:
+                pnl = bk.close(s, px, kind, reason, venue)
+                _route(cfg, s, p.market, "close_long" if p.side == "long" else "close_short", p.qty, px)
+                events.append(f"{s} 平{('多' if p.side == 'long' else '空')} @ {px:g}（{reason}，盈亏 {pnl:+.2f}）")
+        # 解除止损锁
+        for s in list(bk.blocks):
+            if s in rows and rows[s]["signal"] != bk.blocks[s]:
+                bk.blocks.pop(s)
+        bk.save()
+        # 3) 入场（多个新仓按剩余总敞口额度等比缩放，并预留手续费）
+        eq = bk.equity()
+        want = {}
+        for s in cfg["symbols"]:
+            r = rows.get(s)
+            if not r or s in bk.positions or r["signal"] == 0 or bk.blocks.get(s) == r["signal"]:
+                continue
+            if r["side"] == "long" and not rk["allow_spot_long"] or r["side"] == "short" and not rk["allow_perp_short"]:
+                continue
+            try:
+                px, kind, _ = _quote(venue, s, r["market"])
+            except MarketDataError as e:
+                errors[s] = f"报价失败：{e}"
+                continue
+            z = size(side=r["side"], equity=eq, price=px, atr=r["atr"], max_risk=rk["max_risk_per_trade"],
+                     max_weight=rk["max_weight_per_name"], atr_mult=st["atr_stop_mult"])
+            if z.notional > 0:
+                want[s] = (r, px, kind, z)
+        room = eq * rk["max_gross_exposure"] - bk.gross()
+        alloc = scale_to_room({s: w[3].notional for s, w in want.items()}, room, bk.fee)
+        for s, (r, px, kind, z) in want.items():
+            if alloc[s] < 1.0:
+                continue
+            qty = alloc[s] / px
+            bk.open(symbol=s, market=r["market"], side=r["side"], qty=qty, price=px, price_kind=kind,
+                    stop=z.stop_price, signal_bar=r["as_of"], reason=f"{r['advice']}信号（{st['rule_id']}）", venue=venue)
+            _route(cfg, s, r["market"], "open_long" if r["side"] == "long" else "open_short", qty, px)
+            events.append(f"{s} 开{('多·现货' if r['side'] == 'long' else '空·永续')} {qty:.6g} @ {px:g}，止损 {z.stop_price:.6g}")
+        snap = bk.snapshot(note or ("; ".join(events)[:240] if events else "无变化"))
+        export_paper_csv(cfg)
+        return {"time": snap["time"], "time_la": la(utcnow()), "events": events, "errors": errors, "snapshot": snap}
+
+
+def kill_switch(cfg: dict | None = None) -> dict:
+    """紧急停止：关闭自动交易与实盘开关，并按最新公共价平掉全部纸面持仓。"""
+    cfg = S.update({"worker": {"enabled": False}, "live": {"mode": "paper", "live_enabled": False, "confirm_phrase": ""}})
+    from . import worker
+    worker.stop()
+    with CYCLE_LOCK:
+        bk = book(cfg)
+        events = []
+        for s, p in list(bk.positions.items()):
+            try:
+                px, kind, _ = _quote(cfg["venue"], s, p.market)
+            except MarketDataError:
+                px, kind = p.mark_price, f"last_mark@{p.mark_time}"
+            pnl = bk.close(s, px, kind, "紧急停止(Kill Switch)", cfg["venue"])
+            events.append(f"{s} 已平仓 @ {px:g}（{kind}），盈亏 {pnl:+.2f}")
+        bk.snapshot("Kill Switch：全部平仓并停止自动交易")
+        export_paper_csv(cfg)
+    return {"time": iso(utcnow()), "events": events}
+
+
+def export_paper_csv(cfg: dict) -> list[str]:
+    """把纸面账本导出为 output/ 下的 CSV 交付物。"""
+    bk = book(cfg)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out = []
+    pos_rows = []
+    for p in bk.positions.values():
+        pos_rows.append({"symbol": p.symbol, "market": p.market, "side": p.side, "qty": p.qty,
+                         "entry_price": p.entry_price, "entry_time": p.entry_time, "mark_price": p.mark_price,
+                         "mark_time": p.mark_time, "stop_price": p.stop_price,
+                         "notional_usdt": p.qty * p.mark_price,
+                         "weight": p.qty * p.mark_price / bk.equity() if bk.equity() else 0,
+                         "unrealized_pnl_usdt": p.upnl()})
+    for name, rows in (("paper_positions.csv", pos_rows), ("paper_fills.csv", bk.fills()), ("paper_ledger.csv", bk.ledger())):
+        path = OUTPUT_DIR / name
+        cols = list(rows[0].keys()) if rows else ["empty"]
+        with path.open("w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=cols)
+            w.writeheader()
+            w.writerows(rows)
+        out.append(str(path))
+    return out
+
+
+def export_signals_csv(sig: dict) -> str:
+    path = OUTPUT_DIR / "signals.csv"
+    rows = [r for r in sig["rows"] if not r.get("error")]
+    cols = ["symbol", "rule_id", "signal", "advice", "market", "ref_price", "ref_price_kind", "bar_close", "sma_fast",
+            "sma_slow", "atr", "as_of", "signal_since", "next_check", "target_notional_usdt", "target_qty",
+            "target_weight", "stop_price", "risk_usdt", "capped_by", "state", "entry_timing", "exit_timing"]
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    return str(path)
