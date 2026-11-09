@@ -72,7 +72,8 @@
     make(el, h) {
       el.innerHTML = "";
       const c = LightweightCharts.createChart(el, { ...base, width: el.clientWidth, height: h || el.clientHeight });
-      new ResizeObserver(() => c.applyOptions({ width: el.clientWidth })).observe(el);
+      const ro = new ResizeObserver(() => { if (!el.isConnected) { ro.disconnect(); return; } c.applyOptions({ width: el.clientWidth, height: h || el.clientHeight }); });
+      ro.observe(el);
       return c;
     },
     candles(el, d) {
@@ -85,6 +86,8 @@
         color: m.signal > 0 ? "#25b07a" : m.signal < 0 ? "#e5536b" : "#9a98b8", shape: m.signal > 0 ? "arrowUp" : m.signal < 0 ? "arrowDown" : "circle",
         text: m.signal > 0 ? "做多" : m.signal < 0 ? "做空" : "空仓" })));
       c.timeScale().fitContent();
+      c._candle = s;
+      c._last = d.candles.length ? d.candles[d.candles.length - 1].time : 0;
       return c;
     },
     equity(el, pts) {

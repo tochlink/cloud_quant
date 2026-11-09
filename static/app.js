@@ -101,6 +101,10 @@ $("#killBtn").onclick = async () => {
   catch (e) { toast(e.message, true); }
 };
 $("#alertGo").onclick = () => (location.hash = "#/signals");
+const setRail = (open) => $("#shell").classList.toggle("rail-open", open);
+$("#railBtn").onclick = () => setRail(!$("#shell").classList.contains("rail-open"));
+$("#railBackdrop").onclick = () => setRail(false);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { setRail(false); closeModal(); } });
 $("#rSearchBtn").onclick = () => { const i = $("#rSearch"); i.classList.toggle("hidden"); i.focus(); };
 $("#rSearch").oninput = (e) => { S.rSearch = e.target.value.trim().toUpperCase(); renderRight(); };
 $("#bellBtn").onclick = () => showStatusModal();
@@ -142,10 +146,10 @@ function renderRight() {
     html = rows.filter((r) => !q || r.symbol.includes(q)).map((r) => `
       <div class="r-row" data-sym="${r.symbol}">${coin(r.symbol)}<div><div class="nm">${r.symbol.replace("USDT", "")}<span class="muted" style="font-weight:500"> /USDT</span></div>
       <div class="ds">${r.advice ? `${r.advice} · ${r.market_cn}` : r.error ? "数据不可用" : "加载中…"}</div></div>
-      <div class="rt">${r.ref_price ? fp(r.ref_price) : ""}</div></div>`).join("");
+      <div class="rt">${(() => { const q = S.live && S.live.prices[r.symbol]; const m = r.market && r.market !== "-" ? r.market : "spot"; const v = q && q[m] ? q[m].price : r.ref_price; return v ? fp(v) : ""; })()}<div class="ds">${S.live && S.live.prices[r.symbol] ? (r.market === "perp" ? "永续标记" : "现货最新") : ""}</div></div></div>`).join("");
   }
   $("#rList").innerHTML = html || '<div class="empty">无匹配</div>';
-  $("#rList").querySelectorAll("[data-sym]").forEach((el) => (el.onclick = () => { S.selSym = el.dataset.sym; location.hash = "#/signals"; }));
+  $("#rList").querySelectorAll("[data-sym]").forEach((el) => (el.onclick = () => { S.selSym = el.dataset.sym; setRail(false); if (S.page === "signals") pageSignals(); else location.hash = "#/signals"; }));
   // 提醒卡片
   const st = S.status;
   let msg;
@@ -236,30 +240,45 @@ function bindGo() { document.querySelectorAll("#page [data-go]").forEach((el) =>
 async function pageSignals() {
   $("#page").innerHTML = `<div class="book-banner"><div><b>系统化账本 · ${esc(S.status.settings.strategy.rule_id)}</b><br><span>SMA${S.status.settings.strategy.fast_ma} / SMA${S.status.settings.strategy.slow_ma} · ${S.status.settings.strategy.interval} 已收盘 K 线 · 做多→现货，做空→USDT 永续（1 倍）· 非主观判断</span></div>
     <div class="sp"><button class="btn ghost sm" id="sigRefresh">刷新</button><a class="btn ghost sm" href="/api/export/signals.csv">${ic("dl")}导出 CSV</a></div></div>
-    <div class="panel" style="padding:12px;margin-bottom:18px"><div class="sec-title" style="margin:4px 8px 8px"><h3 id="chartTitle">K 线与均线</h3><span class="note">▲做多 ▼做空 标记为均线交叉（收盘确认）</span></div><div class="chart-box" id="candleChart"><div class="empty">加载中…</div></div></div>
+    <div class="panel" style="padding:12px;margin-bottom:18px"><div class="sec-title" style="margin:4px 8px 8px;gap:12px;flex-wrap:wrap"><h3 id="chartTitle">K 线与均线</h3>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="note" id="chartSrc">▲▼ 为该市场自身均线交叉（收盘确认）· 最后一根为实时推送的未收盘 K 线</span>
+      <div class="seg" id="mktSeg"><button data-m="spot">现货</button><button data-m="perp">USDT 永续</button></div></div></div>
+      <div class="chart-box" id="candleChart"><div class="empty">加载中…</div></div></div>
     <div class="sig-grid" id="sigGrid"><div class="empty">正在从 ${S.status.settings.venue.toUpperCase()} 公共行情计算信号…</div></div>`;
   $("#sigRefresh").onclick = async () => { S.signals = null; await pageSignals(); };
   try { if (!S.signals) S.signals = await api("/api/signals"); } catch (e) { $("#sigGrid").innerHTML = `<div class="empty neg">信号计算失败：${esc(e.message)}</div>`; return; }
   renderRight();
   const rows = S.signals.rows;
   S.selSym = S.selSym || rows.find((r) => !r.error)?.symbol;
+  const selRow = rows.find((r) => r.symbol === S.selSym);
+  S.chartMkt = S.chartMkt || (selRow && selRow.signal_market) || "spot";
   const sc = { holding: ["持有中", "info"], entry_pending: ["待入场", "warn"], blocked: ["止损观望", "flat"], flat: ["空仓", "flat"] };
   $("#sigGrid").innerHTML = rows.map((r) => r.error ? `<div class="sig">${coin(r.symbol)}<div class="note neg" style="margin-top:8px">${esc(r.symbol)}：${esc(r.error)}</div></div>` : `
     <div class="sig ${r.symbol === S.selSym ? "sel" : ""}" data-sym="${r.symbol}">
-      <div class="hd">${coin(r.symbol, "lg")}<div><div class="nm">${r.symbol.replace("USDT", "")}<span class="muted" style="font-weight:500">/USDT</span></div><div class="px">${r.ref_price_kind === "mark" ? "永续标记价" : r.ref_price_kind === "last" ? "现货最新价" : "收盘价"} ${fp(r.ref_price)}</div></div>
+      <div class="hd">${coin(r.symbol, "lg")}<div><div class="nm">${r.symbol.replace("USDT", "")}<span class="muted" style="font-weight:500">/USDT</span></div><div class="px">${r.ref_price_kind === "mark" ? "永续标记价" : r.ref_price_kind === "last" ? "现货最新价" : "收盘价"} <b data-px="${r.symbol}:${r.market === "-" ? "spot" : r.market}">${fp(r.ref_price)}</b></div></div>
         <span class="pill ${r.side}">${r.advice}${r.market !== "-" ? " · " + r.market_cn : ""}</span></div>
       <div class="kv"><div><small>建议名义</small><b class="num">${r.target_notional_usdt ? f2(r.target_notional_usdt) : "—"}</b></div><div><small>权重 / 风险</small><b class="num">${pct(r.target_weight, 1)} / ${f2(r.risk_usdt)}</b></div><div><small>止损价</small><b class="num">${r.stop_price ? fp(r.stop_price) : "—"}</b></div></div>
       <div class="tm"><p><i>入场</i><span>${esc(r.entry_timing)}</span></p><p><i>离场</i><span>${esc(r.exit_timing)}</span></p>
       <p><i>状态</i><span><span class="pill ${sc[r.state][1]}">${sc[r.state][0]}</span> 快线 ${fp(r.sma_fast)} / 慢线 ${fp(r.sma_slow)} · 上限来源 ${({ risk: "5% 风险", weight: "20% 权重", gross: "总敞口", none: "—" })[r.capped_by]}</span></p>
-      <p><i>时间</i><span>信号截至 ${tFull(r.as_of)} 收盘 · 下次检查 ${tFull(r.next_check)}</span></p></div>
+      <p><i>分市场</i><span>现货信号 <b>${r.spot_signal > 0 ? "做多" : r.spot_signal < 0 ? "做空" : "空仓"}</b> · 永续信号 <b>${r.perp_signal > 0 ? "做多" : r.perp_signal < 0 ? "做空" : "空仓"}</b>${r.conflict ? ' · <span class="pill warn">冲突→空仓</span>' : ""}</span></p>
+      <p><i>时间</i><span>信号截至 ${tFull(r.as_of)} 收盘 · 下次检查 ${tFull(r.next_check)}</span></p>
+      <p><i>数据</i><span class="src">${esc(r.data_source)} · ${esc(r.source_host)} · 拉取 ${tFull(r.fetched_at)}${r.warning ? ` · <span class="neg">${esc(r.warning)}</span>` : ""}</span></p></div>
     </div>`).join("");
-  document.querySelectorAll(".sig[data-sym]").forEach((el) => (el.onclick = () => { S.selSym = el.dataset.sym; document.querySelectorAll(".sig").forEach((x) => x.classList.toggle("sel", x === el)); loadCandles(); }));
+  document.querySelectorAll(".sig[data-sym]").forEach((el) => (el.onclick = () => { S.selSym = el.dataset.sym; const rr = rows.find((x) => x.symbol === S.selSym); S.chartMkt = (rr && rr.signal_market) || S.chartMkt; document.querySelectorAll(".sig").forEach((x) => x.classList.toggle("sel", x === el)); loadCandles(); }));
+  document.querySelectorAll("#mktSeg [data-m]").forEach((b) => (b.onclick = () => { S.chartMkt = b.dataset.m; loadCandles(); }));
   loadCandles();
 }
 async function loadCandles() {
   const el = $("#candleChart"); if (!el || !S.selSym) return;
-  $("#chartTitle").textContent = `${S.selSym} · ${S.status.settings.strategy.interval} K 线与均线`;
-  try { const d = await api(`/api/candles?symbol=${S.selSym}&bars=300`); BigCharts.candles(el, d); }
+  const m = S.chartMkt || "spot";
+  document.querySelectorAll("#mktSeg [data-m]").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
+  $("#chartTitle").textContent = `${S.selSym} · ${m === "perp" ? "USDT 永续" : "现货"} · ${S.status.settings.strategy.interval} K 线与均线`;
+  try {
+    const d = await api(`/api/candles?symbol=${S.selSym}&bars=300&market=${m}`);
+    S.chart = BigCharts.candles(el, d); S.chart._sym = S.selSym; S.chart._mkt = m;
+    $("#chartSrc").textContent = `来源 ${d.data_source} · ${d.source_host} · ${d.candles.length} 根已收盘 K 线 · 最后一根实时更新`;
+    applyForming();
+  }
   catch (e) { el.innerHTML = `<div class="empty neg">${esc(e.message)}</div>`; }
 }
 
@@ -298,13 +317,13 @@ function renderBt() {
     ${M("总收益", pct(m.total_return), "", true)}${M("期末权益 (USDT)", f2(m.ending_equity_usdt))}${M("最大回撤", pct(m.max_drawdown), "neg")}${M("夏普比率（年化）", m.sharpe == null ? "—" : m.sharpe.toFixed(2))}
     ${M("胜率", pct(m.win_rate, 1))}${M("盈亏比", m.profit_factor == null ? "—" : m.profit_factor.toFixed(2))}${M("已平 / 持仓中", `${m.closed_trades} / ${m.open_trades}`)}${M(esc(m.benchmark), pct(m.benchmark_return), cls(m.benchmark_return))}
   </div>
-  <div class="panel" style="padding:12px;margin-bottom:18px"><div class="sec-title" style="margin:4px 8px 8px"><h3>权益曲线与回撤</h3><span class="note">${esc(m.venue.toUpperCase())} · ${esc(m.interval)} · ${tFull(m.start_time)} → ${tFull(m.end_time)} · ${m.bars} 根 · 手续费 ${m.fee_bps} bps · 止损离场 ${m.stop_exits} 次</span></div><div class="chart-box" id="eqChart"></div></div>
+  <div class="panel" style="padding:12px;margin-bottom:18px"><div class="sec-title" style="margin:4px 8px 8px"><h3>权益曲线与回撤</h3><span class="note">#${m.run_id ?? ""} ${esc((m.venue || "").toUpperCase())} · ${esc(m.interval)} · ${tFull(m.start_time)} → ${tFull(m.end_time)} · ${m.bars} 根 · 手续费 ${m.fee_bps} bps · 止损离场 ${m.stop_exits} 次<br>数据：${esc(m.data_source)} · ${esc(m.source_host)} · 拉取 ${tFull(m.fetched_at)} · 做多用${esc(m.long_prices)}，做空用${esc(m.short_prices)}${m.excluded_symbols ? " · 排除 " + esc(m.excluded_symbols) : ""}</span></div><div class="chart-box" id="eqChart"></div></div>
   <div class="panel"><div class="sec-title"><h3>回测成交（${r.trades.length}）</h3><div style="display:flex;gap:8px">
     <a class="btn ghost sm" href="/api/export/backtest_summary.csv">${ic("dl")}指标 CSV</a><a class="btn ghost sm" href="/api/export/backtest_equity.csv">${ic("dl")}权益 CSV</a><a class="btn ghost sm" href="/api/export/backtest_trades.csv">${ic("dl")}成交 CSV</a></div></div>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>标的</th><th>方向</th><th>入场时间</th><th>入场价</th><th>离场时间</th><th>离场价</th><th>名义</th><th>盈亏</th><th>收益率</th><th>持有根数</th><th>离场原因</th></tr></thead><tbody>
     ${r.trades.slice().reverse().map((x) => `<tr><td><b>${x.symbol}</b></td><td><span class="pill ${x.side}">${sideCn(x.side)} · ${mktCn(x.market)}</span></td><td>${tFull(x.entry_time)}</td><td class="num">${fp(x.entry_price)}</td><td>${x.exit_time ? tFull(x.exit_time) : "—"}</td><td class="num">${fp(x.exit_price)}</td><td class="num">${f2(x.notional_usdt)}</td><td class="num ${cls(x.pnl_usdt)}">${sgn(x.pnl_usdt)}</td><td class="num ${cls(x.return_pct)}">${pct(x.return_pct)}</td><td class="num">${x.bars_held}</td><td>${esc(x.exit_reason)}</td></tr>`).join("")}
     </tbody></table></div>
-    <div class="note" style="margin-top:10px">说明：回测做空以现货 K 线近似永续价格，未计资金费率与滑点；历史表现不代表未来收益。生成于 ${tFull(r.generated_at)}。</div></div>`;
+    <div class="note" style="margin-top:10px">说明：全部为交易所官方公共接口的真实历史 K 线（做多=现货，做空=USDT 永续）；未计资金费率与滑点；历史表现不代表未来收益。生成于 ${tFull(r.generated_at)}，已存入 SQLite。</div></div>`;
   BigCharts.equity($("#eqChart"), r.equity);
 }
 
@@ -456,17 +475,68 @@ function pageSettings() {
 
 /* ---------- 帮助 ---------- */
 function pageHelp() {
-  const s = S.status.settings.strategy;
+  const st = S.status.settings, s = st.strategy;
   $("#page").innerHTML = `<div class="panel help">
-  <h4 style="margin-top:0">这是什么</h4><p>面向 kean 的系统化加密货币交易控制台：用 OKX / Gate.io 官方<b>公共</b>行情（无需 API Key）做信号、回测与纸面交易；配置密钥后可在严格闸门下接入实盘。<b>这是系统化纸面 / 研究工具，不构成投资建议；实盘交易可能亏损全部本金。</b></p>
-  <h4>策略 · ${esc(s.rule_id)}</h4><ul><li>只使用<b>已收盘</b>的 ${s.interval} K 线；SMA${s.fast_ma} &gt; SMA${s.slow_ma} → 做多（<b>现货</b>），&lt; → 做空（<b>USDT 永续</b>，1 倍保证金），否则空仓。</li>
-  <li>入场：信号生效后的下一个执行周期按最新公共价（现货最新价 / 永续标记价）纸面成交，手续费 ${S.status.settings.fees.taker_bps} bps。</li>
-  <li>离场：收盘出现反向或归零信号；或价格触及 <b>${s.atr_stop_mult}×ATR${s.atr_period}</b> 止损。止损后保持空仓，直到信号方向改变。</li></ul>
-  <h4>仓位与风控</h4><ul><li>风险预算 = 权益 × 5%；止损距离 = ${s.atr_stop_mult}×ATR；名义 = 风险预算 ÷ 止损百分比。</li><li>单币名义 ≤ 权益 × 20%；全部持仓总敞口 ≤ 1× 权益；永续 1 倍，不放大。</li></ul>
-  <h4>页面</h4><ul><li><b>总览</b>：权益、现金、交易所、最近成交、快速摘要。</li><li><b>信号 / 进出场</b>：每个币的做多 / 做空 / 空仓建议、入场与止损时机、建议仓位、K 线图。</li><li><b>回测</b>：真实历史 K 线回测、权益曲线、胜率、最大回撤、夏普、CSV 导出。</li><li><b>持仓 / 成交</b>：持久化纸面账本与订单路由日志。</li><li><b>风控 / 自动交易</b>：参数、标的池、后台自动交易、紧急停止。</li><li><b>API / 设置</b>：加密保存 OKX / Gate 密钥、实盘闸门。</li></ul>
-  <h4>CSV 交付物</h4><p>output/signals.csv、output/paper_positions.csv、output/paper_fills.csv、output/paper_ledger.csv、output/backtest/backtest_{summary,equity,trades}.csv。</p>
-  <h4>局限</h4><ul><li>回测做空以现货 K 线近似永续，未计资金费率与滑点。</li><li>实盘模式下没有与交易所持仓对账，仅按纸面账本的调仓意图发单；实盘前请先在 OKX 模拟盘 / Gate 合约测试网验证。</li></ul></div>`;
+  <section class="lead"><h4 style="margin-top:0">这是什么</h4><p>面向 kean 的系统化加密货币交易控制台：只用 OKX / Gate.io 官方<b>公共</b>行情（<b>无需 API Key</b>）做信号、回测与纸面交易；配置密钥后可在严格闸门下接入实盘。所有价格都来自交易所实时接口，<b>不使用任何模拟 / 伪造数据</b>，请求失败会直接报错。<b>这是系统化纸面 / 研究工具，不构成投资建议；实盘交易可能亏损全部本金。</b></p></section>
+  <section><h4>策略 · ${esc(s.rule_id)}</h4><ul>
+  <li>现货与 USDT 永续<b>各自</b>在自己已收盘的 ${s.interval} K 线上计算 SMA${s.fast_ma} / SMA${s.slow_ma}。</li>
+  <li>现货看多且永续不看空 → <b>做多·现货</b>；永续看空且现货不看多 → <b>做空·USDT 永续</b>（1 倍）；两者冲突或无信号 → 空仓。</li>
+  <li>做多的入场 / 止损 / 计价全部用现货价格；做空全部用永续 K 线与标记价。</li>
+  <li>离场：收盘出现反向或归零信号，或价格触及 <b>${s.atr_stop_mult}×ATR${s.atr_period}</b> 止损；止损后等信号方向改变才再入场。</li></ul></section>
+  <section><h4>仓位与风控</h4><ul><li>风险预算 = 权益 × ${pct(st.risk.max_risk_per_trade, 0)}；名义 = 风险预算 ÷ 止损百分比。</li><li>单币名义 ≤ 权益 × ${pct(st.risk.max_weight_per_name, 0)}；总敞口 ≤ 1× 权益，同时入场按比例缩放。</li><li>手续费假设 ${st.fees.taker_bps} bps；永续 1 倍保证金，不放大。</li></ul></section>
+  <section><h4>页面</h4><ul><li><b>总览</b>：权益、现金、交易所、最近成交、快速摘要。</li><li><b>信号 / 进出场</b>：每个币的建议、入场与止损时机、建议仓位、K 线图。</li><li><b>回测</b>：真实历史 K 线（现货 + 永续）回测与 CSV 导出。</li><li><b>持仓 / 成交</b>：SQLite 持久化纸面账本与订单日志。</li><li><b>风控 / 自动交易</b>：参数、标的池、后台自动交易、紧急停止。</li><li><b>API / 设置</b>：加密保存密钥、实盘闸门。</li></ul></section>
+  <section><h4>数据与存储</h4><ul><li>数据库：<code>data/qtw.sqlite</code>（K 线缓存、纸面账本、订单日志、回测记录、非敏感设置）。</li><li>API 密钥只存在加密文件 <code>data/secrets.enc</code>，不进数据库。</li><li>CSV 导出：<code>output/</code> 与 <code>output/backtest/</code>。</li></ul></section>
+  <section><h4>局限</h4><ul><li>回测未计资金费率与滑点；历史表现不代表未来。</li><li>实盘模式没有与交易所持仓对账；实盘前请先在 OKX 模拟盘 / Gate 合约测试网验证。</li></ul></section>
+  <section><h4>快捷操作</h4><ul><li>右上角紫色按钮：立即执行一次系统化周期（纸面）。</li><li>右侧提醒卡“紧急停止”：停止自动交易并平掉全部纸面持仓。</li><li>按 <code>Esc</code> 关闭弹窗 / 右侧抽屉。</li></ul></section></div>`;
 }
+
+/* ---------- 实时推送（SSE：后端订阅 OKX / Gate 官方公共 WebSocket） ---------- */
+function applyForming() {
+  const c = S.chart, L = S.live; if (!c || !L || !c._candle || !document.body.contains($("#candleChart"))) return;
+  const f = L.forming[`${L.interval}:${c._sym}:${c._mkt}`];
+  if (f && f.time >= c._last) { try { c._candle.update({ time: f.time, open: f.open, high: f.high, low: f.low, close: f.close }); c._last = f.time; } catch (_) {} }
+}
+function renderLivePill() {
+  const L = S.live, el = $("#livePill"); if (!el) return;
+  if (!L) { el.className = "live-pill"; el.textContent = "行情连接中…"; return; }
+  const m = L.stream.mode;
+  el.className = "live-pill " + m;
+  el.textContent = m === "ws" ? `实时 · ${L.venue.toUpperCase()} WebSocket` : m === "rest" ? "REST 轮询兜底" : "行情断开";
+}
+function applyLive() {
+  const L = S.live; if (!L) return;
+  renderLivePill();
+  if (S.dash) {
+    Object.assign(S.dash, { equity: L.paper.equity, unrealized: L.paper.unrealized, gross: L.paper.gross, net: L.paper.net,
+      total_pnl: L.paper.total_pnl, total_return: L.paper.total_pnl / S.dash.starting_equity });
+    S.dash.cash_free = Math.abs(L.paper.equity - L.paper.gross) < 0.005 ? 0 : L.paper.equity - L.paper.gross;
+    S.dash.positions.forEach((p) => { const q = L.paper.positions[p.symbol]; if (q) Object.assign(p, { mark_price: q.mark, mark_time: q.mark_time, upnl: q.upnl, weight: q.weight, notional: q.notional }); });
+  }
+  if (S.signals) S.signals.rows.forEach((r) => { const q = L.prices[r.symbol]; const m = r.market === "-" ? "spot" : r.market; if (q && q[m]) r.ref_price = q[m].price; });
+  document.querySelectorAll("[data-px]").forEach((el) => {
+    const [sym, m] = el.dataset.px.split(":"); const q = L.prices[sym] && L.prices[sym][m];
+    if (q) { const t = fp(q.price); if (el.textContent !== t) { el.textContent = t; el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); } }
+  });
+  renderRight();
+  applyForming();
+  const now = Date.now();
+  if ((S.page === "dashboard" || S.page === "positions") && now - (S._lastLiveRender || 0) > 5000 && !$("#modal:not(.hidden)")) {
+    S._lastLiveRender = now; PAGES[S.page]();
+  }
+}
+function connectLive() {
+  try {
+    const es = new EventSource("/api/stream");
+    es.addEventListener("tick", (e) => { try { S.live = JSON.parse(e.data); applyLive(); } catch (_) {} });
+    es.onerror = () => { if (S.live) S.live.stream.mode = "down"; renderLivePill(); };
+  } catch (_) {}
+}
+$("#livePill").onclick = () => {
+  const L = S.live; if (!L) return;
+  modal(`<h3>实时行情（官方公共接口，无需 API Key）</h3><div class="conn-list">${L.connections.map((c) => `<div><b class="${c.status === "connected" ? "ok" : "bad"}">●</b> ${esc(c.name)} · ${esc(c.status)} · <span class="src">${esc(c.url)}</span>${c.reconnects ? ` · 重连 ${c.reconnects} 次` : ""}${c.last_error ? `<br><span class="src neg">${esc(c.last_error)}</span>` : ""}</div>`).join("")}</div>
+   <div class="note" style="margin-top:10px">WS 新鲜报价 ${L.stream.quotes_ws_fresh} 个 · REST 兜底 ${L.stream.quotes_rest_fresh} 个。价格超过 20 秒无 WS 更新时自动改用官方 REST；获取失败只报错，不会编造价格。${Object.keys(L.stream.rest_errors || {}).length ? "<br><span class='neg'>REST 错误：" + Object.entries(L.stream.rest_errors).slice(0, 4).map(([k, v]) => esc(k + " " + v)).join("；") + "</span>" : ""}</div>
+   <div class="acts"><button class="btn" onclick="closeModal()">关闭</button></div>`);
+};
 
 /* ---------- 路由与刷新 ---------- */
 const PAGES = { dashboard: pageDashboard, signals: pageSignals, backtest: pageBacktest, positions: pagePositions, trades: pageTrades, risk: pageRisk, settings: pageSettings, help: pageHelp };
@@ -488,4 +558,6 @@ async function route() {
 window.addEventListener("hashchange", route);
 greet(); setInterval(greet, 60000);
 route().then(() => api("/api/signals").then((r) => { S.signals = r; renderRight(); if (S.page === "dashboard") pageDashboard(); }).catch(() => {}));
+if (!new URLSearchParams(location.search).has("nolive")) connectLive(); // nolive 仅用于无头截图
 setInterval(async () => { await refreshAll(); }, 30000);
+setInterval(async () => { try { S.signals = await api("/api/signals"); renderRight(); } catch (_) {} }, 120000);
