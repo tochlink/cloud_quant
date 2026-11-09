@@ -189,7 +189,7 @@ def health():
     """Lightweight smoke probe. No secrets, no vault, no full settings dump.
 
     Used by ensure_up.sh / the 10-minute polish routine. Includes venue,
-    live-gate booleans, stream watchdog, persist_running, a compact paper
+    live-gate booleans, stream watchdog / rest_fill_inflight, persist_running, a compact paper
     snapshot, and BTC perp mark so monitors can confirm paper mode + live
     prices in one call without /api/status or inventing quotes.
     """
@@ -233,6 +233,7 @@ def health():
             "quotes_rest_fresh": st.get("quotes_rest_fresh"),
             "watchdog_running": bool(st.get("watchdog_running")),
             "loop_heartbeat_age_sec": st.get("loop_heartbeat_age_sec"),
+            "rest_fill_inflight": bool(st.get("rest_fill_inflight")),
             "last_zombie_kick_age_sec": st.get("last_zombie_kick_age_sec"),
             "last_zombie_max_age_sec": st.get("last_zombie_max_age_sec"),
         },

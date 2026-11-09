@@ -19,8 +19,8 @@ class GatePublic:
     venue = "Gate"
     data_source = "gate_public_rest"
 
-    def __init__(self):
-        self.http = HttpJson(BASES)
+    def __init__(self, *, timeout: float = 15, max_retries: int = 3, backoff: float = 1.0):
+        self.http = HttpJson(BASES, timeout=timeout, max_retries=max_retries, backoff=backoff)
 
     def candles(self, symbol: str, interval: str = "4h", limit: int = 300, market: str = "spot") -> pd.DataFrame:
         step = INTERVAL_MS[interval] // 1000

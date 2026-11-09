@@ -24,8 +24,10 @@ class OkxPublic:
     venue = "OKX"
     data_source = "okx_public_rest"
 
-    def __init__(self):
-        self.http = HttpJson(BASES)
+    def __init__(self, *, timeout: float = 15, max_retries: int = 3, backoff: float = 1.0):
+        # Gap-fill callers pass a short timeout so a hung REST host cannot pin
+        # the stream IO pool for tens of seconds (default stays research-friendly).
+        self.http = HttpJson(BASES, timeout=timeout, max_retries=max_retries, backoff=backoff)
 
     def _data(self, path, params):
         j = self.http.get(path, params)

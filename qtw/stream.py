@@ -22,6 +22,7 @@
   * 侧线程 watchdog：supervisor 的僵尸踢除跑在 asyncio 循环内；若事件循环被卡住，踢除本身也无法执行，last_msg 会拖到 90s+。watchdog 独立扫描；循环心跳过旧或僵尸年龄超过 ZOMBIE+宽限时，直接 transport.abort()（websockets 15 ClientConnection 实例属性），并经 call_soon / run_coroutine_threadsafe 触发 REST 填隙；abort 失败时再 threadsafe 调度 close()。start() 在行情线程已存活时也会补拉 watchdog。
   * 报价回调（纸面 mark）不在 asyncio 线程同步执行：经单线程队列派发，避免 PaperBook._LOCK / SQLite 写锁卡住 recv/ping/zombie kick（曾出现 last_msg 龄到 200s+ 而 watchdog 日志缺失的假死）。
   * supervisor / watchdog 踢僵尸时记录 last_zombie_kick_age_sec / last_zombie_max_age_sec，供 /api/health 与打磨例程一眼看出「上次踢除多久前、当时最大静默龄」。
+  * REST 填隙用独立线程池 + 短超时报价客户端，并在填隙期间刷新 loop heartbeat；watchdog 在 rest_fill_inflight 时不把心跳迟滞当成 loop stall（仍会踢超过 ZOMBIE+宽限的真僵尸），避免「填隙拖心跳 → 误杀重连中的套接字 → 再填隙」的正反馈。
   * REST 填隙优先当前纸面行情源（settings.venue），同批内有限并发，避免僵尸踢掉后纸面标记价排在另一所 32 路串行 REST 后面。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
@@ -29,6 +30,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import queue
@@ -89,6 +91,12 @@ _watch_symbols: list[str] = []  # last subscribed symbols (for watchdog REST fil
 _watch_venue: str | None = None
 _last_zombie_kick_at: float = 0.0  # wall time of last supervisor/watchdog zombie abort
 _last_zombie_max_age_sec: float | None = None  # max last_msg age among sockets in that kick
+_io_pool: concurrent.futures.ThreadPoolExecutor | None = None  # dedicated REST/candle/settings IO
+_rest_fill_depth = 0  # >0 while _rest_fill_stale runs (watchdog must not false-stall)
+GAP_FILL_TIMEOUT_SEC = 5.0
+GAP_FILL_RETRIES = 2
+GAP_FILL_BACKOFF_SEC = 0.25
+_IO_POOL_WORKERS = 8
 
 
 def _bump():
@@ -104,6 +112,39 @@ def _note_zombie_kick(ages: list[float] | None = None) -> None:
         _last_zombie_max_age_sec = round(max(ages), 1)
     else:
         _last_zombie_max_age_sec = None
+
+
+def _bump_loop_heartbeat() -> None:
+    """Refresh supervisor heartbeat (safe from stream-loop coroutines)."""
+    global _loop_heartbeat
+    _loop_heartbeat = time.time()
+
+
+def _ensure_io_pool() -> concurrent.futures.ThreadPoolExecutor:
+    """Lazy dedicated pool so gap-fill / candle writes do not share ad-hoc default workers."""
+    global _io_pool
+    if _io_pool is None:
+        _io_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=_IO_POOL_WORKERS, thread_name_prefix="qtw-stream-io"
+        )
+    return _io_pool
+
+
+def _quote_for_gap_fill(venue: str, symbol: str, market: str) -> Quote:
+    """Official public REST quote with short timeout for zombie / stale gap-fill.
+
+    Research candle fetches keep the default 15s×3 retries; gap-fill must fail
+    fast so a hung host cannot pin every IO worker and starve the supervisor.
+    """
+    v = (venue or "").strip().lower()
+    kw = dict(timeout=GAP_FILL_TIMEOUT_SEC, max_retries=GAP_FILL_RETRIES, backoff=GAP_FILL_BACKOFF_SEC)
+    if v == "okx":
+        from .market.okx import OkxPublic
+        return OkxPublic(**kw).quote(symbol, market)
+    if v in ("gate", "gateio", "gate.io"):
+        from .market.gate import GatePublic
+        return GatePublic(**kw).quote(symbol, market)
+    raise ValueError(f"不支持的交易所: {venue}")
 
 
 def version() -> int:
@@ -280,6 +321,7 @@ def status(venue: str | None = None) -> dict:
            "quotes_total": len(q_use), "rest_errors": rest_err, "running": bool(_thread and _thread.is_alive()),
            "watchdog_running": bool(_watchdog_thread and _watchdog_thread.is_alive()),
            "loop_heartbeat_age_sec": round(time.time() - hb, 1) if hb else None,
+           "rest_fill_inflight": int(_rest_fill_depth) > 0,
            "last_zombie_kick_age_sec": round(time.time() - kick_at, 1) if kick_at else None,
            "last_zombie_max_age_sec": _last_zombie_max_age_sec}
     if v:
@@ -332,7 +374,7 @@ def _store_closed(venue, market, symbol, interval, open_ms, o, h, l, c, v, sourc
     except RuntimeError:
         _store_closed_sync(args)
         return
-    loop.run_in_executor(None, _store_closed_sync, args)
+    loop.run_in_executor(_ensure_io_pool(), _store_closed_sync, args)
 
 
 def _forming_put(venue, market, symbol, interval, open_ms, o, h, l, c, closed, source):
@@ -613,8 +655,15 @@ async def _rest_fill_stale(symbols, venues=("okx", "gate"), *, preferred_venue: 
     before secondary-exchange gap fills. Within each venue batch, run a few HTTP
     calls concurrently — sequential 8×2×2 round-trips used to leave marks stale
     for many seconds after a zombie kick.
+
+    Uses a dedicated IO pool + short-timeout quote client, bumps the loop
+    heartbeat as each request finishes, and tracks ``_rest_fill_depth`` so the
+    side-thread watchdog does not treat a busy (but healthy) fill as a stall and
+    abort sockets that are mid-reconnect.
     """
+    global _rest_fill_depth
     loop = asyncio.get_running_loop()
+    pool = _ensure_io_pool()
     order = _venue_fill_order(preferred_venue, venues)
     jobs: list[tuple[str, str, str]] = []
     for venue in order:
@@ -627,33 +676,43 @@ async def _rest_fill_stale(symbols, venues=("okx", "gate"), *, preferred_venue: 
         return 0
 
     sem = asyncio.Semaphore(REST_FILL_CONCURRENCY)
+    _rest_fill_depth += 1
+    _bump_loop_heartbeat()
+    try:
+        async def one(venue: str, sym: str, mkt: str) -> int:
+            key = f"{venue}:{sym}:{mkt}"
+            async with sem:
+                if latest(venue, sym, mkt, STALE_SEC):
+                    return 0
+                try:
+                    q = await loop.run_in_executor(pool, _quote_for_gap_fill, venue, sym, mkt)
+                    _put(q)
+                    _rest_errors.pop(key, None)
+                    return 1
+                except (MarketDataError, Exception) as e:  # noqa: BLE001
+                    _rest_errors[key] = str(e)[:200]
+                    return 0
+                finally:
+                    # Keep heartbeat fresh while IO workers are busy so watchdog
+                    # does not false-positive a "loop stall" during a long fill.
+                    _bump_loop_heartbeat()
 
-    async def one(venue: str, sym: str, mkt: str) -> int:
-        key = f"{venue}:{sym}:{mkt}"
-        async with sem:
-            if latest(venue, sym, mkt, STALE_SEC):
-                return 0
-            try:
-                q = await loop.run_in_executor(None, get_client(venue).quote, sym, mkt)
-                _put(q)
-                _rest_errors.pop(key, None)
-                return 1
-            except (MarketDataError, Exception) as e:  # noqa: BLE001
-                _rest_errors[key] = str(e)[:200]
-                return 0
-
-    pref = (preferred_venue or "").strip().lower()
-    primary = [j for j in jobs if j[0] == pref] if pref else list(jobs)
-    secondary = [j for j in jobs if j not in primary] if pref else []
-    filled = 0
-    for batch in (primary, secondary):
-        if not batch:
-            continue
-        results = await asyncio.gather(*(one(*j) for j in batch), return_exceptions=True)
-        for r in results:
-            if isinstance(r, int):
-                filled += r
-    return filled
+        pref = (preferred_venue or "").strip().lower()
+        primary = [j for j in jobs if j[0] == pref] if pref else list(jobs)
+        secondary = [j for j in jobs if j not in primary] if pref else []
+        filled = 0
+        for batch in (primary, secondary):
+            if not batch:
+                continue
+            _bump_loop_heartbeat()
+            results = await asyncio.gather(*(one(*j) for j in batch), return_exceptions=True)
+            for r in results:
+                if isinstance(r, int):
+                    filled += r
+        return filled
+    finally:
+        _rest_fill_depth = max(0, _rest_fill_depth - 1)
+        _bump_loop_heartbeat()
 
 
 async def _rest_fallback(symbols):
@@ -776,7 +835,12 @@ def _watchdog_tick() -> int:
     now = time.time()
     hb = _loop_heartbeat
     hb_age = (now - hb) if hb else None
-    stalled = hb_age is None or hb_age > LOOP_STALL_SEC
+    # A long official REST gap-fill yields on the event loop but can leave the
+    # supervisor heartbeat idle for > LOOP_STALL_SEC. That is not a frozen loop —
+    # aborting mid-reconnect just recreates zombies. True zombies past
+    # ZOMBIE+grace are still kicked below.
+    filling = _rest_fill_depth > 0
+    stalled = (not filling) and (hb_age is None or hb_age > LOOP_STALL_SEC)
     with _lock:
         rows = [(n, dict(st)) for n, st in _conns.items()]
     jobs: list[tuple[str, object, float]] = []
@@ -860,7 +924,7 @@ async def _kick_zombies(symbols: list[str] | None = None, *, preferred_venue: st
 async def _load_settings():
     """Load settings off the WS event loop so a contended SQLite lock cannot freeze recv/ping."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, S.load)
+    return await loop.run_in_executor(_ensure_io_pool(), S.load)
 
 
 async def _supervisor():
@@ -911,6 +975,7 @@ async def _supervisor():
 def start():
     global _thread, _loop, _watchdog_thread, _loop_heartbeat
     _ensure_cb_dispatcher()
+    _ensure_io_pool()
     if not (_thread and _thread.is_alive()):
         _stop.clear()
         _loop_heartbeat = time.time()
@@ -955,6 +1020,14 @@ def stop(timeout: float = 3.0) -> None:
     c = _cb_thread
     if c and c.is_alive():
         c.join(timeout=min(timeout, 1.0))
+    pool = _io_pool
+    if pool is not None:
+        # Do not wait on in-flight HTTP; process exit / next start creates a fresh pool.
+        try:
+            pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            pool.shutdown(wait=False)
+        globals()["_io_pool"] = None
 
 
 def interval_ms(interval: str) -> int:
