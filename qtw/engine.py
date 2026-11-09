@@ -15,7 +15,7 @@ from .market.base import INTERVAL_MS
 from . import db
 from .paper import ORDER_COLS, PaperBook
 from .paths import OUTPUT_DIR
-from .risk import scale_to_room, size
+from .risk import cap_at_entry, scale_to_room, size
 from .strategy import combine, indicators, last_cross, market_of, side_of
 from .timeutil import iso, la, sh, utcnow
 
@@ -177,16 +177,31 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         r["target_qty"] = alloc[s] / r["ref_price"] if r["ref_price"] else 0
         r["target_weight"] = alloc[s] / eq if eq else 0
         r["risk_usdt"] = alloc[s] * r["stop_pct"]
-    for r in rows:  # 已持仓的显示实际仓位
+    led = bk.ledger()
+    for r in rows:  # 已持仓的显示实际仓位，并用开仓数据回填真正收紧仓位的约束
         p = bk.positions.get(r["symbol"])
         if p and r.get("state") == "holding":
             r["target_notional_usdt"] = abs(p.qty * p.mark_price)
             r["target_qty"] = p.qty
             r["target_weight"] = r["target_notional_usdt"] / eq if eq else 0
             r["risk_usdt"] = abs(p.qty * (p.stop_price - p.mark_price)) if p.direction * (p.mark_price - p.stop_price) > 0 else 0.0
+            r["capped_by"] = cap_at_entry(
+                entry_notional=p.notional_entry, entry_price=p.entry_price, stop_price=p.stop_price,
+                entry_equity=_equity_near(led, p.entry_time, bk.starting),
+                max_risk=rk["max_risk_per_trade"], max_weight=rk["max_weight_per_name"])
     return {"generated_at": iso(utcnow()), "generated_at_la": la(utcnow()), "generated_at_sh": sh(utcnow()),
             "venue": venue, "equity": eq,
             "rows": rows, "errors": errs}
+
+
+def _equity_near(ledger: list[dict], when: str, fallback: float) -> float:
+    """Ledger equity at or just before entry; else the first snapshot / starting capital."""
+    if not ledger:
+        return fallback
+    before = [float(r["equity_usdt"]) for r in ledger if r.get("time") and when and r["time"] <= when]
+    if before:
+        return before[-1]
+    return float(ledger[0].get("equity_usdt") or fallback)
 
 
 def _log_order(**kw):

@@ -57,3 +57,39 @@ def test_scale_to_room_proportional_and_fee_aware():
     assert sum(out.values()) * 1.0004 <= 1000 + 1e-9
     assert scale_to_room({"A": 100.0}, 1000, 0.0004) == {"A": 100.0}
     assert scale_to_room({"A": 100.0}, -5, 0.0004) == {"A": 0.0}
+
+
+def test_cap_at_entry_marks_gross_when_scaled_below_per_name_cap():
+    from qtw.risk import cap_at_entry
+    # 8 names each wanted the 20% weight cap (200 U on 1000) but got ~125 U after 1x gross scale
+    assert cap_at_entry(entry_notional=124.95, entry_price=74760.6, stop_price=76050.58571428573,
+                        entry_equity=1000.0) == "gross"
+
+
+def test_cap_at_entry_keeps_weight_or_risk_when_filled_at_standalone():
+    from qtw.risk import cap_at_entry
+    # stop 20% → raw = 50/0.2 = 250 > 200 cap → weight, filled at 200
+    assert cap_at_entry(entry_notional=200, entry_price=100, stop_price=80, entry_equity=1000) == "weight"
+    # stop 40% → raw = 125 → risk, filled at 125
+    assert cap_at_entry(entry_notional=125, entry_price=100, stop_price=60, entry_equity=1000) == "risk"
+
+
+def test_cap_at_entry_uses_entry_notional_not_later_mark():
+    from qtw.risk import cap_at_entry
+    # A single 20% weight-capped name stays "weight" even if we only have entry fields
+    # (later mark-to-market must not flip the label to gross).
+    assert cap_at_entry(entry_notional=200, entry_price=100, stop_price=80, entry_equity=1000) == "weight"
+    assert cap_at_entry(entry_notional=0, entry_price=100, stop_price=80, entry_equity=1000) == "none"
+
+
+def test_equity_near_picks_snapshot_at_or_before_entry():
+    from qtw.engine import _equity_near
+    led = [
+        {"time": "2026-11-09T15:00:00Z", "equity_usdt": 1000.0},
+        {"time": "2026-11-09T15:06:00Z", "equity_usdt": 999.6},
+        {"time": "2026-11-09T16:00:00Z", "equity_usdt": 1010.0},
+    ]
+    assert _equity_near(led, "2026-11-09T15:06:00Z", 1000.0) == 999.6
+    assert _equity_near(led, "2026-11-09T15:03:00Z", 1000.0) == 1000.0
+    assert _equity_near([], "2026-11-09T15:06:00Z", 1000.0) == 1000.0
+    assert _equity_near(led, "2026-11-09T14:00:00Z", 1000.0) == 1000.0
