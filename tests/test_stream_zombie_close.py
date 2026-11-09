@@ -110,3 +110,55 @@ def test_kick_zombies_marks_reconnecting_and_parallel_abort(monkeypatch):
     with stream._lock:
         stream._conns.clear()
     stream._ws_refs.clear()
+
+
+def test_activity_age_falls_back_to_connected_at():
+    from datetime import datetime, timezone
+    now = datetime(2026, 11, 10, 4, 20, tzinfo=timezone.utc).timestamp()
+    connected = datetime(2026, 11, 10, 4, 18, tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    age = stream._activity_age_sec({"last_msg": "", "connected_at": connected}, now)
+    assert age is not None and 119 <= age <= 121
+
+    fresh_msg = datetime(2026, 11, 10, 4, 19, 50, tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    age2 = stream._activity_age_sec({"last_msg": fresh_msg, "connected_at": connected}, now)
+    assert age2 is not None and 9 <= age2 <= 11
+
+
+def test_kick_zombies_triggers_rest_fill(monkeypatch):
+    states = {}
+    filled = {"n": 0}
+
+    def fake_state(name, **kw):
+        st = states.setdefault(name, {"name": name, "status": "connected", "last_msg": "", "reconnects": 0})
+        st.update(kw)
+
+    async def fake_rest(symbols, venues=("okx", "gate")):
+        filled["n"] += 1
+        assert symbols == ["BTCUSDT"]
+        return 2
+
+    monkeypatch.setattr(stream, "_conn_state", fake_state)
+    monkeypatch.setattr(stream, "ZOMBIE_SEC", 70)
+    monkeypatch.setattr(stream, "_rest_fill_stale", fake_rest)
+    stream._ws_refs.clear()
+    with stream._lock:
+        stream._conns.clear()
+        old = time.time() - 400
+        from datetime import datetime, timezone
+        lm = datetime.fromtimestamp(old, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        stream._conns["okx_public"] = {
+            "name": "okx_public", "status": "connected", "last_msg": lm,
+            "reconnects": 0, "url": "", "connected_at": lm, "last_error": "", "channels": [],
+        }
+        stream._ws_refs["okx_public"] = _HangCloseWS()
+
+    async def run():
+        n = await stream._kick_zombies(["BTCUSDT"])
+        assert n == 1
+        assert filled["n"] == 1
+        assert states["okx_public"]["status"] == "reconnecting"
+
+    asyncio.run(run())
+    with stream._lock:
+        stream._conns.clear()
+    stream._ws_refs.clear()

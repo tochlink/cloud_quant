@@ -15,7 +15,7 @@
     发出订阅 / ping 也有超时：半开 TCP 让 send 挂起时会主动重连，避免状态仍是 connected 但 last_msg 数分钟不刷新。
   * 已收盘 K 线写入 SQLite 放到线程池，避免 db 锁/WAL 卡住 asyncio 事件循环，导致四条连接同时假死（status=connected 但 last_msg 数分钟不刷新）。
   * status() 把「已连接但 last_msg 超过 ZOMBIE_SEC」标为 stale，不计入 up，避免 UI 误报实时。
-  * supervisor 每轮检查僵尸连接：last_msg 过旧仍标 connected 时强制中断套接字（优先 transport.abort，避免 close 握手挂起），并行踢掉并标 reconnecting，迫使 _run_ws 走重连。
+  * supervisor 每轮检查僵尸连接：last_msg 过旧仍标 connected 时强制中断套接字（优先 transport.abort，避免 close 握手挂起），并行踢掉并标 reconnecting，迫使 _run_ws 走重连；刚连上时写入 last_msg，空 last_msg 则用 connected_at 计龄；踢掉后立刻 REST 填一次标记价，不等 10 秒轮询。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
 """
@@ -139,10 +139,23 @@ def _last_msg_age_sec(conn: dict, now: float | None = None) -> float | None:
     return (now if now is not None else time.time()) - ts
 
 
+
+def _activity_age_sec(conn: dict, now: float | None = None) -> float | None:
+    """Seconds since last_msg, or connected_at if no frame yet.
+
+    Sockets that connect but never deliver a frame used to report age=None and
+    were skipped by the zombie kicker forever. Fall back to connected_at so the
+    supervisor still aborts them after ZOMBIE_SEC.
+    """
+    age = _last_msg_age_sec(conn, now)
+    if age is not None:
+        return age
+    return _last_msg_age_sec({"last_msg": conn.get("connected_at") or ""}, now)
+
 def annotate_conn(conn: dict, *, now: float | None = None, zombie_sec: float = ZOMBIE_SEC) -> dict:
     """Copy a connection row and mark zombie sockets as status=stale for API/UI."""
     c = dict(conn)
-    age = _last_msg_age_sec(c, now)
+    age = _activity_age_sec(c, now)
     if age is not None:
         c["last_msg_age_sec"] = round(age, 1)
     if c.get("status") == "connected" and (age is None or age > zombie_sec):
@@ -294,7 +307,7 @@ async def _run_ws(name, urls, subscribe_msgs, handle, ping):
                 try:
                     for m in subscribe_msgs():
                         await _send(ws, m)
-                    _conn_state(name, status="connected", connected_at=iso(utcnow()), last_error="")
+                    _conn_state(name, status="connected", connected_at=iso(utcnow()), last_msg=iso(utcnow()), last_error="")
                     backoff, was_connected = 1.0, True
                     last_ping = time.time()
                     while True:
@@ -438,23 +451,31 @@ def _gate_tasks(symbols, interval):
                     lambda: json.dumps({"time": int(time.time()), "channel": "futures.ping"}))]
 
 
+async def _rest_fill_stale(symbols, venues=("okx", "gate")) -> int:
+    """One-shot official REST fill for quotes older than STALE_SEC. Returns fills."""
+    loop = asyncio.get_running_loop()
+    filled = 0
+    for venue in venues:
+        for sym in symbols:
+            for mkt in ("spot", "perp"):
+                if latest(venue, sym, mkt, STALE_SEC):
+                    continue
+                key = f"{venue}:{sym}:{mkt}"
+                try:
+                    q = await loop.run_in_executor(None, get_client(venue).quote, sym, mkt)
+                    _put(q)
+                    _rest_errors.pop(key, None)
+                    filled += 1
+                except (MarketDataError, Exception) as e:  # noqa: BLE001
+                    _rest_errors[key] = str(e)[:200]
+    return filled
+
+
 async def _rest_fallback(symbols):
     """WS 价格过期（>20 秒）时，用官方公共 REST 拉取真实报价；失败只记录错误。"""
-    loop = asyncio.get_running_loop()
     while True:
         await asyncio.sleep(10)
-        for venue in ("okx", "gate"):
-            for sym in symbols:
-                for mkt in ("spot", "perp"):
-                    if latest(venue, sym, mkt, STALE_SEC):
-                        continue
-                    key = f"{venue}:{sym}:{mkt}"
-                    try:
-                        q = await loop.run_in_executor(None, get_client(venue).quote, sym, mkt)
-                        _put(q)
-                        _rest_errors.pop(key, None)
-                    except (MarketDataError, Exception) as e:  # noqa: BLE001
-                        _rest_errors[key] = str(e)[:200]
+        await _rest_fill_stale(symbols)
 
 
 async def _force_close_ws(ws, name: str) -> None:
@@ -490,12 +511,14 @@ async def _force_close_ws(ws, name: str) -> None:
             pass
 
 
-async def _kick_zombies():
+async def _kick_zombies(symbols: list[str] | None = None) -> int:
     """Close sockets that look connected but have been silent past ZOMBIE_SEC.
 
     recv/grace should already reconnect; this is a safety net when the library
     recv wait never returns while the event loop is otherwise healthy.
     Kicks run in parallel so one hung close cannot stall the other three.
+    After a kick, immediately REST-fill stale marks so the paper book does not
+    wait for the next 10s fallback tick during reconnect.
     """
     now = time.time()
     with _lock:
@@ -504,7 +527,7 @@ async def _kick_zombies():
     for name, st in rows:
         if st.get("status") != "connected":
             continue
-        age = _last_msg_age_sec(st, now)
+        age = _activity_age_sec(st, now)
         if age is None or age <= ZOMBIE_SEC:
             continue
         ws = _ws_refs.get(name)
@@ -517,10 +540,19 @@ async def _kick_zombies():
         jobs.append(_force_close_ws(ws, name))
     if jobs:
         await asyncio.gather(*jobs, return_exceptions=True)
+        if symbols:
+            try:
+                n = await _rest_fill_stale(symbols)
+                if n:
+                    log.info("zombie kick: REST filled %d stale quotes", n)
+            except Exception:  # noqa: BLE001
+                log.exception("zombie kick REST fill failed")
+    return len(jobs)
 
 
 async def _supervisor():
     cur, tasks = None, []
+    syms: list[str] = []
     while True:
         cfg = S.load()
         want = (tuple(cfg["symbols"]), cfg["strategy"]["interval"])
@@ -536,8 +568,8 @@ async def _supervisor():
             tasks = [asyncio.create_task(c) for c in coros]
             cur = want
             log.info("实时行情订阅：%d 个标的 · %s · OKX + Gate（现货 + 永续）", len(syms), interval)
-        await _kick_zombies()
-        await asyncio.sleep(15)
+        await _kick_zombies(syms)
+        await asyncio.sleep(5)
 
 
 def start():
