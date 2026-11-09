@@ -26,6 +26,13 @@ def test_health_reports_paper_gate_and_stream_without_secrets():
     assert "persist_running" in body
     assert isinstance(body["persist_running"], bool)
     assert "time" in body and "time_sh" in body
+    assert "paper" in body
+    if body["paper"] is not None:
+        assert "equity" in body["paper"] and "positions" in body["paper"]
+        assert "starting_equity" in body["paper"]
+    assert "btc_perp" in body  # may be null when stream not started in TestClient
+    assert "last_zombie_kick_age_sec" in body["stream"]
+    assert "last_zombie_max_age_sec" in body["stream"]
     # Must never leak vault / keys / full settings
     blob = r.text.lower()
     for forbidden in ("api_key", "secret", "passphrase", "vault", "fernet", "settings"):
