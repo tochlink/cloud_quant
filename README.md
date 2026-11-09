@@ -4,6 +4,8 @@
 界面视觉按 kean 提供的参考稿实现：彩色渐变底 + 悬浮圆角平板 + 深紫胶囊侧栏 + 卡片 / 快速摘要 / 右侧列表。
 
 > ⚠️ **这是系统化纸面 / 研究工具，不构成投资建议。实盘交易可能亏损全部本金。**
+>
+> **数据：只用 OKX / Gate.io 官方公共接口的真实行情，纸面交易与回测都不需要 API Key；不使用任何模拟 / 合成 / 插值数据，请求失败直接报错。**
 > 默认 **纸面模式**；实盘需要通过五道闸门（见下文），本版本开发与测试中**从未发送过任何实盘或交易所模拟盘订单**。
 
 ## 一键启动
@@ -63,9 +65,23 @@ cd /workspace/quant-trading-web
 * 离场：收盘出现反向或归零信号；或价格触及 **入场价 ∓ 2×ATR** 止损。止损后保持空仓，直到信号方向改变。
 * 回测：第 t 根收盘信号 → 第 t+1 根**开盘**成交；止损按盘中高低价检查；权益按收盘价计价（单元测试验证无前视）。
 
+## 实时行情（官方公共 WebSocket，无需 Key）
+
+| 交易所 | 连接 | 频道 |
+|---|---|---|
+| OKX | `wss://ws.okx.com:8443/ws/v5/public`（被拦时自动换 `wss://ws.okx.com/ws/v5/public`、`wsaws.okx.com`） | `tickers`（现货）、`mark-price`（永续） |
+| OKX | `wss://ws.okx.com:8443/ws/v5/business`（同上回退） | `candle4H`（现货 + 永续） |
+| Gate | `wss://api.gateio.ws/ws/v4/` | `spot.tickers`、`spot.candlesticks` |
+| Gate | `wss://fx-ws.gateio.ws/v4/ws/usdt` | `futures.tickers`（mark_price）、`futures.candlesticks` |
+
+* 两个交易所都订阅整个标的池；断线指数退避自动重连；任何价格 20 秒没有 WS 更新就改用官方 REST 拉取（`*_public_rest`）。
+* 收盘确认的 K 线（`confirm=1` / `w=true`）写入 SQLite `candles` 表（`data_source=okx_public_ws / gate_public_ws`）；未收盘 K 线只用于图表最后一根的实时跳动。
+* 纸面持仓按同一交易所、同一市场的实时价格计价（现货多 → 现货最新价，永续空 → 永续标记价），每 15 秒落库。
+* 页面通过 **SSE `/api/stream`** 每 1.5 秒收到更新：顶部“实时 · WebSocket”状态（点击查看每条连接）、右栏价格与盈亏、总览权益、信号卡片价格、K 线最后一根。
+
 ## 自动交易与紧急停止
 
-* 后台线程默认**关闭**；开启后每 `interval_sec`（默认 300 秒）执行一次：拉行情 → 算信号 → 查止损 → 纸面调仓 → 写 CSV。
+* 后台线程**随服务 7×24 运行**（默认开启，每 60 秒一次）：读真实行情 → 算信号 → 查止损 → 纸面调仓 → 写 SQLite 并导出 CSV。
 * **紧急停止（Kill Switch）**：立即停止线程、关闭实盘开关并切回纸面、按最新公共价平掉全部纸面持仓（拿不到报价时用最后一次标记价，并在成交里注明）。紧急停止**不会**向交易所发单。
 
 ## 实盘闸门（全部满足才会真正发单）
@@ -88,6 +104,20 @@ cd /workspace/quant-trading-web
 * `data/`、`*.enc`、`*.key`、`.env` 已在 `.gitignore`；密钥不写入 CSV / 日志（日志有脱敏过滤），前端只拿到 `abcd••••••wxyz` 形式的掩码，Secret / Passphrase 永不回显。
 * 建议在交易所创建 API 时**不开提现权限**，并绑定 IP 白名单。
 
+## SQLite 数据库
+
+`data/qtw.sqlite`（标准库 sqlite3，WAL 模式，`data/` 已在 .gitignore）。表：
+
+| 表 | 内容 |
+|---|---|
+| `candles` | 真实公共 K 线缓存（venue / market / symbol / interval / open_time / OHLCV / data_source / source_host / fetched_at） |
+| `paper_state` `paper_positions` `paper_blocks` | 纸面账本状态、持仓（含标记价来源）、止损锁 |
+| `paper_fills` `paper_ledger` `orders` | 纸面成交（含价格来源与时间）、权益快照、订单路由日志 |
+| `backtest_runs` `backtest_equity` `backtest_trades` | 每次回测的参数、指标、数据来源、权益曲线、逐笔交易 |
+| `settings` `meta` | 非敏感设置、迁移标记 |
+
+**API 密钥永远不进数据库**（只在加密的 `data/secrets.enc`）。首次启动时，旧版 `data/paper/*.csv` 账本会自动导入 SQLite，原目录改名为 `data/paper.migrated-to-sqlite` 作为备份。
+
 ## 输出 CSV（`output/`）
 
 | 文件 | 内容 |
@@ -96,28 +126,33 @@ cd /workspace/quant-trading-web
 | `paper_positions.csv` | 当前纸面持仓 |
 | `paper_fills.csv` | 纸面成交明细（价格来源、手续费、已实现盈亏、原因） |
 | `paper_ledger.csv` | 每个周期的权益 / 现金 / 敞口快照 |
+| `paper_orders.csv` | 订单路由日志（纸面 / 实盘被拦截原因） |
 | `backtest/backtest_summary.csv` | 回测指标 |
 | `backtest/backtest_equity.csv` | 回测权益、回撤、敞口序列 |
 | `backtest/backtest_trades.csv` | 回测逐笔交易（入场 / 离场时间与价格、原因） |
 
-纸面账本本体保存在 `data/paper/*.csv`，**重启不丢失**（v1 的局限已解决）。
+CSV 均带 `venue` / `data_source` / `fetched_at` 等来源字段。纸面账本本体在 SQLite 中，**重启不丢失**。
 
 ## 已知局限
 
-* 回测做空用现货 K 线近似永续价格，未计资金费率、滑点与强平；历史表现不代表未来。
+* 回测未计资金费率、滑点与强平；历史表现不代表未来。
 * OKX `history-candles` 每次 100 根，首次长回测需要数秒到数十秒（已做 2 分钟缓存与 4 并发）。
 * 实盘模式按纸面账本的调仓意图发单，**没有与交易所实际持仓 / 成交对账**，也不处理部分成交；实盘前请先在 OKX 模拟盘或 Gate 合约测试网验证。Gate 现货没有测试网。
 * 仅监听 127.0.0.1，没有登录鉴权；不要暴露到公网。
+* 本机网络若拦截 OKX 8443 端口，会自动改用 443 端口的官方地址。
+* 界面自适应：侧栏与平板同在一个网格里随窗口 / 缩放一起伸缩；≤1180px 右栏变成抽屉（顶部按钮打开），≤760px 底部胶囊导航。
 * 若某交易所在你所在地区被限制（HTTP 403 / 451），客户端会尝试官方备用域名（OKX `aws.okx.com`，Gate `api.gate.io`），仍失败就报错——**绝不伪造行情**。
 
 ## 目录
 
 ```
-qtw/market/   OKX / Gate 公共行情、缓存
+qtw/market/   OKX / Gate 公共 REST 行情、SQLite K 线缓存
+qtw/stream.py 官方公共 WebSocket 实时行情 + REST 兜底
+qtw/db.py     SQLite 模式与连接
 qtw/strategy.py  dual_ma 指标与信号
 qtw/risk.py      仓位与风控
 qtw/backtest.py  组合回测
-qtw/paper.py     持久化纸面账本（CSV）
+qtw/paper.py     持久化纸面账本（SQLite）
 qtw/engine.py    信号 → 进出场 → 执行路由、紧急停止
 qtw/worker.py    后台自动交易线程
 qtw/vault.py     密钥加密存储
