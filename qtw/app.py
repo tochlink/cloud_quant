@@ -413,6 +413,12 @@ def cycle():
         raise HTTPException(502, str(e)) from e
 
 
+@app.get("/api/worker/status")
+def worker_status():
+    """Read-only worker probe (avoid POST /api/worker/status → 405)."""
+    return ok(worker.status())
+
+
 @app.post("/api/worker/{action}")
 def worker_ctl(action: str):
     if action == "start":
@@ -421,6 +427,9 @@ def worker_ctl(action: str):
     elif action == "stop":
         S.update({"worker": {"enabled": False}})
         worker.stop()
+    elif action == "status":
+        # Allow POST /api/worker/status for clients that only speak POST.
+        return ok(worker.status())
     else:
         raise HTTPException(404)
     return ok(worker.status())

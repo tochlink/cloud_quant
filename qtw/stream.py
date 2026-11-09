@@ -19,7 +19,8 @@
   * WebSocket 握手除库自带 open_timeout 外再包一层 wait_for，避免 DNS / 半开 TCP 让状态一直停在 connecting（此时还没有 _ws_refs，僵尸踢除无法中断）。
   * supervisor 每轮检查僵尸连接：last_msg 过旧仍标 connected 时强制中断套接字（优先 transport.abort，避免 close 握手挂起），并行踢掉并标 reconnecting，迫使 _run_ws 走重连；刚连上时写入 last_msg，空 last_msg 则用 connected_at 计龄；踢掉后立刻 REST 填一次标记价，不等 10 秒轮询。
   * supervisor 读配置走线程池（run_in_executor），避免 S.load()/SQLite 锁被纸面写库或 K 线缓存占用时卡住 asyncio，导致四条 WS 同时假死、zombie age 远超 ZOMBIE_SEC。
-  * 侧线程 watchdog：supervisor 的僵尸踢除跑在 asyncio 循环内；若事件循环被卡住，踢除本身也无法执行，last_msg 会拖到 90s+。watchdog 独立扫描；循环心跳过旧或僵尸年龄超过 ZOMBIE+宽限时，直接 transport.abort()，并经 call_soon / run_coroutine_threadsafe 触发 REST 填隙。
+  * 侧线程 watchdog：supervisor 的僵尸踢除跑在 asyncio 循环内；若事件循环被卡住，踢除本身也无法执行，last_msg 会拖到 90s+。watchdog 独立扫描；循环心跳过旧或僵尸年龄超过 ZOMBIE+宽限时，直接 transport.abort()（websockets 15 ClientConnection 实例属性），并经 call_soon / run_coroutine_threadsafe 触发 REST 填隙；abort 失败时再 threadsafe 调度 close()。start() 在行情线程已存活时也会补拉 watchdog。
+  * 报价回调（纸面 mark）不在 asyncio 线程同步执行：经单线程队列派发，避免 PaperBook._LOCK / SQLite 写锁卡住 recv/ping/zombie kick（曾出现 last_msg 龄到 200s+ 而 watchdog 日志缺失的假死）。
   * REST 填隙优先当前纸面行情源（settings.venue），同批内有限并发，避免僵尸踢掉后纸面标记价排在另一所 32 路串行 REST 后面。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
@@ -29,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import queue
 import threading
 import time
 from datetime import datetime, timezone
@@ -76,7 +78,10 @@ _loop: asyncio.AbstractEventLoop | None = None
 _loop_heartbeat: float = 0.0  # wall time; supervisor refreshes each tick / sleep slice
 _stop = threading.Event()  # set by stop(); supervisor + watchdog exit cleanly
 _rest_errors: dict[str, str] = {}
-_on_quote = []  # 回调：用于给纸面持仓实时计价
+_on_quote = []  # 回调：用于给纸面持仓实时计价（经 _cb_queue 旁路，不阻塞 asyncio）
+_cb_queue: queue.SimpleQueue | None = None
+_cb_thread: threading.Thread | None = None
+_cb_stop = threading.Event()
 _last_ws_at: dict[str, float] = {}  # venue -> wall time of last *_ws quote for that venue
 _ws_refs: dict[str, object] = {}  # live websocket objects (stream-loop only) for zombie close
 _watch_symbols: list[str] = []  # last subscribed symbols (for watchdog REST fill)
@@ -92,21 +97,56 @@ def version() -> int:
     return _version
 
 
+def _ensure_cb_dispatcher() -> None:
+    """One worker thread drains quote callbacks so the WS loop never waits on them."""
+    global _cb_queue, _cb_thread
+    if _cb_queue is None:
+        _cb_queue = queue.SimpleQueue()
+    if _cb_thread and _cb_thread.is_alive():
+        return
+
+    def _run():
+        qref = _cb_queue
+        while not _cb_stop.is_set():
+            try:
+                item = qref.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if item is None:
+                break
+            cb, quote = item
+            try:
+                cb(quote)
+            except Exception:  # noqa: BLE001
+                log.exception("quote callback failed")
+
+    _cb_stop.clear()
+    _cb_thread = threading.Thread(target=_run, name="qtw-quote-cb", daemon=True)
+    _cb_thread.start()
+
+
 def _put(q: Quote):
     with _lock:
         _quotes[(q.venue.lower(), q.symbol, q.market)] = q
         if q.data_source.endswith("_ws"):
             _last_ws_at[q.venue.lower()] = time.time()
         _bump()
-    for cb in _on_quote:
+    if not _on_quote:
+        return
+    _ensure_cb_dispatcher()
+    qref = _cb_queue
+    for cb in list(_on_quote):
+        # Bounded soft-drop: if the book lock is stuck for many ticks, prefer
+        # shedding callback latency over freezing recv/ping on the stream loop.
         try:
-            cb(q)
+            qref.put_nowait((cb, q))
         except Exception:  # noqa: BLE001
-            log.exception("quote callback failed")
+            log.exception("quote callback enqueue failed")
 
 
 def on_quote(cb):
     _on_quote.append(cb)
+    _ensure_cb_dispatcher()
 
 
 def latest(venue: str, symbol: str, market: str, max_age_sec: float = 30) -> Quote | None:
@@ -615,20 +655,48 @@ async def _rest_fallback(symbols):
 def _abort_ws_transport_sync(ws, name: str, *, reason: str = "zombie: forced close") -> bool:
     """Hard-abort a websocket transport without awaiting (safe from watchdog thread).
 
-    Returns True if ``transport.abort()`` was called. Always flips status to
-    reconnecting and drops ``_ws_refs[name]`` when it still points at ``ws``.
+    Returns True if the socket was hard-stopped (transport.abort and/or
+    recv wakeup). Always flips status to reconnecting and drops
+    ``_ws_refs[name]`` when it still points at ``ws``.
+
+    websockets 15 ``ClientConnection`` stores ``transport`` as an instance
+    attribute (set in ``connection_made``); class ``dir()`` does not list it.
+    When abort is unavailable, poke ``set_recv_exc`` + ``recv_messages.close``
+    and schedule an async ``close()`` on the stream loop as a fallback.
     """
     _conn_state(name, status="reconnecting", last_error=reason)
     if _ws_refs.get(name) is ws:
         _ws_refs.pop(name, None)
+    stopped = False
     transport = getattr(ws, "transport", None)
     try:
         if transport is not None and not transport.is_closing():
             transport.abort()
-            return True
+            stopped = True
     except Exception as e:  # noqa: BLE001
         log.info("%s zombie abort: %s", name, type(e).__name__)
-    return False
+    # Wake a hung recv() even when transport.abort is missing/noop.
+    try:
+        set_exc = getattr(ws, "set_recv_exc", None)
+        if set_exc is not None:
+            set_exc(ConnectionError(reason))
+            stopped = True
+        recv_messages = getattr(ws, "recv_messages", None)
+        close_asm = getattr(recv_messages, "close", None) if recv_messages is not None else None
+        if close_asm is not None:
+            close_asm()
+            stopped = True
+    except Exception as e:  # noqa: BLE001
+        log.info("%s zombie recv wake: %s", name, type(e).__name__)
+    if not stopped:
+        loop = _loop
+        if loop is not None and loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(_close_ws_quietly(ws), loop)
+                stopped = True
+            except Exception as e:  # noqa: BLE001
+                log.info("%s zombie close schedule: %s", name, type(e).__name__)
+    return stopped
 
 
 async def _force_close_ws(ws, name: str) -> None:
@@ -824,26 +892,28 @@ async def _supervisor():
 
 def start():
     global _thread, _loop, _watchdog_thread, _loop_heartbeat
-    if _thread and _thread.is_alive():
-        return
-    _stop.clear()
-    _loop_heartbeat = time.time()
+    _ensure_cb_dispatcher()
+    if not (_thread and _thread.is_alive()):
+        _stop.clear()
+        _loop_heartbeat = time.time()
 
-    def run():
-        global _loop
-        _loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(_loop)
-        try:
-            _loop.run_until_complete(_supervisor())
-        finally:
+        def run():
+            global _loop
+            _loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(_loop)
             try:
-                _loop.close()
-            except Exception:  # noqa: BLE001
-                pass
-            _loop = None
+                _loop.run_until_complete(_supervisor())
+            finally:
+                try:
+                    _loop.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                _loop = None
 
-    _thread = threading.Thread(target=run, name="qtw-stream", daemon=True)
-    _thread.start()
+        _thread = threading.Thread(target=run, name="qtw-stream", daemon=True)
+        _thread.start()
+    # Always (re)attach watchdog even when the stream thread was already up —
+    # a dead watchdog used to leave zombies until the in-loop kicker finally ran.
     if not (_watchdog_thread and _watchdog_thread.is_alive()):
         _watchdog_thread = threading.Thread(target=_watchdog_main, name="qtw-stream-watchdog", daemon=True)
         _watchdog_thread.start()
@@ -852,12 +922,21 @@ def start():
 def stop(timeout: float = 3.0) -> None:
     """Ask the stream supervisor + watchdog to exit (used by FastAPI lifespan shutdown)."""
     _stop.set()
+    _cb_stop.set()
+    if _cb_queue is not None:
+        try:
+            _cb_queue.put_nowait(None)
+        except Exception:  # noqa: BLE001
+            pass
     t = _thread
     if t and t.is_alive():
         t.join(timeout=timeout)
     w = _watchdog_thread
     if w and w.is_alive():
         w.join(timeout=min(timeout, 1.5))
+    c = _cb_thread
+    if c and c.is_alive():
+        c.join(timeout=min(timeout, 1.0))
 
 
 def interval_ms(interval: str) -> int:
