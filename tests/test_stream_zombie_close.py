@@ -132,8 +132,9 @@ def test_kick_zombies_triggers_rest_fill(monkeypatch):
         st = states.setdefault(name, {"name": name, "status": "connected", "last_msg": "", "reconnects": 0})
         st.update(kw)
 
-    async def fake_rest(symbols, venues=("okx", "gate")):
+    async def fake_rest(symbols, venues=("okx", "gate"), *, preferred_venue=None):
         filled["n"] += 1
+        filled["venue"] = preferred_venue
         assert symbols == ["BTCUSDT"]
         return 2
 
@@ -153,9 +154,10 @@ def test_kick_zombies_triggers_rest_fill(monkeypatch):
         stream._ws_refs["okx_public"] = _HangCloseWS()
 
     async def run():
-        n = await stream._kick_zombies(["BTCUSDT"])
+        n = await stream._kick_zombies(["BTCUSDT"], preferred_venue="okx")
         assert n == 1
         assert filled["n"] == 1
+        assert filled["venue"] == "okx"
         assert states["okx_public"]["status"] == "reconnecting"
 
     asyncio.run(run())
@@ -214,3 +216,54 @@ def test_connect_ws_guard_times_out_hung_handshake(monkeypatch):
 
     asyncio.run(run())
 
+
+
+def test_venue_fill_order_prefers_active():
+    assert stream._venue_fill_order("gate") == ["gate", "okx"]
+    assert stream._venue_fill_order("okx") == ["okx", "gate"]
+    assert stream._venue_fill_order(None) == ["okx", "gate"]
+    assert stream._venue_fill_order("nope") == ["okx", "gate"]
+
+
+def test_rest_fill_stale_runs_preferred_venue_before_secondary(monkeypatch):
+    """Paper venue REST fills must complete before the other exchange starts."""
+    order = []
+
+    class Q:
+        def __init__(self, venue, symbol, market):
+            self.venue = venue
+            self.symbol = symbol
+            self.market = market
+            self.price = 1.0
+            self.kind = "mark" if market == "perp" else "last"
+            from datetime import datetime, timezone
+            self.ts = datetime.now(timezone.utc)
+            self.data_source = f"{venue}_public_rest"
+            self.source_host = "example.test"
+            self.exchange = venue.upper()
+
+    class FakeClient:
+        def __init__(self, venue):
+            self.venue = venue
+
+        def quote(self, sym, mkt):
+            order.append(self.venue)
+            import time as _t
+            # Secondary venue is slower; if we awaited it first, preferred would lag.
+            if self.venue == "gate":
+                _t.sleep(0.05)
+            return Q(self.venue, sym, mkt)
+
+    monkeypatch.setattr(stream, "latest", lambda *a, **k: None)
+    monkeypatch.setattr(stream, "get_client", lambda venue: FakeClient(venue))
+    monkeypatch.setattr(stream, "_put", lambda q: None)
+    stream._rest_errors.clear()
+
+    async def run():
+        n = await stream._rest_fill_stale(["BTCUSDT"], preferred_venue="okx")
+        assert n == 4  # okx spot+perp + gate spot+perp
+        # First two completions must be okx (primary batch finishes before gate starts).
+        assert order[:2] == ["okx", "okx"]
+        assert set(order[2:]) == {"gate"}
+
+    asyncio.run(run())

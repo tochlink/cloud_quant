@@ -24,6 +24,14 @@ def test_monitoring_aliases_return_existing_data():
     assert "time_sh" in p and "CST+8" in p["time_sh"]
     assert "worker" in p
 
+    for alias in ("/api/paper/book", "/api/paper/snapshot"):
+        alt = client.get(alias)
+        assert alt.status_code == 200, alias
+        a = alt.json()
+        assert a["equity"] == p["equity"]
+        assert a["positions"] == p["positions"]
+        assert a["mode"] == "paper"
+
     pos = client.get("/api/positions")
     assert pos.status_code == 200
     pj = pos.json()

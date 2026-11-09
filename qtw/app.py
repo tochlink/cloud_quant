@@ -175,16 +175,28 @@ def dashboard():
     return ok(_dashboard_data())
 
 
-@app.get("/api/paper")
-def paper():
-    """Thin alias: paper-book snapshot (equity, exposure, positions, fills, ledger)."""
+def _paper_payload() -> dict:
+    """Shared paper-book fields for /api/paper and monitoring aliases."""
     d = _dashboard_data()
-    return ok({k: d[k] for k in (
+    return {k: d[k] for k in (
         "time", "time_la", "time_sh", "mode", "venue", "starting_equity", "equity",
         "realized", "unrealized", "cash_free", "gross", "net", "total_pnl", "total_return",
         "week", "positions", "recent_fills", "ledger", "max_drawdown", "closed_trades",
         "win_rate", "worker",
-    )})
+    )}
+
+
+@app.get("/api/paper")
+def paper():
+    """Thin alias: paper-book snapshot (equity, exposure, positions, fills, ledger)."""
+    return ok(_paper_payload())
+
+
+@app.get("/api/paper/book")
+@app.get("/api/paper/snapshot")
+def paper_book_alias():
+    """Monitoring aliases (/api/paper/book, /api/paper/snapshot) → same as /api/paper."""
+    return ok(_paper_payload())
 
 
 @app.get("/api/positions")

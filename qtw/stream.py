@@ -19,6 +19,7 @@
   * WebSocket 握手除库自带 open_timeout 外再包一层 wait_for，避免 DNS / 半开 TCP 让状态一直停在 connecting（此时还没有 _ws_refs，僵尸踢除无法中断）。
   * supervisor 每轮检查僵尸连接：last_msg 过旧仍标 connected 时强制中断套接字（优先 transport.abort，避免 close 握手挂起），并行踢掉并标 reconnecting，迫使 _run_ws 走重连；刚连上时写入 last_msg，空 last_msg 则用 connected_at 计龄；踢掉后立刻 REST 填一次标记价，不等 10 秒轮询。
   * supervisor 读配置走线程池（run_in_executor），避免 S.load()/SQLite 锁被纸面写库或 K 线缓存占用时卡住 asyncio，导致四条 WS 同时假死、zombie age 远超 ZOMBIE_SEC。
+  * REST 填隙优先当前纸面行情源（settings.venue），同批内有限并发，避免僵尸踢掉后纸面标记价排在另一所 32 路串行 REST 后面。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
 """
@@ -519,23 +520,68 @@ def _gate_tasks(symbols, interval):
                     lambda: json.dumps({"time": int(time.time()), "channel": "futures.ping"}))]
 
 
-async def _rest_fill_stale(symbols, venues=("okx", "gate")) -> int:
-    """One-shot official REST fill for quotes older than STALE_SEC. Returns fills."""
+REST_FILL_CONCURRENCY = 6
+
+
+def _venue_fill_order(preferred: str | None = None, venues=("okx", "gate")) -> list[str]:
+    """Active paper venue first, then the rest — paper marks must not wait on the other exchange."""
+    pref = (preferred or "").strip().lower()
+    ordered: list[str] = []
+    if pref and pref in venues:
+        ordered.append(pref)
+    for v in venues:
+        if v not in ordered:
+            ordered.append(v)
+    return ordered
+
+
+async def _rest_fill_stale(symbols, venues=("okx", "gate"), *, preferred_venue: str | None = None) -> int:
+    """One-shot official REST fill for quotes older than STALE_SEC. Returns fills.
+
+    Prefer ``preferred_venue`` (settings.venue) so the paper book recovers marks
+    before secondary-exchange gap fills. Within each venue batch, run a few HTTP
+    calls concurrently — sequential 8×2×2 round-trips used to leave marks stale
+    for many seconds after a zombie kick.
+    """
     loop = asyncio.get_running_loop()
-    filled = 0
-    for venue in venues:
+    order = _venue_fill_order(preferred_venue, venues)
+    jobs: list[tuple[str, str, str]] = []
+    for venue in order:
         for sym in symbols:
             for mkt in ("spot", "perp"):
                 if latest(venue, sym, mkt, STALE_SEC):
                     continue
-                key = f"{venue}:{sym}:{mkt}"
-                try:
-                    q = await loop.run_in_executor(None, get_client(venue).quote, sym, mkt)
-                    _put(q)
-                    _rest_errors.pop(key, None)
-                    filled += 1
-                except (MarketDataError, Exception) as e:  # noqa: BLE001
-                    _rest_errors[key] = str(e)[:200]
+                jobs.append((venue, sym, mkt))
+    if not jobs:
+        return 0
+
+    sem = asyncio.Semaphore(REST_FILL_CONCURRENCY)
+
+    async def one(venue: str, sym: str, mkt: str) -> int:
+        key = f"{venue}:{sym}:{mkt}"
+        async with sem:
+            if latest(venue, sym, mkt, STALE_SEC):
+                return 0
+            try:
+                q = await loop.run_in_executor(None, get_client(venue).quote, sym, mkt)
+                _put(q)
+                _rest_errors.pop(key, None)
+                return 1
+            except (MarketDataError, Exception) as e:  # noqa: BLE001
+                _rest_errors[key] = str(e)[:200]
+                return 0
+
+    pref = (preferred_venue or "").strip().lower()
+    primary = [j for j in jobs if j[0] == pref] if pref else list(jobs)
+    secondary = [j for j in jobs if j not in primary] if pref else []
+    filled = 0
+    for batch in (primary, secondary):
+        if not batch:
+            continue
+        results = await asyncio.gather(*(one(*j) for j in batch), return_exceptions=True)
+        for r in results:
+            if isinstance(r, int):
+                filled += r
     return filled
 
 
@@ -543,7 +589,12 @@ async def _rest_fallback(symbols):
     """WS 价格过期（>20 秒）时，用官方公共 REST 拉取真实报价；失败只记录错误。"""
     while True:
         await asyncio.sleep(10)
-        await _rest_fill_stale(symbols)
+        try:
+            cfg = await _load_settings()
+            pref = cfg.get("venue")
+        except Exception:  # noqa: BLE001
+            pref = None
+        await _rest_fill_stale(symbols, preferred_venue=pref)
 
 
 async def _force_close_ws(ws, name: str) -> None:
@@ -579,14 +630,14 @@ async def _force_close_ws(ws, name: str) -> None:
             pass
 
 
-async def _kick_zombies(symbols: list[str] | None = None) -> int:
+async def _kick_zombies(symbols: list[str] | None = None, *, preferred_venue: str | None = None) -> int:
     """Close sockets that look connected but have been silent past ZOMBIE_SEC.
 
     recv/grace should already reconnect; this is a safety net when the library
     recv wait never returns while the event loop is otherwise healthy.
     Kicks run in parallel so one hung close cannot stall the other three.
-    After a kick, immediately REST-fill stale marks so the paper book does not
-    wait for the next 10s fallback tick during reconnect.
+    After a kick, immediately REST-fill stale marks (active venue first) so the
+    paper book does not wait for the next 10s fallback tick during reconnect.
     """
     now = time.time()
     with _lock:
@@ -610,7 +661,7 @@ async def _kick_zombies(symbols: list[str] | None = None) -> int:
         await asyncio.gather(*jobs, return_exceptions=True)
         if symbols:
             try:
-                n = await _rest_fill_stale(symbols)
+                n = await _rest_fill_stale(symbols, preferred_venue=preferred_venue)
                 if n:
                     log.info("zombie kick: REST filled %d stale quotes", n)
             except Exception:  # noqa: BLE001
@@ -646,7 +697,7 @@ async def _supervisor():
             tasks = [asyncio.create_task(c) for c in coros]
             cur = want
             log.info("实时行情订阅：%d 个标的 · %s · OKX + Gate（现货 + 永续）", len(syms), interval)
-        await _kick_zombies(syms)
+        await _kick_zombies(syms, preferred_venue=cfg.get("venue"))
         await asyncio.sleep(5)
 
 
