@@ -75,15 +75,15 @@ set QTW_PROXY=http://127.0.0.1:7890
 | 侧栏 | 页面 | 内容 |
 |---|---|---|
 | 🏠 | 总览 | 问候语、账户切换（模拟盘 / 交易所）、模拟权益 / 可用现金 / 选择交易所卡片、“+ 配置 API Key”、最近成交与本周摘要、权益 / 盈亏 / 回撤·胜率 / 敞口 四个快速摘要图 |
-| ▦ | 信号 / 进出场 | 每个币：做多 / 做空 / 空仓、建议市场（现货多 / 永续空）、入场时机、离场与止损时机、建议名义 / 权重 / 风险、K 线 + 均线 + 交叉标记；导出 signals.csv |
+| ▦ | 信号 / 进出场 | 实时 K 线；下方为每币一行的紧凑列表（方向、标记价、建议仓位、止损、状态），点击一行切换图表并打开固定大小的详情弹窗；右上角可下载 signals.csv |
 | 📅 | 回测 | 交易所、K 线根数、均线与止损参数；总收益、期末权益、最大回撤、夏普、胜率、盈亏比、基准；权益 + 回撤曲线；逐笔入场 / 离场时间；三份 CSV |
 | ◔ | 持仓 | 持久化纸面持仓、止损价、权重、未实现盈亏；CSV |
-| 🧾 | 成交 | 纸面成交明细、订单路由日志（纸面 / 实盘被拦截原因）；CSV |
+| 🧾 | 成交 | 开平配对的成交记录（进场价、出场价、单号、手续费、盈亏金额与比例、原因）；持仓中记录的当前价与未实现盈亏随行情实时更新；未成交 / 拦截记录收在可折叠的「路由日志」；CSV |
 | 🛡 | 风控 / 自动交易 | 开关后台自动交易、检查间隔、立即执行、紧急停止、重置账本；风控参数、策略参数、标的池编辑 |
 | ⚙ | API / 设置 | OKX（API Key / Secret / Passphrase / 模拟盘开关）、Gate（API Key / Secret / 合约测试网），加密保存、掩码显示、只读连接测试、删除；实盘开关与闸门状态 |
 | ? | 帮助 | 规则、风控、局限说明 |
 
-右侧面板：持仓（无持仓时显示关注币种）+ 搜索 + 底部提醒卡（最新信号 / 风险提示 / 紧急停止）。
+右侧面板：持仓（每个持仓显示入仓价、当前价、盈亏金额与比例，随官方行情实时更新；无持仓时显示关注币种）+ 搜索 + 底部提醒卡（最新信号 / 风险提示 / 紧急停止）。列表超出一屏时分页，不拉长页面。
 
 ## 已约定规则
 
@@ -124,7 +124,7 @@ set QTW_PROXY=http://127.0.0.1:7890
 * `stream.mode` 与 `quotes_ws_fresh` / `quotes_rest_fresh` 按当前行情源（`settings.venue`）统计：OKX 标记价全部来自 REST 时，不会因为 Gate 的 WebSocket 仍在线而显示 `mode=ws`。顶部行情 pill 与该口径一致（只按当前所判断无响应 / 实时 / 恢复中 / REST 兜底）。`mode` 仍带迟滞：`ws`（当前所有新鲜 WS 报价）→ `recovering`（该所插座仍在 / 刚重连、REST 短暂填隙）→ `rest`（该所 WS 路径真正不可用、仅 REST）→ `down`。重连风暴时不会立刻误报「REST 兜底」。
 * 收盘确认的 K 线（`confirm=1` / `w=true`）写入 SQLite `candles` 表（`data_source=okx_public_ws / gate_public_ws`）；未收盘 K 线只用于图表最后一根的实时跳动。OKX 另订阅永续 `mark-price-candle*`（`market=perp_mark`，`data_source=okx_mark_price_ws`），与成交价永续 K 线分开存放，**不参与信号、止损或回测**，仅在信号详情与实时推送里展示最新一根。
 * 纸面持仓按同一交易所、同一市场的实时价格计价（现货多 → 现货最新价，永续空 → 永续标记价），每 15 秒落库；落库后对 SQLite WAL 做 `PASSIVE` checkpoint（不阻塞并发读），约每 5 分钟再尝试 `TRUNCATE` 真正缩小 `-wal` 文件（此前仅 PASSIVE 时曾观察到数 MB 的空 WAL）。约每 10 分钟裁剪 K 线缓存（每序列保留最近 1200 根）与账本快照（保留最近约 7 天），避免 24/7 无限膨胀。`mark()` 与落库共用锁，避免 WS 计价与 `save` 竞态。
-* 页面通过 **SSE `/api/stream`** 每 1.5 秒收到更新：顶部状态（实时 / 部分重连 / 恢复中 / REST 兜底）、右栏价格与盈亏、总览权益、信号卡片价格、K 线最后一根。
+* 页面通过 **SSE `/api/stream`** 每 1.5 秒收到更新：顶部状态（实时 / 部分重连 / 恢复中 / REST 兜底）、右栏价格与盈亏、总览权益、信号列表价格、K 线最后一根。
 * 冒烟：`GET /api/health` 返回 `ok`、纸面/实盘 `mode`、`venue`、`live_enabled` / `live_gate_open`、`stream.mode`（含 recovering）/ `stream.running`、`quotes_ws_fresh`、`watchdog_running` / `loop_heartbeat_age_sec` / `rest_fill_inflight` / `stall_suspect_count` / `host_freeze_count` / `last_host_freeze_gap_sec`（看门狗线程自身 >15s 未运行＝主机/进程被冻结，如虚拟机暂停；随后的 stall 恢复是冻结后恢复，并非行情代码故障；若自动交易开启，恢复后会立刻补跑一轮信号与止损检查，不等下一个周期） / `last_zombie_kick_age_sec` / `last_zombie_max_age_sec`、`worker.running`、`persist_running`、精简 `paper`（equity / positions / starting_equity）、`btc_perp`（标记价 / age / source）、`time` / `time_sh`；不含密钥或完整设置。`ensure_up.sh` 与 10 分钟打磨例程用它做保活探测；`ensure_up.sh` 还要求 `live_enabled` 与 `live_gate_open` 均为 false 才算 healthy。
 * 监控只读别名（复用现有数据，不另造行情或账本计算）：
   * `GET /api/paper` — 纸面账本快照（权益、敞口、持仓、近期成交、账本）
@@ -178,6 +178,7 @@ set QTW_PROXY=http://127.0.0.1:7890
 | 文件 | 内容 |
 |---|---|
 | `signals.csv` | 每币信号、建议市场、参考价、均线、ATR、截至时间、建议仓位、止损、入场 / 离场时机 |
+| `paper_trades.csv` | 开平配对的成交记录：进场 / 出场价与时间、单号、手续费、盈亏（未平仓为未实现，无官方价则留空）、原因 |
 | `paper_positions.csv` | 当前纸面持仓 |
 | `paper_fills.csv` | 纸面成交明细（价格来源、手续费、已实现盈亏、原因） |
 | `paper_ledger.csv` | 每个周期的权益 / 现金 / 敞口快照 |
