@@ -1,6 +1,6 @@
 /* QTW 前端（无构建步骤的原生 JS 单页应用） */
 const $ = (s, r = document) => r.querySelector(s);
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&", "<": "<", ">": ">", '"': """, "'": "&#39;" }[c]));
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&#38;", "<": "&#60;", ">": "&#62;", '"': "&#34;", "'": "&#39;" }[c]));  // 用数字实体（与命名实体等价），避免推送时被解码
 const S = { status: null, dash: null, signals: null, bt: null, page: "dashboard", rSearch: "", txPage: 0, selSym: null };
 
 const ICON = {
@@ -530,7 +530,7 @@ function signalDetailBody(r) {
   return `<div class="kv">
       <div><small>建议仓位</small><b class="num">${r.target_notional_usdt ? f2(r.target_notional_usdt, 0) + " U" : "—"}</b><em>${r.target_notional_usdt ? "占权益 " + pct(r.target_weight, 1) : "不开仓"}</em></div>
       <div><small>止损价</small><b class="num">${r.stop_price && pxOk(r.stop_price) ? fp(r.stop_price) : "—"}</b><em>${r.risk_usdt ? "最多亏 " + f2(r.risk_usdt) + " U" : "—"}</em></div>
-      <div><small>状态</small><b><span class="pill ${st[1]}">${st[0]}</span></b><em>${r.conflict ? "现货/永续冲突" : "&nbsp;"}</em></div>
+      <div><small>状态</small><b><span class="pill ${st[1]}">${st[0]}</span></b><em>${r.conflict ? "现货/永续冲突" : "&#160;"}</em></div>
     </div>
     <div class="tm">
       <p><i>入场</i><span>${esc(ptText(r.entry_timing))}</span></p>
