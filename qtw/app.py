@@ -433,7 +433,7 @@ def candles(symbol: str, bars: int = 300, market: str = "spot"):
         df = mcache.candles(cfg["venue"], symbol.upper(), st["interval"], bars, market)
     except MarketDataError as e:
         raise HTTPException(502, f"行情获取失败：{e}") from e
-    ind = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"])
+    ind = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1))
     t = ((ind["open_time"] - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1)).astype(int).tolist()
     ch = ind["signal"].ne(ind["signal"].shift(1)) & ind["sma_slow"].notna() & ind["signal"].shift(1).notna()
     markers = [{"time": int(t[i]), "signal": int(ind["signal"].iloc[i])} for i in range(len(ind)) if ch.iloc[i] and i > 0]
@@ -602,7 +602,7 @@ def backtest(body: dict = Body(default={})):
     cfg = S.load()
     if body.get("venue") in ("okx", "gate"):
         cfg["venue"] = body["venue"]
-    for k in ("fast_ma", "slow_ma", "atr_stop_mult"):
+    for k in ("fast_ma", "slow_ma", "atr_stop_mult", "confirm_bars"):
         if body.get(k) is not None:
             cfg["strategy"][k] = body[k]
     cfg = S.validate(cfg)

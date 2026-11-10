@@ -357,6 +357,7 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
 .btn.danger-ghost:hover{background:#fff1f3}
 .form4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .form5{grid-template-columns:repeat(5,minmax(0,1fr))}
+.form6{grid-template-columns:repeat(6,minmax(0,1fr))}
 .two-col{grid-template-columns:repeat(2,minmax(0,1fr))}
 .form-acts{display:flex;gap:8px;flex-wrap:wrap}
 .savebar{position:sticky;bottom:0;z-index:4;display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-top:18px;padding:12px 14px;border-radius:18px;background:rgba(255,255,255,.88);backdrop-filter:blur(8px);box-shadow:0 -10px 30px -20px rgba(60,40,150,.5);border:1px solid #efebfb}
@@ -364,8 +365,8 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
 .kvlist{display:grid;grid-template-columns:auto 1fr;gap:8px 16px;font-size:13px;margin:4px 0 0}
 .kvlist dt{color:var(--muted);font-weight:600}.kvlist dd{margin:0;color:var(--ink)}
 .seg button:hover:not(.on){background:#fff}
-@media (max-width:1100px){.risk-top,.two-col{grid-template-columns:minmax(0,1fr)}.form4{grid-template-columns:repeat(2,minmax(0,1fr))}.form5{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media (max-width:760px){.form4,.form5{grid-template-columns:minmax(0,1fr)}.chart-legend .muted{margin-left:0}.status-group{flex-wrap:wrap}}
+@media (max-width:1100px){.risk-top,.two-col{grid-template-columns:minmax(0,1fr)}.form4{grid-template-columns:repeat(2,minmax(0,1fr))}.form5,.form6{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:760px){.form4,.form5,.form6{grid-template-columns:minmax(0,1fr)}.chart-legend .muted{margin-left:0}.status-group{flex-wrap:wrap}}
 
 /* 右栏抽屉按钮（中等宽度才显示） */
 .rail-btn{display:none}
