@@ -244,8 +244,8 @@ class PaperBook:
             return row
 
     def last_stop_time(self, symbol: str) -> str:
-        """该标的最近一次 ATR 止损平仓的成交时间（UTC ISO）；没有则返回空串。"""
-        r = self._q("SELECT time FROM paper_fills WHERE symbol=? AND action='close' AND reason='ATR止损' "
+        """该标的最近一次 ATR 止损或止盈（两者都会锁定同向再入场）平仓的成交时间（UTC ISO）；没有则返回空串。"""
+        r = self._q("SELECT time FROM paper_fills WHERE symbol=? AND action='close' AND reason IN ('ATR止损','止盈') "
                     "ORDER BY fill_id DESC LIMIT 1", (symbol,))
         return r[0]["time"] if r else ""
 

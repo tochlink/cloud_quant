@@ -36,6 +36,10 @@ DEFAULTS: dict[str, Any] = {
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
         "pyramid_frac": 0.5,
+        # 2026-11-10：可选固定止盈（默认关闭）。目标价 = 入场价 ± tp_r × R（R = 初始止损距离 = atr_stop_mult × ATR），触及全部平仓。
+        # tp_reentry = False：止盈后像止损一样锁定，信号改变前不再开同向仓；True：下一根若信号仍在则按新 ATR 重新开仓。0=关闭
+        "tp_r": 0.0,
+        "tp_reentry": False,
         "lookback_bars": 200,
     },
     "risk": {
@@ -138,6 +142,10 @@ def validate(s: dict) -> dict:
         raise ValueError("浮盈加仓触发倍数需为 0（关闭）或 0.5–5 R")
     if not 0 <= st["pyramid_frac"] <= 1:
         raise ValueError("加仓比例需在 0–1 之间")
+    st["tp_r"] = float(st.get("tp_r", 0) or 0)
+    if st["tp_r"] and not 0.5 <= st["tp_r"] <= 20:
+        raise ValueError("止盈倍数需为 0（关闭）或 0.5–20 R")
+    st["tp_reentry"] = bool(st.get("tp_reentry", False))
     rk["max_risk_per_trade"] = float(rk["max_risk_per_trade"])
     rk["max_weight_per_name"] = float(rk["max_weight_per_name"])
     if not 0 < rk["max_risk_per_trade"] <= 0.05:

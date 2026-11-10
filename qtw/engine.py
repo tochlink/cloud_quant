@@ -63,6 +63,15 @@ def persist_marks() -> bool:
     return False
 
 
+def take_profit_hit(p, px: float, st: dict) -> bool:
+    """固定止盈（与回测同一公式）：目标价 = 入场价 ± tp_r × |入场价 − 止损价|；tp_r = 0 关闭。"""
+    k = float(st.get("tp_r", 0) or 0)
+    R = abs(p.entry_price - p.stop_price)
+    if k <= 0 or R <= 0:
+        return False
+    return p.direction * (px - (p.entry_price + p.direction * k * R)) >= 0
+
+
 def poll_stops(cfg: dict | None = None) -> list[str]:
     """Worker 周期之间用最新公共价检查 ATR 止损，避免最多等 interval_sec 才离场。
 
@@ -86,15 +95,18 @@ def poll_stops(cfg: dict | None = None) -> list[str]:
             bk.mark(s, px, iso(q.ts), q.data_source)
             touched = True
             hit = (p.side == "long" and px <= p.stop_price) or (p.side == "short" and px >= p.stop_price)
-            if not hit:
+            tp = not hit and take_profit_hit(p, px, cfg.get("strategy") or {})
+            if not (hit or tp):
                 continue
             side = p.side
             qty = p.qty
             mkt = p.market
-            bk.blocks[s] = p.direction
-            pnl = bk.close(s, px, kind, "ATR止损", venue, data_source=q.data_source, price_time=iso(q.ts))
+            why = "ATR止损" if hit else "止盈"
+            if hit or not (cfg.get("strategy") or {}).get("tp_reentry", False):
+                bk.blocks[s] = p.direction
+            pnl = bk.close(s, px, kind, why, venue, data_source=q.data_source, price_time=iso(q.ts))
             _route(cfg, s, mkt, "close_long" if side == "long" else "close_short", qty, px)
-            events.append(f"{s} 平{('多' if side == 'long' else '空')} @ {px:g}（ATR止损·实时，盈亏 {pnl:+.2f}）")
+            events.append(f"{s} 平{('多' if side == 'long' else '空')} @ {px:g}（{why}·实时，盈亏 {pnl:+.2f}）")
         if events:
             bk.snapshot("；".join(events)[:240])
             export_paper_csv(cfg)
@@ -371,6 +383,10 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
             elif (p.side == "long" and px <= p.stop_price) or (p.side == "short" and px >= p.stop_price):
                 reason = "ATR止损"
                 bk.blocks[s] = p.direction
+            elif take_profit_hit(p, px, st):
+                reason = "止盈"
+                if not st.get("tp_reentry", False):
+                    bk.blocks[s] = p.direction
             if reason:
                 pnl = bk.close(s, px, kind, reason, venue, data_source=q.data_source, price_time=iso(q.ts))
                 _route(cfg, s, p.market, "close_long" if p.side == "long" else "close_short", p.qty, px)

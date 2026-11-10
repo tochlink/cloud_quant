@@ -36,6 +36,7 @@ class Trade:
     qty: float
     notional_usdt: float
     stop_price: float
+    target_price: float = float("nan")  # 止盈价（tp_r = 0 时为 NaN）
     exit_time: str = ""
     exit_price: float = float("nan")
     exit_reason: str = ""
@@ -110,6 +111,9 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     pos: dict[str, Trade] = {}
     added: set[str] = set()  # 已加过仓的持仓（每笔最多一次）
     pyr_k, pyr_f = float(st.get("pyramid_r", 0) or 0), float(st.get("pyramid_frac", 0) or 0)
+    # 可选：固定止盈（默认关闭，tp_r = 0）。目标价 = 入场价 ± tp_r × R，R = |入场价 − 初始止损| = atr_stop_mult × ATR；
+    # 触及即全部平仓。tp_reentry = False 时止盈后与止损一样锁定，直到信号改变才允许再开同向仓。
+    tp_r, tp_re = float(st.get("tp_r", 0) or 0), bool(st.get("tp_reentry", False))
     entry_i: dict[str, int] = {}
     blocked: dict[str, int] = {}
     trades: list[Trade] = []
@@ -175,7 +179,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
             qty = notional / px
             f = notional * FEE[market_of(sg)]
             realized -= f
-            pos[s] = Trade(s, market_of(sg), side_of(sg), when, float(px), qty, notional, z.stop_price, fees_usdt=f)
+            tgt = float(px) + (1 if sg > 0 else -1) * tp_r * abs(float(px) - z.stop_price) if tp_r > 0 else float("nan")
+            pos[s] = Trade(s, market_of(sg), side_of(sg), when, float(px), qty, notional, z.stop_price, tgt, fees_usdt=f)
             entry_i[s] = i
         # 2b) 可选：浮盈加仓（默认关闭，pyramid_r = 0）。前一根收盘浮盈 ≥ k×R（R = |入场价 − 止损|）
         #     时在本根开盘加仓一次：名义 = min(f × 原名义, 单币权重余量, 总敞口余量)；入场价改为加权均价，止损不动。
@@ -201,16 +206,25 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
                 t.fees_usdt += add_n * FEE[t.market]
                 room_add -= add_n
                 added.add(s)
-        # 3) 盘中止损
+        # 3) 盘中止损 / 止盈。开盘已越过止盈价 → 按开盘价止盈；否则同一根同时触及时保守地先算止损。
         for s in list(pos):
             t = pos[s]
             o, h, lo = P(t.side, "open", s)[i], P(t.side, "high", s)[i], P(t.side, "low", s)[i]
-            if t.side == "long" and lo <= t.stop_price:
+            tg = t.target_price
+            if tp_r > 0 and ((t.side == "long" and o >= tg) or (t.side == "short" and o <= tg)):
+                close(s, o, when, "止盈", i)
+                if not tp_re:
+                    blocked[s] = 1 if t.side == "long" else -1
+            elif t.side == "long" and lo <= t.stop_price:
                 close(s, min(o, t.stop_price), when, "ATR止损", i)
                 blocked[s] = 1
             elif t.side == "short" and h >= t.stop_price:
                 close(s, max(o, t.stop_price), when, "ATR止损", i)
                 blocked[s] = -1
+            elif tp_r > 0 and ((t.side == "long" and h >= tg) or (t.side == "short" and lo <= tg)):
+                close(s, tg, when, "止盈", i)
+                if not tp_re:
+                    blocked[s] = 1 if t.side == "long" else -1
         # 4) 收盘计价
         eq = realized + sum(upnl(t, P(t.side, "close", s)[i]) for s, t in pos.items())
         g = sum(abs(t.qty) * P(t.side, "close", s)[i] for s, t in pos.items())
@@ -255,6 +269,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         "avg_bars_held": float(np.mean([t.bars_held for t in closed])) if closed else float("nan"),
         "fees_usdt": sum(t.fees_usdt for t in closed + open_trades),
         "stop_exits": sum(1 for t in closed if t.exit_reason == "ATR止损"),
+        "take_profit_exits": sum(1 for t in closed if t.exit_reason == "止盈"),
         "avg_gross_exposure_pct": float((ec["gross_exposure"] / ec["equity"]).mean()),
         "benchmark": f"{btc} 现货买入持有", "benchmark_return": bh,
         "signal_rule": "combine(spot_sma, perp_sma): 现货多且永续不空→现货多；永续空且现货不多→永续空；冲突→空仓",
@@ -264,7 +279,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": round(FEE["spot"] * 10_000, 4), "spot_taker_bps": round(FEE["spot"] * 10_000, 4), "perp_taker_bps": round(FEE["perp"] * 10_000, 4), "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
-        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "max_risk_per_trade": rk["max_risk_per_trade"],
+        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
     }
     return {"summary": summary, "equity": ec.drop(columns=["peak"]), "bar_open_times": [pd.Timestamp(t).isoformat() for t in times],
