@@ -32,6 +32,10 @@ DEFAULTS: dict[str, Any] = {
         # 2026-11-10：空头熔断。影子「只做空」账本最近 N 根已平仓合计亏损时暂停新开空单（因果，不平已有仓）。
         # 6/12 段不重叠窗口：前半段从 {60,120,240} 选出 60，后半段（未参与选择）在 OKX/Gate、4/14bps 下均明显优于不熔断。0=关闭
         "short_breaker_bars": 60,
+        # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
+        # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
+        "pyramid_r": 0.0,
+        "pyramid_frac": 0.5,
         "lookback_bars": 200,
     },
     "risk": {
@@ -111,6 +115,12 @@ def validate(s: dict) -> dict:
     st["short_breaker_bars"] = int(st.get("short_breaker_bars", 0) or 0)
     if st["short_breaker_bars"] and not 10 <= st["short_breaker_bars"] <= 500:
         raise ValueError("空头熔断回看根数需为 0（关闭）或 10–500")
+    st["pyramid_r"] = float(st.get("pyramid_r", 0) or 0)
+    st["pyramid_frac"] = float(st.get("pyramid_frac", 0.5) or 0)
+    if st["pyramid_r"] and not 0.5 <= st["pyramid_r"] <= 5:
+        raise ValueError("浮盈加仓触发倍数需为 0（关闭）或 0.5–5 R")
+    if not 0 <= st["pyramid_frac"] <= 1:
+        raise ValueError("加仓比例需在 0–1 之间")
     rk["max_risk_per_trade"] = float(rk["max_risk_per_trade"])
     rk["max_weight_per_name"] = float(rk["max_weight_per_name"])
     if not 0 < rk["max_risk_per_trade"] <= 0.05:

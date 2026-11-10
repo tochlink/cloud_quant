@@ -103,3 +103,23 @@ def test_no_synthetic_data_in_app_code():
     for f in root.rglob("*.py"):
         txt = f.read_text(encoding="utf-8")
         assert "synth(" not in txt and "np.random" not in txt and "random." not in txt, f
+
+
+def test_pyramid_off_by_default_and_bounded():
+    c = cfg()
+    assert c["strategy"]["pyramid_r"] == 0.0
+    data = book()
+    base = run_backtest(data, c)
+    c2 = {**c, "strategy": {**c["strategy"], "pyramid_r": 1.0, "pyramid_frac": 0.5}}
+    r = run_backtest(data, c2)
+    eq0 = float(c["risk"]["starting_equity_usdt"])
+    # 加仓后单币名义不超过权重上限（按入场根权益，留出价格波动余量）
+    peak = r["equity"]["equity"].max()
+    for _, t in r["trades"].iterrows():
+        assert t["notional_usdt"] <= float(c["risk"]["max_weight_per_name"]) * max(peak, eq0) * 1.05
+    # 关闭时与原逻辑一致；打开后结果确实改变（有加仓发生）
+    c3 = {**c, "strategy": {**c["strategy"], "pyramid_r": 0.0}}
+    assert run_backtest(data, c3)["summary"]["total_return"] == base["summary"]["total_return"]
+    assert r["summary"]["total_return"] != base["summary"]["total_return"]
+    with pytest.raises(ValueError):
+        S.validate({**c, "strategy": {**c["strategy"], "pyramid_r": 0.2}})

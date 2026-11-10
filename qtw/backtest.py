@@ -105,6 +105,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     warm = max(st["slow_ma"], st["atr_period"] + 1)
     realized = start_eq
     pos: dict[str, Trade] = {}
+    added: set[str] = set()  # 已加过仓的持仓（每笔最多一次）
+    pyr_k, pyr_f = float(st.get("pyramid_r", 0) or 0), float(st.get("pyramid_frac", 0) or 0)
     entry_i: dict[str, int] = {}
     blocked: dict[str, int] = {}
     trades: list[Trade] = []
@@ -118,6 +120,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     def close(s: str, px: float, when: str, reason: str, i: int):
         nonlocal realized
         t = pos.pop(s)
+        added.discard(s)
         f = abs(t.qty * px) * fee
         g = upnl(t, px)
         realized += g - f
@@ -171,6 +174,30 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
             realized -= f
             pos[s] = Trade(s, market_of(sg), side_of(sg), when, float(px), qty, notional, z.stop_price, fees_usdt=f)
             entry_i[s] = i
+        # 2b) 可选：浮盈加仓（默认关闭，pyramid_r = 0）。前一根收盘浮盈 ≥ k×R（R = |入场价 − 止损|）
+        #     时在本根开盘加仓一次：名义 = min(f × 原名义, 单币权重余量, 总敞口余量)；入场价改为加权均价，止损不动。
+        if pyr_k > 0 and pyr_f > 0:
+            room_add = eq_prev * float(rk["max_gross_exposure"]) - sum(abs(t.qty) * P(t.side, "open", q)[i] for q, t in pos.items())
+            for s in list(pos):
+                t = pos[s]
+                if entry_i[s] == i or s in added:
+                    continue
+                d = 1 if t.side == "long" else -1
+                R = abs(t.entry_price - t.stop_price)
+                if R <= 0 or d * (P(t.side, "close", s)[i - 1] - t.entry_price) < pyr_k * R:
+                    continue
+                px = P(t.side, "open", s)[i]
+                add_n = min(pyr_f * t.notional_usdt, eq_prev * float(rk["max_weight_per_name"]) - abs(t.qty) * px, room_add)
+                if add_n < 1.0:
+                    continue
+                aq = add_n / px
+                realized -= add_n * fee
+                t.entry_price = (t.qty * t.entry_price + aq * px) / (t.qty + aq)
+                t.qty += aq
+                t.notional_usdt += add_n
+                t.fees_usdt += add_n * fee
+                room_add -= add_n
+                added.add(s)
         # 3) 盘中止损
         for s in list(pos):
             t = pos[s]
