@@ -333,7 +333,7 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
 .chart-legend i{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:3px}
 .chart-legend .muted{margin-left:auto}
 .sig-title{align-items:flex-end;gap:16px;margin-bottom:14px}
-.sig-title .note{margin-top:4px;max-width:900px}
+.sig-title .note{margin-top:4px;max-width:900px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sig .verdict{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:3px}
 .sig .verdict small{font-size:11px;color:var(--muted);font-weight:600}
 .sig details{margin-top:8px;border-top:1px dashed #e7e2f8;padding-top:6px}
@@ -491,13 +491,13 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
 .trades-tbl td.time-c{font-size:12px;line-height:1.35}
 .trades-tbl .sym-line{display:flex;gap:8px;align-items:center;min-width:0}
 .trades-tbl .sym-line>div{min-width:0}
-.trades-tbl td.pnl-cell,.pos-tbl td:last-child,[data-live-pnl-txt]{white-space:pre-line;line-height:1.25;font-variant-numeric:tabular-nums}
+.trades-tbl td.pnl-cell,.pos-tbl td.col-pnl,[data-live-pnl-txt]{white-space:pre-line;line-height:1.25;font-variant-numeric:tabular-nums}
 .trades-tbl td.pnl-cell{overflow:visible;text-align:right;padding-right:10px}
 .trades-tbl .reason{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px;color:var(--ink-2);font-weight:500;margin-top:4px;max-width:100%}
 .trades-tbl .exit-dash{display:block}
 .trades-tbl .exit-live{display:block;margin-top:2px;font-size:10.5px;font-weight:600;color:var(--muted);letter-spacing:0}
 .r-row{padding:6px 4px}
-.pos-tbl td.num:last-child{white-space:nowrap}
+.pos-tbl td.num.col-pnl{white-space:nowrap}
 @media (max-width:1500px){
   .pos-tbl .col-venue,.pos-tbl .col-etime,.pos-tbl .col-notional{display:none}
 }
@@ -542,7 +542,7 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
 }
 
 @media (max-width:760px){
-  .sig-head,.sig-row{grid-template-columns:minmax(90px,1.1fr) 52px minmax(64px,.9fr) minmax(64px,.9fr) minmax(64px,.9fr) minmax(80px,auto);min-width:520px}
+  .sig-head,.sig-row{grid-template-columns:minmax(0,1.1fr) 52px minmax(0,.8fr) minmax(0,.7fr) minmax(108px,1.1fr) minmax(4.8em,auto);min-width:0}
   .sig-list{overflow-x:auto}
   .sig-page .chart-panel{min-height:140px}
 }
@@ -580,3 +580,40 @@ i[data-icon]{display:inline-flex;align-items:center;justify-content:center;line-
   .set-nav{flex-direction:row;flex-wrap:wrap;width:auto;gap:6px}
   .set-nav button{padding:8px 12px}
 }
+
+
+.fee-title{margin:16px 0 8px;align-items:flex-end;flex-wrap:wrap;gap:8px 16px}
+.fee-title h4{margin:0;font-size:13.5px;font-weight:700}
+.field-toggle{display:flex;align-items:center;gap:8px;min-height:42px;padding-top:18px}
+.pos-acts{display:flex;gap:6px;flex-wrap:nowrap;justify-content:flex-end}
+.pos-tbl .col-acts{white-space:nowrap;width:1%;padding-right:8px}
+.pos-tbl .pill + .pill{margin-left:6px}
+.r-row{align-items:flex-start}
+.r-row-main{display:flex;align-items:center;gap:12px;flex:1;min-width:0;border:0;background:none;padding:0;text-align:left;color:inherit;cursor:pointer}
+.r-acts{display:flex;flex-direction:column;gap:4px;flex:none;margin-left:4px}
+.r-acts .btn{padding:3px 8px;font-size:11px;border-radius:8px}
+.reason-pill{font-size:10.5px;padding:1px 8px;vertical-align:middle}
+.sig-list{overflow:auto}
+#sigPager{flex:none}
+.sig-head,.sig-row{grid-template-columns:minmax(0,1.15fr) 56px minmax(0,.85fr) minmax(0,.75fr) minmax(118px,1.2fr) minmax(4.8em,auto)}
+.sig-row .sig-st{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:4.8em;overflow:visible}
+.sig-row .sig-st .pill{flex:none;overflow:visible;white-space:nowrap;font-size:11.5px;line-height:1.2;max-width:none}
+.sig-row .sig-st small{display:block;font-size:10px;color:var(--muted);font-weight:500;line-height:1.2}
+.sig-row .sig-stop{min-width:0}
+.sig-row .sig-stop b{white-space:nowrap}
+.sig-page .chart-panel{flex:1 1 40%;min-height:140px}
+.sig-page .sig-panel{flex:1 1 42%;min-height:200px}
+@media (max-width:1500px){
+  .pos-tbl .col-weight{display:none}
+}
+/* 信号重算节奏 + 信号变化记录 */
+.sig-cycle{margin-top:4px;font-size:12px;color:#6f6d8f}
+.sig-cycle b{color:#2d2a4a;font-weight:700}
+.sig-title>div{min-width:0}
+.sig-cycle .sig-log-link{font-size:12px;font-weight:700;color:var(--violet);padding:0 0 0 6px;background:none;border:0;cursor:pointer}
+.sig-log-wrap{max-height:min(60vh,460px);overflow:auto;margin:12px 0}
+.sig-log{width:100%;border-collapse:collapse;font-size:12.5px}
+.sig-log th,.sig-log td{text-align:left;padding:7px 8px;border-bottom:1px solid #eeedf6;vertical-align:top;white-space:nowrap}
+.sig-log td.sig-log-act{white-space:normal}
+.sig-log th{position:sticky;top:0;background:#fff;color:#77759a;font-weight:600}
+.sig-log-act{max-width:360px;color:#4a4769}
