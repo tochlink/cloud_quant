@@ -50,6 +50,10 @@ class Trade:
     resizes: int = 0  # 调仓次数（rebalance_band > 0 时）
 
 
+# 空头熔断影子账本的固定仓位口径（= 默认风控参数）
+SHADOW_SIZING = {"starting_equity_usdt": 1000.0, "max_risk_per_trade": 0.05, "max_weight_per_name": 0.20, "max_gross_exposure": 1.0}
+
+
 def short_breaker(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     """空头熔断（因果）：用同一套规则跑一本「只做空」的影子账本；
     若最近 N 根 K 线内已平仓的影子空单合计亏损（<0），则暂停新开空单。
@@ -58,7 +62,10 @@ def short_breaker(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     N = int(cfg["strategy"].get("short_breaker_bars", 0) or 0)
     if not N:
         return {"mask": {}, "blocked_now": False, "trailing_pnl": 0.0, "bars": 0}
-    c = {**cfg, "strategy": {**cfg["strategy"], "short_breaker_bars": 0}, "risk": {**cfg["risk"], "allow_spot_long": False, "allow_perp_short": True}}
+    # 影子账本固定用标准仓位口径（与账户实际仓位上限无关）：否则熔断判断依赖 USDT 盈亏的正负号，
+    # 改动单笔风险 / 单币权重会让影子盈亏在 0 附近翻号，整段回测结果跳变（2026-11-10 诊断，见 docs）。
+    c = {**cfg, "strategy": {**cfg["strategy"], "short_breaker_bars": 0},
+         "risk": {**cfg["risk"], **SHADOW_SIZING, "allow_spot_long": False, "allow_perp_short": True}}
     res = run_backtest(data, c)
     tr, keys = res["trades"], res["bar_open_times"]
     pnl = pd.Series(0.0, index=keys)
