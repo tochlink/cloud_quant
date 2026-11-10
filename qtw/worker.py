@@ -40,6 +40,28 @@ def _wait_next(interval: float) -> None:
             return
 
 
+BAR_CLOSE_GRACE_SEC = 5.0  # 交易所发布刚收盘 K 线需要几秒；拿不到时本周期用上一根，下个周期再试
+
+
+def _next_wait(interval_sec: float, bar_interval: str, now: float | None = None) -> float:
+    """下一次周期的等待秒数：常规 interval_sec，但若 K 线收盘（+宽限）更早就提前醒来。
+
+    研究（docs/STRATEGY_FORMULAS.md 2026-11-10 14:40）表明 4h 信号入场推迟 1 小时整段少约 30 点，
+    所以新 K 线收盘后应尽快跑周期，而不是最多再等一个 interval_sec。"""
+    from .market.base import INTERVAL_MS
+    base = max(0.0, float(interval_sec))
+    step = INTERVAL_MS.get(bar_interval)
+    if not step:
+        return base
+    t = time.time() if now is None else float(now)
+    step_s = step / 1000.0
+    last_close = int(t // step_s) * step_s
+    to_close = last_close + BAR_CLOSE_GRACE_SEC - t
+    if to_close <= 0:
+        to_close += step_s
+    return min(base, to_close) if to_close > 1.0 else base
+
+
 def _loop():
     from .engine import run_cycle
     while not _stop.is_set():
@@ -52,8 +74,9 @@ def _loop():
             _state["last_error"] = str(e)[:300]
         now = utcnow()
         _state.update(last_run=iso(now), last_run_la=la(now), last_run_sh=sh(now))
-        _state["next_run"] = time.time() + cfg["worker"]["interval_sec"]
-        _wait_next(cfg["worker"]["interval_sec"])
+        wait = _next_wait(cfg["worker"]["interval_sec"], cfg.get("strategy", {}).get("interval", ""))
+        _state["next_run"] = time.time() + wait
+        _wait_next(wait)
     _state["running"] = False
 
 
