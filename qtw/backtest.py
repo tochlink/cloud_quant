@@ -54,7 +54,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     excluded = sorted((set(spot_d) | set(perp_d)) - set(syms))
     if not syms:
         raise ValueError("没有同时具备足够现货与永续历史 K 线的标的")
-    ind = {m: {s: indicators(src[s], st["fast_ma"], st["slow_ma"], st["atr_period"]).set_index("open_time") for s in syms}
+    ind = {m: {s: indicators(src[s], st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1)).set_index("open_time") for s in syms}
            for m, src in (("spot", spot_d), ("perp", perp_d))}
     idx = None
     for m in ind.values():
@@ -204,7 +204,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": fee_bps, "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
-        "atr_stop_mult": st["atr_stop_mult"], "max_risk_per_trade": rk["max_risk_per_trade"],
+        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
     }
     return {"summary": summary, "equity": ec.drop(columns=["peak"]),

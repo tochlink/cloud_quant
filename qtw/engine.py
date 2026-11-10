@@ -133,7 +133,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         for m in ("spot", "perp"):
             df = frames.get(m, {}).get(sym)
             if df is not None and len(df) >= st["slow_ma"] + 1:
-                ind[m] = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"])
+                ind[m] = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1))
                 ind[m].attrs.update(df.attrs)
         if not ind:
             rows.append({"symbol": sym, "error": "；".join(v for k, v in errs.items() if k.startswith(sym + ":")) or "K 线不足"})

@@ -25,6 +25,7 @@ DEFAULTS: dict[str, Any] = {
         "slow_ma": 60,
         "atr_period": 14,
         "atr_stop_mult": 2.0,
+        "confirm_bars": 2,  # 2026-11-10：OKX+Gate 各 3 段滚动样本外均优于 1
         "lookback_bars": 200,
     },
     "risk": {
@@ -95,6 +96,9 @@ def validate(s: dict) -> dict:
     st["atr_stop_mult"] = float(st["atr_stop_mult"])
     if not 0.5 <= st["atr_stop_mult"] <= 10:
         raise ValueError("ATR 止损倍数需在 0.5–10 之间")
+    st["confirm_bars"] = int(st.get("confirm_bars", 1))
+    if not 1 <= st["confirm_bars"] <= 5:
+        raise ValueError("信号确认根数需在 1–5 之间")
     rk["max_risk_per_trade"] = float(rk["max_risk_per_trade"])
     rk["max_weight_per_name"] = float(rk["max_weight_per_name"])
     if not 0 < rk["max_risk_per_trade"] <= 0.05:
