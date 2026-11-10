@@ -13,6 +13,31 @@ _state = {"running": False, "last_run": "", "last_run_la": "", "last_run_sh": ""
 _stop = threading.Event()
 _thread: threading.Thread | None = None
 _lock = threading.Lock()
+_kick = threading.Event()  # set after a host/process freeze: re-run the cycle now
+
+
+def kick(reason: str = "") -> bool:
+    """Ask a running worker to run its next cycle immediately (e.g. resume after a machine pause).
+
+    Returns False when the worker is not running (auto-trading off) so nothing happens.
+    """
+    if not (_thread and _thread.is_alive() and not _stop.is_set()):
+        return False
+    log.info("worker kick: %s", reason or "requested")
+    _kick.set()
+    return True
+
+
+def _wait_next(interval: float) -> None:
+    """Sleep until the next cycle, a kick, or stop — in short slices so a kick lands fast."""
+    deadline = time.time() + max(0.0, float(interval))
+    while not _stop.is_set():
+        left = deadline - time.time()
+        if left <= 0:
+            return
+        if _kick.wait(min(1.0, left)):
+            _kick.clear()
+            return
 
 
 def _loop():
@@ -28,7 +53,7 @@ def _loop():
         now = utcnow()
         _state.update(last_run=iso(now), last_run_la=la(now), last_run_sh=sh(now))
         _state["next_run"] = time.time() + cfg["worker"]["interval_sec"]
-        _stop.wait(cfg["worker"]["interval_sec"])
+        _wait_next(cfg["worker"]["interval_sec"])
     _state["running"] = False
 
 

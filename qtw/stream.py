@@ -117,6 +117,7 @@ _rest_fill_started_at: float = 0.0  # wall time when depth went 0→1 (stuck-fil
 _host_freeze_count = 0  # watchdog-thread gaps > HOST_FREEZE_GAP_SEC (process/host frozen)
 _last_host_freeze_at: float = 0.0
 _last_host_freeze_gap_sec: float | None = None
+_on_host_freeze: list = []  # callbacks(gap_sec) run after a detected host/process freeze
 _stall_suspect_count = 0  # watchdog mass-abort / stall recoveries (health polish)
 _early_stall_fill_count = 0  # sync REST fills while loop heartbeat was stalled
 _last_early_stall_fill_at: float = 0.0  # wall time of last sync stall fill
@@ -1174,6 +1175,11 @@ def _note_watchdog_gap(prev: float, now: float) -> bool:
         "following stall recovery is resume-after-freeze, not a stream bug",
         gap, HOST_FREEZE_GAP_SEC, _host_freeze_count,
     )
+    for cb in list(_on_host_freeze):
+        try:
+            cb(gap)
+        except Exception:  # noqa: BLE001
+            log.exception("host-freeze callback failed")
     return True
 
 

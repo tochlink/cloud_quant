@@ -114,6 +114,11 @@ def _start_persist():
     _persist_thread.start()
 
 
+def _kick_after_freeze(gap: float) -> None:
+    """机器暂停恢复后立刻跑一轮（信号 + 止损），不必等下一个 interval；自动交易关闭时什么也不做。"""
+    worker.kick(f"resume after {gap:.0f}s host freeze")
+
+
 def _stop_persist(timeout: float = 8.0) -> None:
     """Signal mark-persist / stop-poll to exit and join before clearing the book.
 
@@ -135,6 +140,8 @@ async def lifespan(_app: FastAPI):
     if bk.migrated:
         log.info("已把旧版 CSV 纸面账本迁移到 SQLite：%s", bk.migrated)
     stream.on_quote(engine.mark_from_stream)
+    if _kick_after_freeze not in stream._on_host_freeze:
+        stream._on_host_freeze.append(_kick_after_freeze)
     stream.start()
     _start_persist()
     # Tests set QTW_FORBID_LIVE=1 (conftest). Skip auto worker so lifespan does not
