@@ -274,7 +274,7 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
 
 /* ---------- 总览 ---------- */
 .dash{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto;gap:clamp(10px,1.2vw,20px);align-items:stretch;flex:1;min-height:0;overflow:hidden}
-.hero{position:relative;overflow:hidden;border-radius:24px;padding:clamp(14px,1.8vh,28px) clamp(16px,2vw,32px);color:#fff;background:linear-gradient(135deg,#2c2668 0%,#3d2f8f 55%,#5a48c4 100%);box-shadow:0 24px 44px -24px rgba(30,20,90,.85);display:grid;grid-template-columns:auto minmax(0,1fr);gap:24px;align-items:center;min-height:0}
+.hero{position:relative;overflow:hidden;border-radius:24px;padding:clamp(14px,1.8vh,28px) clamp(16px,2vw,32px);color:#fff;background:linear-gradient(135deg,#2c2668 0%,#3d2f8f 55%,#5a48c4 100%);box-shadow:0 24px 44px -24px rgba(30,20,90,.85);display:grid;grid-template-columns:auto minmax(0,1fr);gap:24px;align-items:center;min-height:168px;flex:0 0 auto}
 .hero svg.deco{position:absolute;inset:0;width:100%;height:100%;stroke:none}
 .hero>*:not(.deco){position:relative}
 .h-lbl{font-size:12px;letter-spacing:.6px;opacity:.75;font-weight:600}
@@ -282,10 +282,41 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
 .h-chg{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12.5px;opacity:.95}
 .h-chg .chg{padding:4px 10px;border-radius:999px;font-weight:700}
 .h-chg .chg.up{background:rgba(94,224,214,.2);color:#8ff5ea}.h-chg .chg.down{background:rgba(255,120,140,.2);color:#ffb3c0}
-.hero-spark{align-self:stretch;display:flex;flex-direction:column;min-width:0}
+.hero-spark{align-self:stretch;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
 .hero-spark svg{flex:1;width:100%;min-height:90px;stroke:none}
 .hero-spark svg text{fill:#c9c2f5}
-.hero-spark .cap{font-size:11px;opacity:.6;text-align:right;margin-top:4px}
+.hero-spark .cap{font-size:11px;opacity:.6;text-align:right;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.eq-hover{position:relative;flex:1;min-width:0;min-height:90px;touch-action:none;cursor:crosshair}
+.eq-hover svg.eq-svg{width:100%;height:100%;display:block;min-height:90px}
+.eq-hover .eq-cross[hidden],.eq-tip[hidden]{display:none!important}
+.eq-tip{position:absolute;z-index:8;min-width:188px;max-width:min(248px,calc(100% - 8px));padding:7px 10px;border-radius:12px;background:#fff;color:#2c2a63;box-shadow:0 12px 28px -8px rgba(20,16,60,.35),0 0 0 1px rgba(75,58,166,.1);pointer-events:none;font-size:12px;line-height:1.35;font-weight:500}
+.eq-tip-t{font-size:11px;color:#6f6b93;font-weight:600;margin-bottom:1px}
+.eq-tip-eq{font-size:13px;font-weight:700;margin-bottom:1px}
+.eq-tip-row{font-size:11.5px}
+.eq-tip-row.pos{color:#17856a}
+.eq-tip-row.neg{color:#c43d55}
+.eq-tip-evs{margin-top:5px;padding-top:5px;border-top:1px solid #efeef8}
+.eq-ev{display:flex;gap:7px;align-items:flex-start;margin-top:4px}
+.eq-ev:first-child{margin-top:0}
+.eq-dot{width:8px;height:8px;border-radius:50%;margin-top:4px;flex:none;box-shadow:0 0 0 2px rgba(44,42,99,.06)}
+.eq-ev-sub{font-size:11px;color:#6f6b93;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px}
+.eq-tip-light{box-shadow:0 12px 28px -8px rgba(20,16,60,.22),0 0 0 1px #ece8fd}
+.chart-box .eq-tip{z-index:9}
+@media (max-height:800px){
+  .eq-tip{padding:6px 9px;font-size:11.5px;min-width:176px}
+  .eq-tip-eq{font-size:12.5px}
+}
+.fit.dash .hero{flex:0 0 auto;min-height:168px;max-height:min(220px,28vh)}
+@media (max-height:800px){
+  .fit.dash .hero{height:164px;max-height:164px;min-height:164px;flex:none;padding:12px 20px}
+  .fit.dash .stats{gap:8px}
+  .fit.dash .stat{padding:8px 14px}
+  .fit.dash .tx-panel{min-height:92px}
+  .fit.dash .facts{flex:0 0 100px;min-height:100px;max-height:100px;overflow:hidden}
+  .fit.dash .tile{min-height:92px;padding:10px 14px 8px}
+  .fit.dash .tile .tv{font-size:18px;margin-top:2px}
+  .fit.dash .tile .tc{display:none}
+}
 .stats{display:grid;grid-template-rows:repeat(3,auto);gap:10px;align-content:stretch}
 .stat{background:#fff;border-radius:18px;padding:12px 16px;border:1px solid #f0edfb;box-shadow:0 14px 30px -24px rgba(60,40,150,.6);display:grid;grid-template-columns:auto 1fr;grid-template-areas:"l v" "s s";align-items:baseline;gap:2px 12px}
 .stat .s-lbl{grid-area:l;font-size:12.5px;font-weight:600;color:var(--ink-2)}

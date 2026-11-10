@@ -562,7 +562,17 @@ function pageDashboard() {
   const shortN = d.positions.filter((p) => p.side === "short").reduce((a, p) => a + p.notional, 0);
   const cash = Math.abs(d.cash_free) < 0.005 ? 0 : d.cash_free;
   const realizedPnl = d.total_pnl - d.unrealized;
-  const eqs = d.ledger.map((x) => x.equity); if (eqs.length) eqs.push(d.equity);
+  const series = S.eqSeries;
+  let eqPts = (series && Array.isArray(series.points) && series.points.length)
+    ? series.points
+    : (d.ledger || []).map((x) => ({ time: x.time, equity: x.equity, events: [] }));
+  if (!(series && series.points && series.points.length) && d.equity != null && d.time) {
+    const last = eqPts[eqPts.length - 1];
+    if (!last || last.time !== d.time || Math.abs(last.equity - d.equity) > 1e-9) {
+      eqPts = eqPts.concat([{ time: d.time, equity: d.equity, events: [] }]);
+    }
+  }
+  const eqStart = (series && series.starting_equity != null) ? series.starting_equity : d.starting_equity;
   const w = d.worker || st.worker;
   const curDD = d.drawdown.length ? d.drawdown[d.drawdown.length - 1] : 0;
   const cum = d.pnl_by_trade.reduce((a, x) => (a.push((a.at(-1) || 0) + x), a), []);
@@ -575,7 +585,7 @@ function pageDashboard() {
         <div class="h-val num">${f2(d.equity)}</div>
         <div class="h-chg"><span class="chg ${d.total_pnl >= 0 ? "up" : "down"}">${sgn(d.total_pnl)} · ${d.total_return >= 0 ? "+" : ""}${pct(d.total_return)}</span><span>相对起始 ${f2(d.starting_equity, 0)} USDT</span></div>
       </div>
-      <div class="hero-spark">${MiniCharts.spark(eqs)}<div class="cap">账本权益走势 · ${d.ledger.length} 个记录点</div></div>
+      <div class="hero-spark"><div class="eq-hover eq-hover-hero" id="heroEq"></div><div class="cap">账本权益走势 · ${eqPts.length} 个记录点 · 移动查看收益变化</div></div>
     </section>
     <section class="stats">
       ${stat("可用现金", f2(cash), cash < 0 ? `<span class="explain">空头价格上涨后，持仓名义（${f2(d.gross, 0)}）已超过权益。这是亏损空头的正常记账，不是错误；回落前不会再开新仓。</span>` : "权益 − 持仓名义，可用于新开仓", cash < 0 ? "neg" : "", cash < 0 ? "warn" : "")}
@@ -601,6 +611,8 @@ function pageDashboard() {
   </div>`;
   bindGo();
   document.querySelectorAll("#page .tx[data-sym]").forEach((el) => (el.onclick = () => goSignal(el.dataset.sym, el.dataset.mkt)));
+  const heroEq = $("#heroEq");
+  if (heroEq) MiniCharts.equityHover(heroEq, { points: eqPts, starting: eqStart, color: "#73f0e0" });
 }
 function bindGo() { document.querySelectorAll("#page [data-go]").forEach((el) => (el.onclick = () => (location.hash = "#/" + el.dataset.go))); }
 
@@ -814,7 +826,7 @@ function bindBtView(view) {
   if (bar) bar.querySelectorAll("[data-bt-view]").forEach((b) => b.classList.toggle("on", b.dataset.btView === S.btView));
   if (chartOn && S.bt) {
     const el = $("#eqChart");
-    if (el) requestAnimationFrame(() => BigCharts.equity(el, S.bt.equity));
+    if (el) requestAnimationFrame(() => BigCharts.equity(el, S.bt.equity, { trades: S.bt.trades, starting: (S.bt.summary && S.bt.summary.starting_equity_usdt) }));
   } else if (S.bt) {
     if (S.pg.btTrades) S.pg.btTrades._fit = null;
     requestAnimationFrame(() => renderBtTrades());
@@ -1268,7 +1280,14 @@ $("#livePill").onclick = () => {
 const PAGES = { dashboard: pageDashboard, signals: pageSignals, backtest: pageBacktest, positions: pagePositions, trades: pageTrades, risk: pageRisk, settings: pageSettings, help: pageHelp };
 const SUBS = { dashboard: "系统化纸面 / 研究工具 · 不构成投资建议", signals: "实时 K 线与每个币的进出场建议", backtest: "真实公共历史 K 线 · 无前视回测", positions: "纸面持仓 · 可平仓或停止自动管理", trades: "开平配对的成交记录", risk: "自动交易、紧急停止与风控参数", settings: "行情源、API 密钥（加密保存）与实盘闸门", help: "使用说明与风险提示" };
 async function refreshStatus() { S.status = await api("/api/status"); renderMode(); }
-async function refreshDash() { S.dash = await api("/api/dashboard"); }
+async function refreshDash() {
+  const [d, eq] = await Promise.all([
+    api("/api/dashboard"),
+    api("/api/paper/equity").catch(() => null),
+  ]);
+  S.dash = d;
+  if (eq && Array.isArray(eq.points)) S.eqSeries = eq;
+}
 async function refreshAll() {
   try { await Promise.all([refreshStatus(), refreshDash()]); } catch (e) { toast("无法连接后端：" + e.message, true); return; }
   renderRight();

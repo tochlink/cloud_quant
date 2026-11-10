@@ -39,7 +39,134 @@
   function empty(msg) {
     return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><text x="${W / 2}" y="${H / 2}" text-anchor="middle" font-size="11" fill="#b5b2cf">${msg || "暂无数据"}</text></svg>`;
   }
-  window.MiniCharts = {
+
+  const KIND_COLOR = {
+    "开仓": "#73f0e0", "平仓": "#c9c2f5", "调仓": "#8ec0ff",
+    "止损": "#ff7a8a", "止盈": "#ffd56a", "手动平仓": "#ffb3c0", "一键清仓": "#ff9f6b",
+  };
+  const KIND_RANK = { "止损": 0, "止盈": 1, "手动平仓": 2, "一键清仓": 3, "平仓": 4, "调仓": 5, "开仓": 6 };
+  function primaryKind(evs) {
+    let best = evs[0] && evs[0].kind, r = 99;
+    for (const e of evs || []) {
+      const k = KIND_RANK[e.kind];
+      if (k != null && k < r) { r = k; best = e.kind; }
+    }
+    return best || "开仓";
+  }
+  function escH(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&#38;", "<": "&#60;", ">": "&#62;", '"': "&#34;", "'": "&#39;" }[c]));
+  }
+  function fmtN(x, d = 2) {
+    if (x == null || !isFinite(x)) return "—";
+    return Number(x).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+  }
+  function sgnN(x, d = 2) { return (x > 0 ? "+" : x < 0 ? "" : "") + fmtN(x, d); }
+  function pctN(x) { return (x > 0 ? "+" : x < 0 ? "" : "") + (isFinite(x) ? (x * 100).toFixed(2) : "—") + "%"; }
+  function clsN(x) { return x > 0 ? "pos" : x < 0 ? "neg" : ""; }
+  function classifyReason(reason) {
+    const r = reason || "";
+    if (r.includes("止盈")) return "止盈";
+    if (r.includes("ATR止损") || r.includes("止损")) return "止损";
+    if (r.includes("手动平仓")) return "手动平仓";
+    if (r.includes("一键清仓")) return "一键清仓";
+    if (r.includes("调仓")) return "调仓";
+    return "平仓";
+  }
+  function evRow(e) {
+    const col = KIND_COLOR[e.kind] || "#73f0e0";
+    const bits = [e.symbol, e.side_cn || (e.side === "long" ? "多" : e.side === "short" ? "空" : "")]
+      .filter(Boolean).join(" ");
+    const px = e.price != null && isFinite(e.price) ? " · " + fmtN(e.price, e.price >= 100 ? 1 : 4) : "";
+    const sub = [];
+    if (e.realized_pnl != null && isFinite(e.realized_pnl)) sub.push("已实现 " + sgnN(e.realized_pnl) + " USDT");
+    if (e.reason) sub.push(e.reason);
+    return `<div class="eq-ev"><span class="eq-dot" style="background:${col}"></span><div><div><b>${escH(e.kind)}</b>${bits ? " " + escH(bits) : ""}${escH(px)}</div>${sub.length ? `<div class="eq-ev-sub">${escH(sub.join(" · "))}</div>` : ""}</div></div>`;
+  }
+  function tipEvents(evs) {
+    evs = evs || [];
+    if (!evs.length) return "";
+    const same = evs.length > 1 && evs.every((e) => e.kind === evs[0].kind);
+    if (same) {
+      const rest = evs.slice(1).map((e) => e.symbol).filter(Boolean);
+      const extra = rest.length
+        ? `<div class="eq-ev-sub">另有 ${rest.length} 笔（${escH(rest.slice(0, 4).join("、"))}${rest.length > 4 ? " 等" : ""}）</div>`
+        : "";
+      return `<div class="eq-tip-evs">${evRow(evs[0])}${extra}</div>`;
+    }
+    const rows = evs.slice(0, 2).map(evRow).join("");
+    const more = evs.length > 2 ? `<div class="eq-ev-sub">另有 ${evs.length - 2} 笔</div>` : "";
+    return `<div class="eq-tip-evs">${rows}${more}</div>`;
+  }
+  function tipHtml(points, i, starting) {
+    const p = points[i];
+    const prev = i > 0 ? points[i - 1] : null;
+    const eq = p.equity;
+    const dPrev = prev ? eq - prev.equity : null;
+    const pPrev = prev && prev.equity ? dPrev / prev.equity : null;
+    const dStart = starting != null ? eq - starting : null;
+    const pStart = starting ? dStart / starting : null;
+    return `<div class="eq-tip-t">${escH(window.PT.full(p.time, true))}</div>
+      <div class="eq-tip-eq">权益 <b>${fmtN(eq)}</b> USDT</div>
+      <div class="eq-tip-row ${dPrev == null ? "" : clsN(dPrev)}">较上一点 ${dPrev == null ? "—" : `${sgnN(dPrev)}（${pctN(pPrev)}）`}</div>
+      <div class="eq-tip-row ${dStart == null ? "" : clsN(dStart)}">较起始 ${dStart == null ? "—" : `${sgnN(dStart)}（${pctN(pStart)}）`}</div>
+      ${tipEvents(p.events)}`;
+  }
+  function placeTip(host, tip, ev, boxEl) {
+    const box = (boxEl || host).getBoundingClientRect();
+    const origin = host.getBoundingClientRect();
+    const tw = tip.offsetWidth, th = tip.offsetHeight, pad = 6;
+    let vx = ev.clientX + 14, vy = ev.clientY - th - 10;
+    if (vx + tw > box.right - pad) vx = ev.clientX - tw - 14;
+    if (vx < box.left + pad) vx = box.left + pad;
+    if (vx + tw > box.right - pad) vx = box.right - pad - tw;
+    if (vy < box.top + pad) vy = ev.clientY + 16;
+    if (vy + th > box.bottom - pad) vy = box.bottom - pad - th;
+    if (vy < box.top + pad) vy = box.top + pad;
+    tip.style.left = `${Math.round(vx - origin.left)}px`;
+    tip.style.top = `${Math.round(vy - origin.top)}px`;
+  }
+  function toUnix(t) {
+    if (t == null || t === "") return null;
+    if (typeof t === "number") return t > 1e12 ? Math.floor(t / 1000) : t;
+    const d = new Date(t);
+    return isNaN(d) ? null : Math.floor(d.getTime() / 1000);
+  }
+  function attachTradeEvents(pts, trades) {
+    const points = pts.map((p) => ({ ...p, events: p.events ? p.events.slice() : [] }));
+    if (!points.length || !trades || !trades.length) return points;
+    function snap(ts) {
+      if (ts == null) return null;
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < points.length; i++) {
+        const d = Math.abs(points[i].time - ts);
+        if (d < bd) { bd = d; best = i; }
+      }
+      return best;
+    }
+    for (const t of trades) {
+      const side = t.side || "";
+      const sideCn = side === "long" ? "多" : side === "short" ? "空" : "";
+      const et = toUnix(t.entry_time);
+      const ei = snap(et);
+      if (ei != null && et != null) {
+        points[ei].events.push({
+          time: t.entry_time, kind: "开仓", symbol: t.symbol, market: t.market,
+          side, side_cn: sideCn, price: t.entry_price, realized_pnl: null, reason: "", source: "backtest",
+        });
+      }
+      const xt = toUnix(t.exit_time);
+      const xi = snap(xt);
+      if (xi != null && xt != null) {
+        points[xi].events.push({
+          time: t.exit_time, kind: classifyReason(t.exit_reason), symbol: t.symbol, market: t.market,
+          side, side_cn: sideCn, price: t.exit_price, realized_pnl: t.pnl_usdt, reason: t.exit_reason || "", source: "backtest",
+        });
+      }
+    }
+    return points;
+  }
+
+    window.MiniCharts = {
     area(vals, color = "#4b3aa6") {
       const { pts } = norm(vals, 10);
       if (pts.length < 2) return empty("运行后生成权益曲线");
@@ -51,6 +178,56 @@
       if (pts.length < 2) return empty("跑几轮后生成权益曲线");
       const d = smooth(pts), id = "sp" + ++gid, last = pts[pts.length - 1];
       return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><defs><linearGradient id="${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><path d="${d} L${W} ${H} L0 ${H}Z" fill="url(#${id})"/><path d="${d}" stroke="${color}" stroke-width="2.2" fill="none" vector-effect="non-scaling-stroke"/><circle cx="${last[0] - 3}" cy="${last[1]}" r="3.5" fill="${color}"/></svg>`;
+    },
+    equityHover(host, opts) {
+      if (!host) return;
+      const points = (opts && opts.points) || [];
+      const starting = (opts && opts.starting) != null ? opts.starting : (points[0] && points[0].equity);
+      const color = (opts && opts.color) || "#73f0e0";
+      const boxEl = (opts && opts.box) || host.closest(".hero") || host.closest(".chart-box") || host;
+      host.classList.add("eq-hover");
+      host.innerHTML = "";
+      if (points.length < 2) { host.innerHTML = empty("跑几轮后生成权益曲线"); return; }
+      const vals = points.map((p) => p.equity);
+      const { pts } = norm(vals, 10);
+      const d = smooth(pts), id = "sp" + ++gid, last = pts[pts.length - 1];
+      const dots = points.map((p, i) => {
+        if (!p.events || !p.events.length) return "";
+        const col = KIND_COLOR[primaryKind(p.events)] || color;
+        return `<circle class="eq-ev-dot" cx="${pts[i][0]}" cy="${pts[i][1]}" r="3.3" fill="${col}" stroke="#fff" stroke-width="1" vector-effect="non-scaling-stroke"/>`;
+      }).join("");
+      host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="eq-svg"><defs><linearGradient id="${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><path d="${d} L${W} ${H} L0 ${H}Z" fill="url(#${id})"/><path d="${d}" stroke="${color}" stroke-width="2.2" fill="none" vector-effect="non-scaling-stroke"/>${dots}<circle cx="${last[0] - 3}" cy="${last[1]}" r="3.5" fill="${color}"/><g class="eq-cross" hidden="hidden"><line class="eq-xhair" y1="0" y2="${H}" stroke="rgba(255,255,255,.8)" stroke-width="1" vector-effect="non-scaling-stroke"/><circle class="eq-focus" r="5" fill="${color}" stroke="#fff" stroke-width="1.7" vector-effect="non-scaling-stroke"/></g></svg><div class="eq-tip" hidden></div>`;
+      const svg = host.querySelector("svg");
+      const cross = host.querySelector(".eq-cross");
+      const xhair = host.querySelector(".eq-xhair");
+      const foc = host.querySelector(".eq-focus");
+      const tip = host.querySelector(".eq-tip");
+      const showAt = (i, ev) => {
+        const [x, y] = pts[i];
+        cross.removeAttribute("hidden");
+        xhair.setAttribute("x1", x); xhair.setAttribute("x2", x);
+        foc.setAttribute("cx", x); foc.setAttribute("cy", y);
+        tip.innerHTML = tipHtml(points, i, starting);
+        tip.hidden = false;
+        placeTip(host, tip, ev, boxEl);
+      };
+      const hide = () => { cross.setAttribute("hidden", "hidden"); tip.hidden = true; };
+      const idxFrom = (ev) => {
+        const r = svg.getBoundingClientRect();
+        if (r.width <= 0) return 0;
+        const vx = ((ev.clientX - r.left) / r.width) * W;
+        let best = 0, bd = Infinity;
+        for (let i = 0; i < pts.length; i++) {
+          const dist = Math.abs(pts[i][0] - vx);
+          if (dist < bd) { bd = dist; best = i; }
+        }
+        return best;
+      };
+      const onMove = (ev) => { if (ev.pointerType === "touch") ev.preventDefault(); showAt(idxFrom(ev), ev); };
+      host.addEventListener("pointermove", onMove);
+      host.addEventListener("pointerdown", onMove);
+      host.addEventListener("pointerleave", hide);
+      host.addEventListener("pointercancel", hide);
     },
     line(vals, color = "#2cc4c9") {
       const { pts } = norm(vals, 14);
@@ -116,13 +293,39 @@
       c._lastClosed = c._last; // 已收盘最后一根；未收盘跳动只更新 c._last
       return c;
     },
-    equity(el, pts) {
+    equity(el, pts, extra) {
       const c = this.make(el);
-      c.addAreaSeries({ lineColor: "#4b3aa6", topColor: "rgba(108,92,231,.35)", bottomColor: "rgba(108,92,231,0)", lineWidth: 2, title: "权益" })
-        .setData(pts.map((p) => ({ time: p.time, value: p.equity })));
+      const area = c.addAreaSeries({ lineColor: "#4b3aa6", topColor: "rgba(108,92,231,.35)", bottomColor: "rgba(108,92,231,0)", lineWidth: 2, title: "权益" });
+      area.setData((pts || []).map((p) => ({ time: p.time, value: p.equity })));
       const dd = c.addHistogramSeries({ color: "rgba(94,224,214,.55)", priceScaleId: "dd", title: "回撤%" });
       c.priceScale("dd").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
-      dd.setData(pts.map((p) => ({ time: p.time, value: (p.drawdown || 0) * 100 })));
+      dd.setData((pts || []).map((p) => ({ time: p.time, value: (p.drawdown || 0) * 100 })));
+      const start = extra && extra.starting != null ? extra.starting : (pts && pts[0] && pts[0].equity);
+      const attached = attachTradeEvents(pts || [], (extra && extra.trades) || []);
+      const markers = [];
+      for (const p of attached) {
+        if (!p.events || !p.events.length) continue;
+        const kind = primaryKind(p.events);
+        markers.push({ time: p.time, position: "aboveBar", color: KIND_COLOR[kind] || "#4b3aa6", shape: "circle", text: kind });
+      }
+      if (markers.length) area.setMarkers(markers);
+      let tip = el.querySelector(".eq-tip");
+      if (!tip) { tip = document.createElement("div"); tip.className = "eq-tip eq-tip-light"; tip.hidden = true; el.appendChild(tip); }
+      const hide = () => { tip.hidden = true; };
+      c.subscribeCrosshairMove((param) => {
+        if (!param || param.time == null || !param.point || param.point.x < 0 || param.point.y < 0) { hide(); return; }
+        const t = param.time;
+        let best = 0, bd = Infinity;
+        for (let i = 0; i < attached.length; i++) {
+          const dist = Math.abs(attached[i].time - t);
+          if (dist < bd) { bd = dist; best = i; }
+        }
+        tip.innerHTML = tipHtml(attached, best, start);
+        tip.hidden = false;
+        const box = el.getBoundingClientRect();
+        placeTip(el, tip, { clientX: box.left + param.point.x, clientY: box.top + param.point.y }, el);
+      });
+      el.addEventListener("pointerleave", hide);
       c.timeScale().fitContent();
       return c;
     },
