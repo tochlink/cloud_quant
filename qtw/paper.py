@@ -222,6 +222,12 @@ class PaperBook:
             self._save(c)  # 同时持久化最新标记价
             return row
 
+    def last_stop_time(self, symbol: str) -> str:
+        """该标的最近一次 ATR 止损平仓的成交时间（UTC ISO）；没有则返回空串。"""
+        r = self._q("SELECT time FROM paper_fills WHERE symbol=? AND action='close' AND reason='ATR止损' "
+                    "ORDER BY fill_id DESC LIMIT 1", (symbol,))
+        return r[0]["time"] if r else ""
+
     def fills(self) -> list[dict]:
         return self._q(f"SELECT {','.join(FILL_COLS)} FROM paper_fills ORDER BY fill_id")
 

@@ -197,6 +197,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             "as_of": iso(as_of.to_pydatetime()), "as_of_la": la(as_of.to_pydatetime()),
             "as_of_sh": sh(as_of.to_pydatetime()),
             "signal_since": iso(cross.to_pydatetime()) if cross is not None else "",
+            "prev_run_close": iso((cross - step).to_pydatetime()) if cross is not None else "",
             "next_check": iso((as_of + step).to_pydatetime()), "next_check_la": la((as_of + step).to_pydatetime()),
             "next_check_sh": sh((as_of + step).to_pydatetime()),
             "venue": venue, "data_source": src.attrs.get("data_source", ""), "source_host": src.attrs.get("source_host", ""),
@@ -216,7 +217,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
                  max_weight=rk["max_weight_per_name"], atr_mult=st["atr_stop_mult"])
         row.update({"target_notional_usdt": z.notional, "target_qty": z.qty, "target_weight": z.weight,
                     "stop_price": z.stop_price, "stop_pct": z.stop_pct, "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
-        blocked = bk.blocks.get(sym) == sig and sig != 0
+        blocked = block_active(bk, sym, row)
         tl = int(st.get("trend_ma", 0) or 0)
         tma = float(last["trend_ma"]) if tl else float("nan")
         tok = trend_ok(sig, float(last["close"]), tma, tl)
@@ -299,6 +300,24 @@ def _trader(cfg):
     return GateTrader(keys, testnet=cfg["live"]["gate_testnet"])
 
 
+def block_active(bk, sym: str, row: dict) -> bool:
+    """止损锁是否仍然有效，与回测一致：止损之后只要有任一根已收盘 K 线的信号与被锁方向不同，就解锁。
+    引擎可能错过中间的检查（停机/暂停），所以除了看最新信号，还看当前信号段之前那一段的
+    最后一根 K 线是否在止损成交之后收盘。"""
+    b = bk.blocks.get(sym)
+    sig = int(row.get("signal") or 0)
+    if not b or sig != b:
+        return False
+    prev_end, stop_t = row.get("prev_run_close") or "", bk.last_stop_time(sym)
+    if prev_end and stop_t:
+        try:
+            if pd.Timestamp(prev_end) > pd.Timestamp(stop_t):
+                return False
+        except (ValueError, TypeError):
+            pass
+    return True
+
+
 def _route(cfg, sym, market, action, qty, price):
     """纸面执行之外，若实盘闸门全部通过才会发单；否则只记录被拦截原因。"""
     mode = "live" if S.live_armed(cfg) else "paper"
@@ -357,7 +376,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
                 events.append(f"{s} 平{('多' if p.side == 'long' else '空')} @ {px:g}（{reason}，盈亏 {pnl:+.2f}）")
         # 解除止损锁
         for s in list(bk.blocks):
-            if s in rows and rows[s]["signal"] != bk.blocks[s]:
+            if s in rows and not block_active(bk, s, rows[s]):
                 bk.blocks.pop(s)
         bk.save()
         # 3) 入场（多个新仓按剩余总敞口额度等比缩放，并预留手续费）
@@ -365,7 +384,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         want = {}
         for s in cfg["symbols"]:
             r = rows.get(s)
-            if not r or s in bk.positions or r["signal"] == 0 or bk.blocks.get(s) == r["signal"] or r.get("trend_ok") is False or r.get("state") == "short_paused":
+            if not r or s in bk.positions or r["signal"] == 0 or block_active(bk, s, r) or r.get("trend_ok") is False or r.get("state") == "short_paused":
                 continue
             if r["side"] == "long" and not rk["allow_spot_long"] or r["side"] == "short" and not rk["allow_perp_short"]:
                 continue
