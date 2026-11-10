@@ -64,15 +64,24 @@ def test_backtest_no_lookahead():
     eb = rb["equity"][rb["equity"]["time"] <= cut]["equity"].to_numpy()
     assert len(ea) > 50
     np.testing.assert_allclose(ea, eb)
-    cols = ["symbol", "entry_time", "entry_price", "qty"]
+    # 入场字段（第一笔成交）不受未来数据影响；已在 cut 前平仓的交易，包括调仓后的数量，也必须完全一致
+    cols = ["symbol", "entry_time"]
     ta = ra["trades"][ra["trades"]["entry_time"] < cut][cols].reset_index(drop=True)
     tb = rb["trades"][rb["trades"]["entry_time"] < cut][cols].reset_index(drop=True)
     pd.testing.assert_frame_equal(ta, tb)
+    cols = ["symbol", "entry_time", "entry_price", "qty", "exit_price", "pnl_usdt"]
+    done = lambda t: t[(t["status"] == "closed") & (t["exit_time"] < cut)][cols].reset_index(drop=True)
+    pd.testing.assert_frame_equal(done(ra["trades"]), done(rb["trades"]))
+
+
+def nobal():
+    c = cfg()
+    return {**c, "strategy": {**c["strategy"], "rebalance_band": 0.0}}
 
 
 def test_longs_use_spot_and_shorts_use_perp_prices():
     data = book(4)
-    r = run_backtest(data, cfg())
+    r = run_backtest(data, nobal())  # 关闭调仓：调仓加仓会把入场价变成加权均价
     tr = r["trades"]
     assert (tr.side == "long").any() and (tr.side == "short").any()
     for _, t in tr.iterrows():
@@ -82,7 +91,7 @@ def test_longs_use_spot_and_shorts_use_perp_prices():
 
 
 def test_caps_hold():
-    r = run_backtest(book(8), cfg())
+    r = run_backtest(book(8), nobal())  # 入场名义上限；调仓后的上限见 test_rebalance_backtest_accounting
     tr, eq = r["trades"], r["equity"]
     assert (tr["notional_usdt"] <= 0.2 * eq["equity"].max() + 1e-6).all()
     s = r["summary"]
@@ -106,7 +115,7 @@ def test_no_synthetic_data_in_app_code():
 
 
 def test_pyramid_off_by_default_and_bounded():
-    c = cfg()
+    c = nobal()
     assert c["strategy"]["pyramid_r"] == 0.0
     data = book()
     base = run_backtest(data, c)
