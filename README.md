@@ -158,4 +158,25 @@ CSV 均带 `venue` / `data_source` / `fetched_at` 等来源字段。纸面账本
 * 趋势过滤（`trend_ma`，默认 100，0=关闭）：**只作用于新开仓**，做多需上一根收盘价 > 该市场（现货）SMA100，做空需上一根收盘价 < 该市场（永续）SMA100；不会因此平掉已有持仓，离场仍只看信号反转 / 归零与 ATR 止损。2026-11-10 在 OKX 与 Gate 官方 4h 历史上切 6 段不重叠窗口：只用前 3 段从 {关闭, 100, 200, 300} 中选出 100，后 3 段（未参与选择）在两家交易所、单边 4 / 14 bps 成本下累计收益均高于不过滤（OKX 4bps +12.0% vs +10.4%，14bps +8.9% vs +6.8%）；整段 OKX +34.1% vs +24.7%，Sharpe 1.59 vs 1.27，最大回撤 −17.1% vs −19.0%。注意第 3 段更差（−7.2% vs −4.6%），并非每段都胜出。
 * 空头熔断（`short_breaker_bars`，默认 60，0=关闭）：用同一套规则跑一本「只做空」的影子账本，若最近 60 根 4h K 线内已平仓的影子空单合计亏损，则暂停新开空单（只用当根之前已平仓的数据，无前视；不平已有仓）。2026-11-10 在 OKX / Gate 官方 4h 历史上切 6 段与 12 段不重叠窗口：前半段从 {60,120,240} 中选出 60，后半段（未参与选择）在两家交易所、单边 4 / 14 bps 下均明显优于不熔断（6 段 OKX 4bps 后 3 段 +34.1% vs +17.2%）。整段 OKX（含 SMA100 趋势过滤）+33.4% vs +22.8%，Sharpe 1.49 vs 1.06，最大回撤 −11.8% vs −17.1%，盈亏比 1.47 vs 1.15。注意：样本期大部分时间空头处于熔断（约 70%），收益主要来自少做逆势空单；历史只覆盖一次明显的多空切换。
 * 界面自适应：侧栏与平板同在一个网格里随窗口 / 缩放一起伸缩；≤1180px 右栏变成抽屉（顶部按钮打开），≤760px 底部胶囊导航。
-* 若某交易所在你[+949 bytes at .content[1].resource.text]
+* 若某交易所在你所在地区被限制（HTTP 403 / 451），客户端会尝试官方备用域名（OKX `aws.okx.com`，Gate `api.gate.io`），仍失败就报错——**绝不伪造行情**。
+
+## 目录
+
+```
+qtw/market/   OKX / Gate 公共 REST 行情、SQLite K 线缓存
+qtw/stream.py 官方公共 WebSocket 实时行情 + REST 兜底
+qtw/db.py     SQLite 模式与连接
+qtw/strategy.py  dual_ma 指标与信号
+qtw/risk.py      仓位与风控
+qtw/backtest.py  组合回测
+qtw/paper.py     持久化纸面账本（SQLite）
+qtw/engine.py    信号 → 进出场 → 执行路由、紧急停止
+qtw/worker.py    后台自动交易线程
+qtw/vault.py     密钥加密存储
+qtw/live/        实盘签名与下单（闸门保护）
+qtw/app.py       FastAPI 接口
+static/          前端页面（原生 JS + lightweight-charts）
+tests/           单元测试
+```
+
+旧版命令行纸面系统仍在 `/workspace/quant-trading-system/`（Binance 行情，v1）。

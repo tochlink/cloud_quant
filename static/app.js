@@ -461,7 +461,7 @@ function pageRisk() {
   <div class="panel" style="margin-top:18px"><div class="sec-title"><h3>风控规则</h3><span class="note">上限只能调低，不能调高</span></div>
     <div class="grid form4">
       <label class="field">起始纸面资金 (USDT)<input id="rEq" type="number" value="${s.risk.starting_equity_usdt}"/><span class="hint">重置账本后生效</span></label>
-      <label class="field">单笔最大风险<input id="rRisk" type="number" step="0.005" max="0.05" value="${s.risk.max_risk_per_trade}"/><span class="hint">≤ 0.05（5%）</span></label>
+      <label class="field">单笔最大风险<input id="rRisk" type="number" step="0.005" max="0.05" value="${s.risk.max_risk_per_trade}"/><span class="hint">≤ 0.05（5%）；止损较近时单币上限先生效，实际单笔风险≈单币上限×止损距离</span></label>
       <label class="field">单币最大权重<input id="rW" type="number" step="0.01" max="0.2" value="${s.risk.max_weight_per_name}"/><span class="hint">≤ 0.20（20%）</span></label>
       <label class="field">手续费假设 (bps)<input id="rFee" type="number" step="0.5" value="${s.fees.taker_bps}"/><span class="hint">默认 taker 4 bps</span></label>
     </div>
@@ -586,7 +586,7 @@ function pageHelp() {
   <li>空头熔断：${s.short_breaker_bars ? `同一规则的「只做空」影子账本在最近 ${s.short_breaker_bars} 根 K 线内已平仓合计亏损时，暂停新开空单，显示「空头熔断·暂缓」；转正后自动恢复，已有持仓不受影响。` : "已关闭。"}</li>
   <li>现货看多且永续不看空 → <b>做多·现货</b>；永续看空且现货不看多 → <b>做空·USDT 永续</b>（1 倍）；两者冲突或无信号 → 空仓。</li>
   <li>离场：收盘出现反向或归零信号，或价格触及 <b>${s.atr_stop_mult}×ATR${s.atr_period}</b> 止损；止损后等信号方向改变才再入场。</li></ul></section>
-  <section><h4>仓位与风控</h4><ul><li>风险预算 = 权益 × ${pct(st.risk.max_risk_per_trade, 0)}；名义 = 风险预算 ÷ 止损百分比。</li><li>单币名义 ≤ 权益 × ${pct(st.risk.max_weight_per_name, 0)}；总敞口 ≤ 1× 权益，同时入场按比例缩放。</li><li>永续空头按 1 倍保证金占用现金；空头价格上涨时名义会超过权益，可用现金显示为负属正常记账，此时不会开新仓。</li></ul></section>
+  <section><h4>仓位与风控</h4><ul><li>风险预算 = 权益 × ${pct(st.risk.max_risk_per_trade, 0)}；名义 = 风险预算 ÷ 止损百分比。4h 默认参数下止损距离通常只有几个百分点，名义会先被单币上限截住，所以实际单笔风险 ≈ 单币上限 × 止损距离（约 1% 权益）。</li><li>单币名义 ≤ 权益 × ${pct(st.risk.max_weight_per_name, 0)}；总敞口 ≤ 1× 权益，同时入场按比例缩放。</li><li>永续空头按 1 倍保证金占用现金；空头价格上涨时名义会超过权益，可用现金显示为负属正常记账，此时不会开新仓。</li></ul></section>
   <section><h4>页面</h4><ul><li><b>总览</b>：权益、现金 / 敞口 / 未实现、最近成交、回撤与胜率。</li><li><b>信号</b>：K 线实时图与每个币的做多 / 做空 / 空仓建议、仓位、止损。</li><li><b>回测</b>：真实历史 K 线回测与 CSV 导出。</li><li><b>持仓 / 成交</b>：纸面账本与订单日志。</li><li><b>风控</b>：自动交易开关、紧急停止、参数与标的池。</li><li><b>设置</b>：行情源、加密密钥、实盘闸门。</li></ul></section>
   <section><h4>数据与时间</h4><ul><li>所有时间按 <b>Asia/Shanghai（北京时间）</b> 显示。</li><li>数据库：<code>data/qtw.sqlite</code>；API 密钥只存在加密文件 <code>data/secrets.enc</code>。</li><li>CSV 导出：<code>output/</code> 与 <code>output/backtest/</code>。图表：TradingView Lightweight Charts™。</li></ul></section>
   <section><h4>局限</h4><ul><li>回测未计资金费率与滑点；历史表现不代表未来。</li><li>实盘模式没有与交易所持仓对账；实盘前请先在 OKX 模拟盘 / Gate 合约测试网验证。</li><li>按 <code>Esc</code> 关闭弹窗 / 右侧抽屉。</li></ul></section></div>`;
