@@ -40,6 +40,12 @@ DEFAULTS: dict[str, Any] = {
         # tp_reentry = False：止盈后像止损一样锁定，信号改变前不再开同向仓；True：下一根若信号仍在则按新 ATR 重新开仓。0=关闭
         "tp_r": 0.0,
         "tp_reentry": False,
+        # 2026-11-11：持仓调仓（每根新收盘 K 线一次）。目标名义 = min(权益×单笔风险/现有止损距离%, 权益×单币权重)，
+        # 再按总敞口等比缩放；|当前−目标|/目标 > rebalance_band 才调，先减后加，止损不变（见 qtw/rebalance.py）。
+        # 真实费率（现货 10 / 永续 5.1 bps）：前 6 段选出 0.1，后 6 段（未参与选择）OKX +33.6% vs 基线 +29.4%，
+        # Gate +33.2% vs +29.3%；费率 ×2 仍更好；0.1/0.25/0.5 三档全优（平台而非尖峰）。0 = 关闭
+        "rebalance_band": 0.1,
+        "rebalance_mode": "stop",  # stop：按现有止损距离定目标；atr：再取与最新 ATR 止损距离的较大者（更保守）
         "lookback_bars": 200,
     },
     "risk": {
@@ -146,6 +152,12 @@ def validate(s: dict) -> dict:
     if st["tp_r"] and not 0.5 <= st["tp_r"] <= 20:
         raise ValueError("止盈倍数需为 0（关闭）或 0.5–20 R")
     st["tp_reentry"] = bool(st.get("tp_reentry", False))
+    st["rebalance_band"] = float(st.get("rebalance_band", 0) or 0)
+    if st["rebalance_band"] and not 0.05 <= st["rebalance_band"] <= 2:
+        raise ValueError("调仓阈值需为 0（关闭）或 0.05–2（即 5%–200%）")
+    st["rebalance_mode"] = str(st.get("rebalance_mode", "stop") or "stop")
+    if st["rebalance_mode"] not in ("stop", "atr"):
+        raise ValueError("调仓模式只能是 stop 或 atr")
     rk["max_risk_per_trade"] = float(rk["max_risk_per_trade"])
     rk["max_weight_per_name"] = float(rk["max_weight_per_name"])
     if not 0 < rk["max_risk_per_trade"] <= 0.05:

@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 import pandas as pd
 
+from . import rebalance as RB
 from .risk import scale_to_room, size
 from .settings import taker_rate
 from .strategy import combine, indicators, market_of, side_of, trend_ok
@@ -45,6 +46,8 @@ class Trade:
     return_pct: float = 0.0
     bars_held: int = 0
     status: str = "open"
+    adj_pnl_usdt: float = 0.0  # 调仓减仓部分已实现的毛盈亏（不含手续费）
+    resizes: int = 0  # 调仓次数（rebalance_band > 0 时）
 
 
 def short_breaker(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
@@ -114,6 +117,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     # 可选：固定止盈（默认关闭，tp_r = 0）。目标价 = 入场价 ± tp_r × R，R = |入场价 − 初始止损| = atr_stop_mult × ATR；
     # 触及即全部平仓。tp_reentry = False 时止盈后与止损一样锁定，直到信号改变才允许再开同向仓。
     tp_r, tp_re = float(st.get("tp_r", 0) or 0), bool(st.get("tp_reentry", False))
+    rb_band, rb_mode = float(st.get("rebalance_band", 0) or 0), str(st.get("rebalance_mode", "stop") or "stop")
     entry_i: dict[str, int] = {}
     blocked: dict[str, int] = {}
     trades: list[Trade] = []
@@ -133,7 +137,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         realized += g - f
         t.exit_time, t.exit_price, t.exit_reason = when, float(px), reason
         t.fees_usdt += f
-        t.pnl_usdt = g - t.fees_usdt
+        t.pnl_usdt = g + t.adj_pnl_usdt - t.fees_usdt
         t.return_pct = t.pnl_usdt / t.notional_usdt if t.notional_usdt else 0.0
         t.bars_held, t.status = i - entry_i.pop(s), "closed"
         trades.append(t)
@@ -206,6 +210,42 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
                 t.fees_usdt += add_n * FEE[t.market]
                 room_add -= add_n
                 added.add(s)
+        # 2c) 可选：持仓调仓（默认见 settings.rebalance_band；0 = 关闭）。用 i-1 收盘的权益 / ATR，在第 i 根开盘
+        #     把已有持仓（本根新开的除外）调向目标名义：
+        #       目标 = min(权益×单笔风险 / 止损距离%, 权益×单币权重)，止损距离按 rebalance_mode：
+        #         "stop"：|开盘价 − 该仓现有止损| / 开盘价（保证按现有止损算的单笔风险 ≤ 上限）
+        #         "atr" ：max(上式, atr_stop_mult×ATR / 开盘价)（随最新波动缩放，且仍不超过现有止损下的风险上限）
+        #       所有已有仓的目标再按「总敞口额度 − 本根新开仓名义」等比缩放；
+        #       |当前名义 − 目标| / 目标 > rebalance_band 才调整；先减后加，加仓受剩余总敞口限制；止损价不变。
+        if rb_band > 0 and pos:
+            held = {q: pos[q] for q in pos if entry_i[q] != i}
+            new_n = sum(abs(pos[q].qty) * P(pos[q].side, "open", q)[i] for q in pos if entry_i[q] == i)
+            g_now = sum(abs(x.qty) * P(x.side, "open", y)[i] for y, x in pos.items())
+            rb_plan = RB.plan(held, {q: float(P(t.side, "open", q)[i]) for q, t in held.items()},
+                              {q: float(P(t.side, "atr", q)[i - 1]) for q, t in held.items()},
+                              equity=eq_prev, new_notional=new_n, cfg=cfg, gross_now=g_now, fee=fee)
+            for it in rb_plan:  # 与引擎 _rebalance 同一个计划函数（qtw/rebalance.py）
+                q, px, delta = it["symbol"], it["price"], it["delta_usdt"]
+                t = pos[q]
+                d = 1 if t.side == "long" else -1
+                if delta < 0:
+                    dq = -delta / px
+                    f = -delta * FEE[t.market]
+                    g = d * dq * (px - t.entry_price)
+                    realized += g - f
+                    t.adj_pnl_usdt += g
+                    t.fees_usdt += f
+                    t.notional_usdt -= dq * t.entry_price  # 名义 = 剩余数量 × 加权入场价
+                    t.qty -= dq
+                else:
+                    aq = delta / px
+                    f = delta * FEE[t.market]
+                    realized -= f
+                    t.entry_price = (t.qty * t.entry_price + aq * px) / (t.qty + aq)
+                    t.qty += aq
+                    t.notional_usdt += delta
+                    t.fees_usdt += f
+                t.resizes += 1
         # 3) 盘中止损 / 止盈。开盘已越过止盈价 → 按开盘价止盈；否则同一根同时触及时保守地先算止损。
         for s in list(pos):
             t = pos[s]
@@ -237,7 +277,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     open_trades = []
     for s, t in pos.items():
         t.exit_price = float(P(t.side, "close", s)[-1])
-        t.pnl_usdt = upnl(t, t.exit_price) - t.fees_usdt
+        t.pnl_usdt = upnl(t, t.exit_price) + t.adj_pnl_usdt - t.fees_usdt
         t.return_pct = t.pnl_usdt / t.notional_usdt
         t.exit_reason, t.bars_held = "持仓中（按最后收盘价估值）", len(times) - 1 - entry_i[s]
         open_trades.append(t)
@@ -279,7 +319,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": round(FEE["spot"] * 10_000, 4), "spot_taker_bps": round(FEE["spot"] * 10_000, 4), "perp_taker_bps": round(FEE["perp"] * 10_000, 4), "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
-        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "max_risk_per_trade": rk["max_risk_per_trade"],
+        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_mode": rb_mode,
+        "resizes": int(sum(t.resizes for t in closed + open_trades)), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
     }
     return {"summary": summary, "equity": ec.drop(columns=["peak"]), "bar_open_times": [pd.Timestamp(t).isoformat() for t in times],
