@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import threading
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
@@ -43,6 +44,17 @@ class Position:
 
     def upnl(self, px: float | None = None) -> float:
         return self.direction * self.qty * ((px or self.mark_price) - self.entry_price)
+
+    def upnl_pct(self, px: float | None = None) -> float | None:
+        """Unrealized return on entry price, or None if entry/mark is missing or not a real price."""
+        try:
+            entry = float(self.entry_price)
+            mark = float(self.mark_price if px is None else px)
+        except (TypeError, ValueError):
+            return None
+        if entry <= 0 or mark <= 0 or not math.isfinite(entry) or not math.isfinite(mark):
+            return None
+        return self.direction * (mark / entry - 1)
 
 
 FILL_COLS = ["fill_id", "time", "symbol", "market", "side", "action", "qty", "price", "price_kind",
@@ -230,6 +242,72 @@ class PaperBook:
 
     def fills(self) -> list[dict]:
         return self._q(f"SELECT {','.join(FILL_COLS)} FROM paper_fills ORDER BY fill_id")
+
+    def trade_records(self) -> list[dict]:
+        """FIFO-pair open/close fills into round-trip records. Open trades stay open until a close.
+
+        pnl_usdt / pnl_pct are net of known fees. For open trades they are unrealized and only
+        filled when a real mark price is available; otherwise left None (never invented).
+        """
+        def px_ok(x) -> bool:
+            try:
+                v = float(x)
+                return math.isfinite(v) and v > 0
+            except (TypeError, ValueError):
+                return False
+
+        def rec(op, cl, pos=None):
+            src = op or cl
+            if op:
+                side = "long" if op["side"] == "buy" else "short"
+            else:
+                side = "long" if cl["side"] == "sell" else "short"
+            qty = float((op or cl)["qty"])
+            entry_px = float(op["price"]) if op and px_ok(op.get("price")) else None
+            exit_px = float(cl["price"]) if cl and px_ok(cl.get("price")) else None
+            fee = float((op or {}).get("fee_usdt") or 0) + float((cl or {}).get("fee_usdt") or 0)
+            pnl = pct = mark = None
+            mark_src = mark_time = ""
+            if cl is not None:
+                pnl = float((op or {}).get("realized_pnl_usdt") or 0) + float(cl.get("realized_pnl_usdt") or 0)
+                if entry_px and qty:
+                    pct = pnl / (entry_px * qty)
+            elif pos is not None and entry_px and px_ok(pos.mark_price):
+                mark = float(pos.mark_price)
+                mark_src = pos.mark_source or ""
+                mark_time = pos.mark_time or ""
+                pnl = pos.upnl(mark) - fee
+                pct = pnl / (entry_px * qty) if qty else None
+            return {
+                "trade_id": int(op["fill_id"]) if op else int(cl["fill_id"]),
+                "symbol": src["symbol"], "market": src["market"], "side": side, "qty": qty,
+                "entry_time": (op or {}).get("time") or "", "entry_price": entry_px,
+                "entry_fill_id": (op or {}).get("fill_id"), "entry_reason": (op or {}).get("reason") or "",
+                "entry_price_kind": (op or {}).get("price_kind") or "",
+                "exit_time": (cl or {}).get("time") or "", "exit_price": exit_px,
+                "exit_fill_id": (cl or {}).get("fill_id"), "exit_reason": (cl or {}).get("reason") or "",
+                "exit_price_kind": (cl or {}).get("price_kind") or "",
+                "fee_usdt": fee, "pnl_usdt": pnl, "pnl_pct": pct,
+                "status": "closed" if cl is not None else "open",
+                "mode": (cl or op or {}).get("mode") or "paper",
+                "venue": (cl or op or {}).get("venue") or "",
+                "mark_price": mark, "mark_source": mark_src, "mark_time": mark_time,
+            }
+
+        pending: dict[str, list] = {}
+        out: list[dict] = []
+        for f in self.fills():
+            if f["action"] == "open":
+                pending.setdefault(f["symbol"], []).append(f)
+            elif f["action"] == "close":
+                stack = pending.setdefault(f["symbol"], [])
+                op = stack.pop(0) if stack else None
+                out.append(rec(op, f))
+        for sym, stack in pending.items():
+            pos = self.positions.get(sym)
+            for op in stack:
+                out.append(rec(op, None, pos=pos))
+        return out
 
     def ledger(self) -> list[dict]:
         return self._q(f"SELECT {','.join(LEDGER_COLS)} FROM paper_ledger ORDER BY id")

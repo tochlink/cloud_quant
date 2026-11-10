@@ -274,7 +274,8 @@ def _dashboard_data() -> dict:
                   "entry_time": p.entry_time, "mark_price": p.mark_price, "mark_time": p.mark_time,
                   "mark_source": p.mark_source, "venue": p.venue,
                   "stop_price": p.stop_price, "notional": p.qty * p.mark_price,
-                  "weight": (p.qty * p.mark_price / eq) if eq else 0, "upnl": p.upnl()}
+                  "weight": (p.qty * p.mark_price / eq) if eq else 0, "upnl": p.upnl(),
+                  "upnl_pct": p.upnl_pct()}
                  for p in bk.positions.values()]
     fills = bk.fills()
     ledger = bk.ledger()
@@ -503,6 +504,12 @@ def orders():
     return ok(engine.book().orders(300))
 
 
+@app.get("/api/trades")
+def trades():
+    """Round-trip paper trade records (entry/exit paired). Newest first."""
+    return ok(list(reversed(engine.book().trade_records())))
+
+
 # ---------------- 设置 / 密钥 ----------------
 @app.get("/api/settings")
 def get_settings():
@@ -692,7 +699,8 @@ def _live_payload() -> dict:
         "paper": {"equity": eq, "realized": bk.realized, "unrealized": eq - bk.realized, "gross": bk.gross(),
                   "net": bk.net(), "total_pnl": eq - bk.starting,
                   "positions": {p.symbol: {"mark": p.mark_price, "mark_time": p.mark_time, "source": p.mark_source,
-                                           "upnl": p.upnl(), "weight": (p.qty * p.mark_price / eq) if eq else 0,
+                                           "entry": p.entry_price, "upnl": p.upnl(), "upnl_pct": p.upnl_pct(),
+                                           "weight": (p.qty * p.mark_price / eq) if eq else 0,
                                            "notional": p.qty * p.mark_price} for p in bk.positions.values()}},
         "worker": {k: v for k, v in worker.status().items() if k != "last_result"},
     })
@@ -729,7 +737,7 @@ def config_alias():
 
 
 EXPORTS = {"signals": "signals.csv", "paper_positions": "paper_positions.csv", "paper_fills": "paper_fills.csv",
-           "paper_orders": "paper_orders.csv",
+           "paper_trades": "paper_trades.csv", "paper_orders": "paper_orders.csv",
            "paper_ledger": "paper_ledger.csv", "backtest_equity": "backtest/backtest_equity.csv",
            "backtest_trades": "backtest/backtest_trades.csv", "backtest_summary": "backtest/backtest_summary.csv"}
 

@@ -452,7 +452,8 @@ def export_paper_csv(cfg: dict) -> list[str]:
                          "notional_usdt": p.qty * p.mark_price,
                          "weight": p.qty * p.mark_price / bk.equity() if bk.equity() else 0,
                          "unrealized_pnl_usdt": p.upnl()})
-    for name, rows in (("paper_positions.csv", pos_rows), ("paper_fills.csv", bk.fills()), ("paper_ledger.csv", bk.ledger()),
+    for name, rows in (("paper_positions.csv", pos_rows), ("paper_fills.csv", bk.fills()),
+                       ("paper_trades.csv", bk.trade_records()), ("paper_ledger.csv", bk.ledger()),
                        ("paper_orders.csv", bk.orders(100000)[::-1])):
         path = OUTPUT_DIR / name
         cols = list(rows[0].keys()) if rows else ["empty"]
