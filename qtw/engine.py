@@ -19,7 +19,7 @@ from .paper import ORDER_COLS, PaperBook
 from .paths import OUTPUT_DIR
 from .backtest import short_breaker
 from .risk import cap_at_entry, scale_to_room, size
-from .strategy import bar_close_equity, btc_regime_blocks_long, combine, indicators, last_cross, market_of, port_vol_factor, side_of, trend_ok
+from .strategy import bar_close_equity, btc_regime_blocks_long, combine, indicators, last_cross, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok
 from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
@@ -235,6 +235,9 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     st, rk = cfg["strategy"], cfg["risk"]
     venue = cfg["venue"]
     need = max(st["lookback_bars"], st["slow_ma"] + st["atr_period"] + 5, int(st.get("trend_ma", 0) or 0) + 5)
+    nv_t, nv_l = float(st.get("name_vol_target", 0) or 0), int(st.get("name_vol_lookback", 120) or 120)
+    if nv_t > 0:
+        need = max(need, nv_l + 5)  # 单币波动率封顶需要 lookback+1 根收盘
     if st.get("short_breaker_bars"):
         need = max(need, 400)  # 影子账本需要足够历史
     bk = book(cfg)
@@ -317,8 +320,11 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
                 row["error"] = f"报价失败：{e}"
         row["ref_price"], row["ref_price_kind"] = px, kind
         pos = bk.positions.get(sym)
-        z = size(side=side, equity=eq, price=px, atr=row["atr"], max_risk=rk["max_risk_per_trade"],
-                 max_weight=rk["max_weight_per_name"], atr_mult=st["atr_stop_mult"])
+        # 单币波动率封顶：用信号所在市场（多=现货、空=永续）最近已收盘 K 线算 m，与回测第 i 根用 m_{i-1} 一致
+        nvm = float(name_vol_mult(src["close"].to_numpy(), nv_t, nv_l, BARS_PER_YEAR_MS / INTERVAL_MS[st["interval"]])[-1]) if nv_t > 0 else 1.0
+        row["name_vol_mult"] = nvm
+        z = size(side=side, equity=eq, price=px, atr=row["atr"], max_risk=rk["max_risk_per_trade"] * nvm,
+                 max_weight=rk["max_weight_per_name"] * nvm, atr_mult=st["atr_stop_mult"])
         row.update({"target_notional_usdt": z.notional, "target_qty": z.qty, "target_weight": z.weight,
                     "stop_price": z.stop_price, "stop_pct": z.stop_pct, "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
         blocked = block_active(bk, sym, row)
@@ -542,8 +548,9 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
             if r["signal_market"] != r["market"]:
                 errors[s] = f"{r['market']} K 线不可用，跳过入场"
                 continue
-            z = size(side=r["side"], equity=eq, price=px, atr=r["atr"], max_risk=rk["max_risk_per_trade"],
-                     max_weight=rk["max_weight_per_name"], atr_mult=st["atr_stop_mult"])
+            nvm = float(r.get("name_vol_mult", 1.0) or 1.0)  # 单币波动率封顶（compute_signals 已算）
+            z = size(side=r["side"], equity=eq, price=px, atr=r["atr"], max_risk=rk["max_risk_per_trade"] * nvm,
+                     max_weight=rk["max_weight_per_name"] * nvm, atr_mult=st["atr_stop_mult"])
             if z.notional > 0:
                 want[s] = (r, px, kind, z, q)
         room = eq * rk["max_gross_exposure"] - bk.gross()
@@ -601,7 +608,8 @@ def _rebalance(cfg, bk, rows: dict, opened: set, errors: dict) -> list[str]:
             continue
         held[s], prices[s], kinds[s], atrs[s] = p, px, (kind, q), r.get("atr")
     new_n = sum(abs(bk.positions[s].qty * bk.positions[s].mark_price) for s in opened if s in bk.positions)
-    plan = RB.plan(held, prices, atrs, equity=bk.equity(), new_notional=new_n, cfg=cfg, gross_now=bk.gross(), fee=bk.fee)
+    plan = RB.plan(held, prices, atrs, equity=bk.equity(), new_notional=new_n, cfg=cfg, gross_now=bk.gross(), fee=bk.fee,
+                   name_mult={s: float(rows[s].get("name_vol_mult", 1.0) or 1.0) for s in held})
     events = []
     for it in plan:
         s, px = it["symbol"], it["price"]

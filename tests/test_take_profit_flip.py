@@ -13,7 +13,7 @@ from tests.test_backtest import book
 def _cfg(**st):
     c = copy.deepcopy(S.DEFAULTS)
     c["symbols"] = []
-    c["strategy"].update(trend_ma=0, short_breaker_bars=0, **st)
+    c["strategy"].update(trend_ma=0, short_breaker_bars=0, name_vol_target=0, **st)  # 单币封顶会引发调仓加仓、改写加权入场价，这里只测止盈机制
     return c
 
 
