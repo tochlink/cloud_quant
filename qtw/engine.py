@@ -19,7 +19,7 @@ from .paper import ORDER_COLS, PaperBook
 from .paths import OUTPUT_DIR
 from .backtest import short_breaker
 from .risk import cap_at_entry, scale_to_room, size
-from .strategy import btc_regime_blocks_long, combine, indicators, last_cross, market_of, side_of, trend_ok
+from .strategy import bar_close_equity, btc_regime_blocks_long, combine, indicators, last_cross, market_of, port_vol_factor, side_of, trend_ok
 from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
@@ -198,6 +198,29 @@ def _btc_regime_state(cfg: dict) -> dict:
         return {"n": n, "blocked": False, "error": str(e)}
 
 
+BARS_PER_YEAR_MS = 365 * 24 * 3600 * 1000
+
+
+def vol_scaled_cfg(cfg: dict, bk) -> dict:
+    """可选组合波动率目标（strategy.port_vol_target > 0 才生效，默认关闭）：
+    用账本按 K 线周期分桶后的收盘权益，取最近 port_vol_lookback 根算 k = min(1, 目标/年化σ)，
+    返回单笔风险上限、单币权重上限都 × k 的配置副本（总敞口上限不变；只缩不放）；
+    历史不足 lookback+1 根时 k = 1，与回测一致。已缩放过的配置原样返回。"""
+    if "_pv_k" in cfg:
+        return cfg
+    st, rk = cfg["strategy"], cfg["risk"]
+    t = float(st.get("port_vol_target", 0) or 0)
+    k = 1.0
+    if t > 0:
+        ms = INTERVAL_MS[st["interval"]]
+        k = port_vol_factor(bar_close_equity(bk.ledger(), ms), t, int(st.get("port_vol_lookback", 180) or 180), BARS_PER_YEAR_MS / ms)
+    out = {**cfg, "_pv_k": k, "_pv_base_risk": rk}
+    if k < 1.0:
+        out["risk"] = {**rk, "max_risk_per_trade": float(rk["max_risk_per_trade"]) * k,
+                       "max_weight_per_name": float(rk["max_weight_per_name"]) * k}
+    return out
+
+
 def listed_symbols(cfg: dict, bk=None) -> list[str]:
     """标的池 ∪ 当前持仓：已移出池但仍持有的标的也要出现在信号列表里，并继续接受止损 / 信号离场。"""
     out = []
@@ -208,6 +231,7 @@ def listed_symbols(cfg: dict, bk=None) -> list[str]:
 
 
 def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
+    cfg = vol_scaled_cfg(cfg, book(cfg))
     st, rk = cfg["strategy"], cfg["risk"]
     venue = cfg["venue"]
     need = max(st["lookback_bars"], st["slow_ma"] + st["atr_period"] + 5, int(st.get("trend_ma", 0) or 0) + 5)
@@ -382,9 +406,9 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             r["capped_by"] = cap_at_entry(
                 entry_notional=p.notional_entry, entry_price=p.entry_price, stop_price=p.stop_price,
                 entry_equity=_equity_near(led, p.entry_time, bk.starting),
-                max_risk=rk["max_risk_per_trade"], max_weight=rk["max_weight_per_name"])
+                max_risk=cfg["_pv_base_risk"]["max_risk_per_trade"], max_weight=cfg["_pv_base_risk"]["max_weight_per_name"])
     return {"generated_at": iso(utcnow()), "generated_at_la": la(utcnow()), "generated_at_sh": sh(utcnow()),
-            "venue": venue, "equity": eq, "short_breaker": sb, "btc_regime": rg,
+            "venue": venue, "equity": eq, "short_breaker": sb, "btc_regime": rg, "port_vol_k": cfg["_pv_k"],
             "rows": rows, "errors": errs}
 
 
@@ -461,6 +485,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
     with CYCLE_LOCK:
         cfg = cfg or S.load()
         bk = book(cfg)
+        cfg = vol_scaled_cfg(cfg, bk)  # 可选组合波动率目标：入场与调仓的风险/权重上限 × k（默认关闭 k=1）
         venue, st, rk = cfg["venue"], cfg["strategy"], cfg["risk"]
         sig = compute_signals(cfg, with_quotes=False)
         events, errors = [], dict(sig["errors"])

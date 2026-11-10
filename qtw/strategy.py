@@ -69,6 +69,25 @@ def port_vol_factor(equity, target: float, lookback: int, bars_per_year: float =
     return min(1.0, float(target) / sd) if sd > 0 else 1.0
 
 
+def bar_close_equity(ledger: list[dict], interval_ms: int) -> list[float]:
+    """把账本权益快照按 K 线周期分桶，取每根内最后一条（≈该根收盘权益），时间升序。
+    用于实盘/模拟引擎的组合波动率目标，与回测逐根收盘权益口径一致。时间无法解析的行丢弃。"""
+    from datetime import datetime, timezone
+    out: dict[int, float] = {}
+    for r in ledger or []:
+        try:
+            t = datetime.fromisoformat(str(r.get("time")).replace("Z", "+00:00"))
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+            v = float(r.get("equity_usdt"))
+        except (TypeError, ValueError):
+            continue
+        if not v > 0:
+            continue
+        out[int(t.timestamp() * 1000) // int(interval_ms)] = v
+    return [out[k] for k in sorted(out)]
+
+
 def side_of(sig: int) -> str:
     return {1: "long", -1: "short"}.get(int(sig), "flat")
 
