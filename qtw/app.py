@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__, db, engine, stream, vault, worker
 from . import settings as S
 from .backtest import run_backtest
+from . import equity_series
 from .live import guard
 from .logsafe import setup_logging
 from .market import MarketDataError
@@ -339,6 +340,17 @@ def paper():
 def paper_book_alias():
     """Monitoring aliases (/api/paper/book, /api/paper/snapshot) → same as /api/paper."""
     return ok(_paper_payload())
+
+
+@app.get("/api/paper/equity")
+def paper_equity():
+    """Ledger equity points with fills / orders / signal_log events attached by time.
+
+    Every equity value is a real paper_ledger snapshot or the book's current
+    official equity(). No interpolated or mock mid-points are returned.
+    """
+    cfg = S.load()
+    return ok(equity_series.for_book(engine.book(cfg)))
 
 
 @app.get("/api/positions")
