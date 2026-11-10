@@ -9,6 +9,7 @@
   * 止损在第 i 根盘中按最高/最低价检查（跳空则按开盘价成交）；
   * 权益在第 i 根收盘按各自市场的收盘价计价。
 未计资金费率与滑点（见 README）。
+趋势过滤：入场时用第 i-1 根收盘价与该市场 SMA(trend_ma) 比较，只拦截逆势新开仓，不影响已有持仓离场。
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from .risk import scale_to_room, size
-from .strategy import combine, indicators, market_of, side_of
+from .strategy import combine, indicators, market_of, side_of, trend_ok
 
 BARS_PER_YEAR = {"15m": 35040, "1h": 8760, "4h": 2190, "1d": 365}
 
@@ -54,7 +55,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     excluded = sorted((set(spot_d) | set(perp_d)) - set(syms))
     if not syms:
         raise ValueError("没有同时具备足够现货与永续历史 K 线的标的")
-    ind = {m: {s: indicators(src[s], st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1)).set_index("open_time") for s in syms}
+    ind = {m: {s: indicators(src[s], st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1), st.get("trend_ma", 0)).set_index("open_time") for s in syms}
            for m, src in (("spot", spot_d), ("perp", perp_d))}
     idx = None
     for m in ind.values():
@@ -67,7 +68,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     def arr(m, col):
         return {s: ind[m][s].loc[idx, col].to_numpy() for s in syms}
 
-    PX = {m: {c: arr(m, c) for c in ("open", "high", "low", "close", "atr", "signal")} for m in ("spot", "perp")}
+    PX = {m: {c: arr(m, c) for c in ("open", "high", "low", "close", "atr", "signal", "trend_ma")} for m in ("spot", "perp")}
     SIG = {s: combine(PX["spot"]["signal"][s], PX["perp"]["signal"][s]) for s in syms}
     MK = {"long": "spot", "short": "perp"}
 
@@ -124,6 +125,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
             if sg > 0 and not rk["allow_spot_long"] or sg < 0 and not rk["allow_perp_short"]:
                 continue
             sd = side_of(sg)
+            if not trend_ok(sg, P(sd, "close", s)[i - 1], P(sd, "trend_ma", s)[i - 1], st.get("trend_ma", 0)):
+                continue
             z = size(side=sd, equity=eq_prev, price=P(sd, "open", s)[i], atr=P(sd, "atr", s)[i - 1],
                      max_risk=rk["max_risk_per_trade"], max_weight=rk["max_weight_per_name"],
                      atr_mult=st["atr_stop_mult"])
@@ -204,7 +207,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": fee_bps, "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
-        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "max_risk_per_trade": rk["max_risk_per_trade"],
+        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
     }
     return {"summary": summary, "equity": ec.drop(columns=["peak"]),

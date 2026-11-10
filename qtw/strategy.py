@@ -5,6 +5,8 @@
   快线 < 慢线 → -1 做空 → USDT 永续空头（1 倍保证金）
   否则/数据不足 → 0 空仓
 信号确认：原始方向需在最近 confirm_bars 根已收盘 K 线上保持一致才生效，否则视为 0（空仓），过滤刚交叉就回头的假信号。
+趋势过滤（trend_ma>0，仅作用于入场）：做多需上一根收盘 > 该市场 SMA(trend_ma)，做空需 < SMA(trend_ma)；
+  已有持仓不因趋势过滤平仓，离场仍只看信号反转/归零与 ATR 止损。
 止损：入场价 ∓ atr_stop_mult × ATR(入场前一根收盘)。止损后保持空仓，直到信号方向改变。
 """
 from __future__ import annotations
@@ -13,9 +15,10 @@ import numpy as np
 import pandas as pd
 
 
-def indicators(df: pd.DataFrame, fast: int, slow: int, atr_period: int, confirm_bars: int = 1) -> pd.DataFrame:
+def indicators(df: pd.DataFrame, fast: int, slow: int, atr_period: int, confirm_bars: int = 1, trend_ma: int = 0) -> pd.DataFrame:
     out = df.copy()
     c = out["close"]
+    out["trend_ma"] = c.rolling(int(trend_ma), min_periods=int(trend_ma)).mean() if trend_ma else np.nan
     out["sma_fast"] = c.rolling(fast, min_periods=fast).mean()
     out["sma_slow"] = c.rolling(slow, min_periods=slow).mean()
     prev = c.shift(1)
@@ -29,6 +32,15 @@ def indicators(df: pd.DataFrame, fast: int, slow: int, atr_period: int, confirm_
         sig = sig.where(raw.eq(raw.shift(j)), 0)
     out["signal"] = sig.astype(int)
     return out
+
+
+def trend_ok(sig: int, close: float, tma: float, trend_ma: int) -> bool:
+    """入场趋势闸门：关闭时恒为 True；趋势线尚未形成（NaN）时不允许新开仓。"""
+    if not trend_ma or sig == 0:
+        return True
+    if not (tma == tma):
+        return False
+    return close > tma if sig > 0 else close < tma
 
 
 def side_of(sig: int) -> str:

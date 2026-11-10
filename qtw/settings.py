@@ -26,6 +26,9 @@ DEFAULTS: dict[str, Any] = {
         "atr_period": 14,
         "atr_stop_mult": 2.0,
         "confirm_bars": 2,  # 2026-11-10：OKX+Gate 各 3 段滚动样本外均优于 1
+        # 2026-11-10：仅入场的趋势过滤（多需收盘>SMA100，空需收盘<SMA100；不强制平仓）。
+        # 6 段不重叠窗口：前 3 段选出 100，后 3 段（未参与选择）在 OKX/Gate、4/14bps 下均优于不过滤。0=关闭
+        "trend_ma": 100,
         "lookback_bars": 200,
     },
     "risk": {
@@ -99,6 +102,9 @@ def validate(s: dict) -> dict:
     st["confirm_bars"] = int(st.get("confirm_bars", 1))
     if not 1 <= st["confirm_bars"] <= 5:
         raise ValueError("信号确认根数需在 1–5 之间")
+    st["trend_ma"] = int(st.get("trend_ma", 0) or 0)
+    if st["trend_ma"] and not 20 <= st["trend_ma"] <= 400:
+        raise ValueError("趋势过滤 SMA 需为 0（关闭）或 20–400")
     rk["max_risk_per_trade"] = float(rk["max_risk_per_trade"])
     rk["max_weight_per_name"] = float(rk["max_weight_per_name"])
     if not 0 < rk["max_risk_per_trade"] <= 0.05:

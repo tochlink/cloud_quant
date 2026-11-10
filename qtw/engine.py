@@ -16,7 +16,7 @@ from . import db
 from .paper import ORDER_COLS, PaperBook
 from .paths import OUTPUT_DIR
 from .risk import cap_at_entry, scale_to_room, size
-from .strategy import combine, indicators, last_cross, market_of, side_of
+from .strategy import combine, indicators, last_cross, market_of, side_of, trend_ok
 from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
@@ -122,7 +122,7 @@ def _quote(venue: str, sym: str, market: str):
 def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     st, rk = cfg["strategy"], cfg["risk"]
     venue = cfg["venue"]
-    need = max(st["lookback_bars"], st["slow_ma"] + st["atr_period"] + 5)
+    need = max(st["lookback_bars"], st["slow_ma"] + st["atr_period"] + 5, int(st.get("trend_ma", 0) or 0) + 5)
     frames, errs = mcache.many(venue, cfg["symbols"], st["interval"], need)
     bk = book(cfg)
     eq = bk.equity()
@@ -133,7 +133,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         for m in ("spot", "perp"):
             df = frames.get(m, {}).get(sym)
             if df is not None and len(df) >= st["slow_ma"] + 1:
-                ind[m] = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1))
+                ind[m] = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1), st.get("trend_ma", 0))
                 ind[m].attrs.update(df.attrs)
         if not ind:
             rows.append({"symbol": sym, "error": "；".join(v for k, v in errs.items() if k.startswith(sym + ":")) or "K 线不足"})
@@ -192,6 +192,10 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         row.update({"target_notional_usdt": z.notional, "target_qty": z.qty, "target_weight": z.weight,
                     "stop_price": z.stop_price, "stop_pct": z.stop_pct, "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
         blocked = bk.blocks.get(sym) == sig and sig != 0
+        tl = int(st.get("trend_ma", 0) or 0)
+        tma = float(last["trend_ma"]) if tl else float("nan")
+        tok = trend_ok(sig, float(last["close"]), tma, tl)
+        row.update({"trend_ma": tma if tl else None, "trend_ok": bool(tok)})
         if pos and pos.side == side:
             entry = f"持有中：{pos.entry_time} 以 {pos.entry_price:g} 入场"
             exit_ = f"出现反向/归零信号（下次收盘检查 {row['next_check_sh']}）或价格触及止损 {pos.stop_price:g} 时离场"
@@ -202,6 +206,10 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         elif blocked:
             entry = "已止损，观望中：等待信号方向改变后再入场"
             exit_, state = "—", "blocked"
+        elif not tok:
+            where = "下方" if sig > 0 else "上方"
+            entry = f"信号有效，但收盘价在 SMA{tl} 趋势线{where}（趋势线 {tma:.6g}）：暂不开新仓"
+            exit_, state = "—", "trend_wait"
         else:
             entry = f"信号自 {row['signal_since'] or '数据起点'} 生效 → 下一个执行周期按最新{('现货价' if mkt == 'spot' else '标记价')}入场"
             exit_ = f"止损 {z.stop_price:.6g}（{st['atr_stop_mult']}×ATR）；或收盘出现反向交叉时离场"
@@ -329,7 +337,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         want = {}
         for s in cfg["symbols"]:
             r = rows.get(s)
-            if not r or s in bk.positions or r["signal"] == 0 or bk.blocks.get(s) == r["signal"]:
+            if not r or s in bk.positions or r["signal"] == 0 or bk.blocks.get(s) == r["signal"] or r.get("trend_ok") is False:
                 continue
             if r["side"] == "long" and not rk["allow_spot_long"] or r["side"] == "short" and not rk["allow_perp_short"]:
                 continue
