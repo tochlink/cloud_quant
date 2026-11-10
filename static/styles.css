@@ -262,7 +262,7 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
 .badge.lg{font-size:14px;padding:6px 14px;border-radius:10px}
 
 /* 感叹号说明：悬停 / 聚焦展开 */
-.info{position:relative;display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;margin-left:8px;background:#ffe9c7;color:#b36b00;font-size:12px;font-weight:800;cursor:help;vertical-align:middle;outline:none;font-style:normal}
+.info{position:relative;display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;margin-left:8px;background:#ffe9c7;color:#b36b00;font-size:0;line-height:0;font-weight:800;cursor:help;vertical-align:middle;outline:none;font-style:normal}
 .info:focus-visible{box-shadow:0 0 0 2px var(--amber)}
 .info .pop{position:absolute;z-index:60;top:calc(100% + 10px);left:50%;transform:translate(-50%,4px);width:max-content;max-width:min(320px,70vw);padding:12px 14px;border-radius:14px;background:#2b2160;color:#eeeaff;font-size:12.5px;font-weight:500;line-height:1.65;text-align:left;box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:.15s;white-space:normal}
 .info .pop::before{content:"";position:absolute;top:-6px;left:50%;margin-left:-6px;border:6px solid transparent;border-top:0;border-bottom-color:#2b2160}
@@ -547,3 +547,19 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
   .sig-list{overflow-x:auto}
   .sig-page .chart-panel{min-height:140px}
 }
+
+/* Semi Design icons (filled, currentColor) */
+svg.icon{stroke:none;fill:currentColor;width:1em;height:1em;flex:none;display:block;overflow:visible}
+svg.icon path,svg.icon g{stroke:none;fill:currentColor}
+.nav-item svg.icon{width:44%;height:44%}
+.ico-btn svg.icon{width:19px;height:19px}
+.ico-btn.sm svg.icon{width:15px;height:15px}
+.chip-btn svg.icon{width:16px;height:16px}
+.btn svg.icon,.run-btn svg.icon{width:13px;height:13px}
+.kill svg.icon{width:13px;height:13px}
+.rail-close svg.icon{width:16px;height:16px}
+.r-alert .bell svg.icon{width:28px;height:28px;color:#e35d7c}
+.sig-modal-close svg.icon{width:16px;height:16px}
+.info svg.icon{width:12px;height:12px;stroke:none;fill:currentColor}
+.r-row svg.chev,.tx svg.chev{width:16px;height:16px;color:var(--muted);stroke:none;fill:currentColor}
+i[data-icon]{display:inline-flex;align-items:center;justify-content:center;line-height:0;flex:none}

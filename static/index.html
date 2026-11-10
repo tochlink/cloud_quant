@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>QTW · 量化交易控制台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='10' fill='%234b3aa6'/%3E%3Cpath d='M7 21l6-6 4 4 8-9' stroke='%2373f0e0' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/static/styles.css?v=1794325500" />
+  <link rel="stylesheet" href="/static/styles.css?v=1794325600" />
 </head>
 <body>
   <div class="bg-arcs" aria-hidden="true">
@@ -31,8 +31,8 @@
               <span class="venue-lbl">行情源</span>
               <button type="button" data-venue="okx">OKX</button><button type="button" data-venue="gate">Gate</button>
             </div>
-            <button class="btn ghost rail-btn" id="railBtn" type="button" aria-controls="rpanel" aria-expanded="false"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M14 4v16"/></svg><span id="railBtnLbl">持仓面板</span></button>
-            <button class="btn run-btn" id="runNowBtn" type="button" title="按最新已收盘 K 线跑一轮系统化周期，只在纸面账本调仓，不下真实单"><svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z"/></svg><span>跑一轮</span></button>
+            <button class="btn ghost rail-btn" id="railBtn" type="button" aria-controls="rpanel" aria-expanded="false"><i data-icon="sidebar"></i><span id="railBtnLbl">持仓面板</span></button>
+            <button class="btn run-btn" id="runNowBtn" type="button" title="按最新已收盘 K 线跑一轮系统化周期，只在纸面账本调仓，不下真实单"><i data-icon="play"></i><span>跑一轮</span></button>
           </div>
         </header>
         <section class="page" id="page"></section>
@@ -41,14 +41,14 @@
       <div class="rail-backdrop" id="railBackdrop"></div>
       <aside class="rpanel" id="rpanel" aria-label="持仓与提醒">
         <div class="r-top">
-          <button class="rail-close" id="railClose" type="button" aria-label="关闭面板"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
-          <button class="chip-btn" id="noticeBtn" type="button" title="最近一次自动周期的系统消息"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></svg>消息</button>
-          <button class="chip-btn" id="bellBtn" type="button" title="自动交易、实盘闸门与上次执行时间"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>运行状态<i class="dot" id="bellDot"></i></button>
+          <button class="rail-close" id="railClose" type="button" aria-label="关闭面板"><i data-icon="x"></i></button>
+          <button class="chip-btn" id="noticeBtn" type="button" title="最近一次自动周期的系统消息"><i data-icon="comment"></i>消息</button>
+          <button class="chip-btn" id="bellBtn" type="button" title="自动交易、实盘闸门与上次执行时间"><i data-icon="bell"></i>运行状态<i class="dot" id="bellDot"></i></button>
           <div class="avatar" title="kean">K</div>
         </div>
         <div class="r-head">
           <h2 id="rTitle">持仓</h2>
-          <button class="ico-btn sm" id="rSearchBtn" type="button" title="筛选币种" aria-label="筛选币种"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></button>
+          <button class="ico-btn sm" id="rSearchBtn" type="button" title="筛选币种" aria-label="筛选币种"><i data-icon="search"></i></button>
         </div>
         <input class="r-search hidden" id="rSearch" placeholder="输入币种筛选，如 BTC" aria-label="筛选币种" />
         <div class="r-sub" id="rSub">—</div>
@@ -56,11 +56,11 @@
         <div id="rPager"></div>
         <div class="r-alert" id="rAlert">
           <svg class="wave" viewBox="0 0 300 160" preserveAspectRatio="none"><path d="M0 70 C 80 10, 160 120, 300 40 L300 160 L0 160Z"/></svg>
-          <div class="bell"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 1 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/><path d="M3 6l2 1M21 6l-2 1M12 2v1"/></svg></div>
+          <div class="bell"><i data-icon="bell"></i></div>
           <div class="r-alert-text" id="rAlertText">加载中…</div>
           <div class="r-alert-actions">
-            <button class="kill" id="killBtn" type="button" title="停止自动交易、关闭实盘开关，并平掉全部纸面持仓（会先确认）"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>紧急停止</button>
-            <button class="btn sm" id="alertGo" type="button">查看信号<svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+            <button class="kill" id="killBtn" type="button" title="停止自动交易、关闭实盘开关，并平掉全部纸面持仓（会先确认）"><i data-icon="stop"></i>紧急停止</button>
+            <button class="btn sm" id="alertGo" type="button">查看信号<i data-icon="send"></i></button>
           </div>
         </div>
       </aside>
@@ -71,7 +71,7 @@
   <div class="modal hidden" id="modal"><div class="modal-card" id="modalCard"></div></div>
 
   <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
-  <script src="/static/charts.js?v=1794325500"></script>
-  <script src="/static/app.js?v=1794325500"></script>
+  <script src="/static/charts.js?v=1794325600"></script>
+  <script src="/static/app.js?v=1794325600"></script>
 </body>
 </html>
