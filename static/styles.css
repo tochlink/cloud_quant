@@ -319,9 +319,6 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
 .tile .legend i{display:inline-block;width:8px;height:8px;border-radius:3px;margin-right:5px}
 .tile .tile-act{position:absolute;left:14px;bottom:12px}
 .dash .foot{grid-column:1/-1;margin:0 4px}
-@media (max-height:750px){
-  .bt-chart-panel{max-height:min(120px,18vh)}
-}
 @media (max-width:900px){.dash{grid-template-columns:minmax(0,1fr)}.stats{grid-template-rows:none;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}}
 @media (max-width:520px){.hero{grid-template-columns:minmax(0,1fr)}.facts{grid-template-columns:minmax(0,1fr)}}
 
@@ -514,32 +511,34 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
 .bt-page .field input,.bt-page .field select{padding:8px 10px}
 .bt-page #btRun{height:38px}
 .bt-out{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;gap:8px}
-.bt-out .metrics{flex:none;grid-template-columns:repeat(8,minmax(0,1fr));gap:6px}
-.bt-out .metric{padding:6px 8px;border-radius:12px}
-.bt-out .metric small{font-size:10px}
-.bt-out .metric b{font-size:15px;margin-top:0}
-.bt-chart-panel{flex:1 1 110px;min-height:80px;max-height:min(140px,20vh);display:flex;flex-direction:column;overflow:hidden;padding:10px 12px}
-.bt-chart-panel .sec-title{margin:0 0 6px !important;flex:none}
-.bt-chart-panel .chart-box{flex:1;min-height:70px;height:auto}
-.bt-trades-panel{flex:1 1 140px;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:10px 12px}
+.bt-out .metrics{flex:none;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.bt-out .metric{padding:8px 12px;border-radius:14px;min-width:0}
+.bt-out .metric small{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-out .metric b{font-size:16px;margin-top:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-view{flex:none;align-self:flex-start}
+.bt-chart-panel{flex:1;min-height:220px;max-height:none;display:flex;flex-direction:column;overflow:hidden;padding:12px 14px}
+.bt-chart-panel .sec-title{margin:0 0 8px !important;flex:none}
+.bt-chart-panel .chart-box{flex:1;min-height:200px;height:auto}
+.bt-trades-panel{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:12px 14px}
 .bt-trades-panel .sec-title{flex:none;margin:0 0 6px;align-items:center;gap:8px}
 .bt-trades-panel .sec-title #btPager{margin:0}
 .bt-trades-panel .sec-title .pager{padding:0}
-#btTrades{flex:1;min-height:88px;overflow:auto;scrollbar-width:thin;scrollbar-gutter:stable}
+#btTrades,.fit #btTrades.tbl-wrap{flex:1 1 0%;min-height:120px;height:0 !important;max-height:none;overflow:auto;scrollbar-width:thin;scrollbar-gutter:stable both-edges}
 #btTrades .tbl th,#btTrades .tbl td{padding:6px 8px}
-#btTrades .tbl th:last-child,#btTrades .tbl td:last-child{max-width:140px;overflow:hidden;text-overflow:ellipsis}
+#btTrades .tbl th:last-child,#btTrades .tbl td:last-child,#btTrades td.reason{min-width:9em;max-width:18em;white-space:normal;overflow:visible}
 .bt-trades-panel .note{flex:none;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media (max-width:1440px){
   .bt-page .bt-form{grid-template-columns:repeat(6,minmax(0,1fr))}
-  .bt-out .metrics{grid-template-columns:repeat(8,minmax(0,1fr))}
+  .bt-out .metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
 }
 @media (max-width:900px){
-  .bt-out .metrics{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .bt-out .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media (max-width:760px){
   .bt-page .bt-form{grid-template-columns:repeat(2,minmax(0,1fr))}
   .bt-out .metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
   .bt-out{overflow:auto}
+  .bt-chart-panel,.bt-chart-panel .chart-box{min-height:180px}
 }
 
 @media (max-width:760px){

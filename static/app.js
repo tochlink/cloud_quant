@@ -78,26 +78,36 @@ function fqty(x) {
   return n.toLocaleString("zh-CN", { minimumFractionDigits: 0, maximumFractionDigits: d });
 }
 const STALE_SEC = 20;
+const STALE_KEEP_SEC = 180; // 仍展示最近一次官方价；超过此时长才显示 —
 S.pg = S.pg || {};
-function quoteFresh(q) {
-  if (!q || !pxOk(q.price)) return false;
-  if (q.age_sec != null && isFinite(q.age_sec) && q.age_sec > STALE_SEC) return false;
-  return true;
-}
-function liveQuote(sym, mkt) {
-  return (S.live && S.live.prices && S.live.prices[sym] && quoteFresh(S.live.prices[sym][mkt])) ? S.live.prices[sym][mkt] : null;
-}
 function ageSec(isoStr) {
   if (!isoStr) return null;
   const ms = Date.parse(isoStr);
   return isFinite(ms) ? (Date.now() - ms) / 1000 : null;
 }
+function quoteAge(q) {
+  if (!q) return null;
+  let age = (q.age_sec != null && isFinite(q.age_sec)) ? Number(q.age_sec) : null;
+  if (age != null && S.liveAt) age += Math.max(0, (Date.now() - S.liveAt) / 1000);
+  else if (age == null && q.ts) age = ageSec(q.ts);
+  return age;
+}
+function quoteFresh(q, maxAge = STALE_SEC) {
+  if (!q || !pxOk(q.price)) return false;
+  const age = quoteAge(q);
+  if (age != null && age > maxAge) return false;
+  return true;
+}
+function liveQuote(sym, mkt, maxAge = STALE_KEEP_SEC) {
+  const q = S.live && S.live.prices && S.live.prices[sym] && S.live.prices[sym][mkt];
+  return quoteFresh(q, maxAge) ? q : null;
+}
 function currentPx(sym, mkt, fallback, fallbackTime) {
-  const q = liveQuote(sym, mkt);
+  const q = liveQuote(sym, mkt, STALE_KEEP_SEC);
   if (q) return Number(q.price);
   if (pxOk(fallback)) {
     const age = ageSec(fallbackTime);
-    if (age != null && age > STALE_SEC) return null;
+    if (age != null && age > STALE_KEEP_SEC) return null;
     return Number(fallback);
   }
   return null;
@@ -665,22 +675,47 @@ async function runBacktest() {
   } catch (e) { toast("回测失败：" + e.message, true); }
   finally { b.disabled = false; b.innerHTML = ic("play") + "运行回测"; }
 }
+function bindBtView(view) {
+  S.btView = view === "trades" ? "trades" : "chart";
+  const chartOn = S.btView === "chart";
+  const chart = $("#btChartWrap"), trades = $("#btTradesWrap"), bar = $("#btView");
+  if (chart) chart.classList.toggle("hidden", !chartOn);
+  if (trades) trades.classList.toggle("hidden", chartOn);
+  if (bar) bar.querySelectorAll("[data-bt-view]").forEach((b) => b.classList.toggle("on", b.dataset.btView === S.btView));
+  if (chartOn && S.bt) {
+    const el = $("#eqChart");
+    if (el) requestAnimationFrame(() => BigCharts.equity(el, S.bt.equity));
+  } else if (S.bt) {
+    if (S.pg.btTrades) S.pg.btTrades._fit = null;
+    requestAnimationFrame(() => renderBtTrades());
+    clearTimeout(S._btFitT);
+    S._btFitT = setTimeout(() => { if (S.pg.btTrades) S.pg.btTrades._fit = null; renderBtTrades(); }, 50);
+    S._btFitT2 = setTimeout(() => renderBtTrades(), 250);
+  }
+}
 function renderBt() {
   const r = S.bt, m = r.summary;
-  const M = (k, v, c = "", f = false) => `<div class="metric ${f ? "feature" : ""}"><small>${k}</small><b class="num ${c}">${v}</b></div>`;
-    $("#btOut").innerHTML = `
+  const M = (k, v, c = "", f = false) => `<div class="metric ${f ? "feature" : ""}"><small title="${esc(k)}">${k}</small><b class="num ${c}">${v}</b></div>`;
+  $("#btOut").innerHTML = `
   <div class="metrics">
     ${M("总收益", pct(m.total_return), "", true)}${M("期末权益 (USDT)", f2(m.ending_equity_usdt))}${M("最大回撤", pct(m.max_drawdown), "neg")}${M("夏普比率（年化）", m.sharpe == null ? "—" : m.sharpe.toFixed(2))}
     ${M("胜率", pct(m.win_rate, 1))}${M("盈亏比", m.profit_factor == null ? "—" : m.profit_factor.toFixed(2))}${M("已平 / 持仓中", `${m.closed_trades} / ${m.open_trades}`)}${M(esc(m.benchmark), pct(m.benchmark_return), cls(m.benchmark_return))}
   </div>
-  <div class="panel bt-chart-panel"><div class="sec-title" style="margin:4px 8px 8px"><h3>权益曲线与回撤</h3><span class="note">#${m.run_id ?? ""} ${esc((m.venue || "").toUpperCase())} · ${esc(m.interval)} · ${tFull(m.start_time)} → ${tFull(m.end_time)} · ${m.bars} 根 · 手续费 ${m.fee_bps} bps · 止损离场 ${m.stop_exits} 次</span></div><div class="chart-box" id="eqChart"></div></div>
-  <div class="panel bt-trades-panel">
+  <div class="seg bt-view" id="btView" role="tablist" aria-label="回测结果">
+    <button type="button" role="tab" data-bt-view="chart">权益曲线</button>
+    <button type="button" role="tab" data-bt-view="trades">成交明细（${r.trades.length}）</button>
+  </div>
+  <div class="panel bt-chart-panel" id="btChartWrap">
+    <div class="sec-title"><h3>权益曲线与回撤</h3><span class="note">#${m.run_id ?? ""} ${esc((m.venue || "").toUpperCase())} · ${esc(m.interval)} · ${tFull(m.start_time)} → ${tFull(m.end_time)} · ${m.bars} 根 · 手续费 ${m.fee_bps} bps · 止损离场 ${m.stop_exits} 次</span></div>
+    <div class="chart-box" id="eqChart"></div>
+  </div>
+  <div class="panel bt-trades-panel" id="btTradesWrap">
     <div class="sec-title"><h3>回测成交（${r.trades.length}）</h3><div id="btPager"></div></div>
     <div id="btTrades" class="tbl-wrap"></div>
     <div class="note" title="数据：${esc(m.data_source)} · ${esc(m.source_host)} · 拉取 ${tFull(m.fetched_at)}">官方公共历史 K 线（做多=现货，做空=USDT 永续）；未计资金费率与滑点；不代表未来收益。生成于 ${tFull(r.generated_at)}。</div>
   </div>`;
-  BigCharts.equity($("#eqChart"), r.equity);
-  renderBtTrades();
+  $("#btView").querySelectorAll("[data-bt-view]").forEach((b) => (b.onclick = () => bindBtView(b.dataset.btView)));
+  bindBtView(S.btView || "chart");
 }
 
 /* ---------- 持仓 ---------- */
@@ -1114,7 +1149,7 @@ function renderBtTrades() {
   const st = pgState("btTrades", rows.length, fitRows(host, 36, 28, 2));
   const slice = rows.slice(st.start, st.end);
   const body = host.querySelector("tbody");
-  body.innerHTML = slice.map((x) => `<tr><td><b>${esc(x.symbol)}</b></td><td><span class="pill ${x.side}">${sideCn(x.side)} · ${mktCn(x.market)}</span></td><td>${tFull(x.entry_time)}</td><td class="num">${fp(x.entry_price)}</td><td>${x.exit_time ? tFull(x.exit_time) : "—"}</td><td class="num">${fp(x.exit_price)}</td><td class="num">${f2(x.notional_usdt)}</td><td class="num ${cls(x.pnl_usdt)}">${sgn(x.pnl_usdt)}</td><td class="num ${cls(x.return_pct)}">${pct(x.return_pct)}</td><td class="num">${x.bars_held}</td><td title="${esc(x.exit_reason || "")}">${esc(x.exit_reason)}</td></tr>`).join("");
+  body.innerHTML = slice.map((x) => `<tr><td><b>${esc(x.symbol)}</b></td><td><span class="pill ${x.side}">${sideCn(x.side)} · ${mktCn(x.market)}</span></td><td title="${tFull(x.entry_time)}">${tCompact(x.entry_time)}</td><td class="num">${fp(x.entry_price)}</td><td title="${x.exit_time ? tFull(x.exit_time) : ""}">${x.exit_time ? tCompact(x.exit_time) : "—"}</td><td class="num">${fp(x.exit_price)}</td><td class="num">${f2(x.notional_usdt)}</td><td class="num ${cls(x.pnl_usdt)}">${sgn(x.pnl_usdt)}</td><td class="num ${cls(x.return_pct)}">${pct(x.return_pct)}</td><td class="num">${x.bars_held}</td><td class="reason" title="${esc(x.exit_reason || "")}">${esc(x.exit_reason)}</td></tr>`).join("");
   const pg = $("#btPager"); if (pg) { pg.innerHTML = pagerHtml("btTrades", st); bindPager("btTrades", renderBtTrades); }
   requestAnimationFrame(() => refitByActualRows(host, "btTrades", "tbody tr", renderBtTrades, 1));
   clearTimeout(S._btFitT);
