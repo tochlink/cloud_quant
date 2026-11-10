@@ -41,3 +41,23 @@ def test_trend_default_and_validation():
         pass
     cfg["strategy"]["trend_ma"] = 0
     assert S.validate(cfg)["strategy"]["trend_ma"] == 0
+
+
+def test_short_breaker_default_and_validation():
+    assert S.DEFAULTS["strategy"]["short_breaker_bars"] == 60
+    cfg = S._merge(S.DEFAULTS, {})
+    cfg["strategy"]["short_breaker_bars"] = 3
+    try:
+        S.validate(cfg)
+        assert False
+    except ValueError:
+        pass
+    cfg["strategy"]["short_breaker_bars"] = 0
+    assert S.validate(cfg)["strategy"]["short_breaker_bars"] == 0
+
+
+def test_short_breaker_off_and_causal_mask():
+    from qtw.backtest import short_breaker
+    cfg = S._merge(S.DEFAULTS, {})
+    cfg["strategy"]["short_breaker_bars"] = 0
+    assert short_breaker({}, cfg)["blocked_now"] is False
