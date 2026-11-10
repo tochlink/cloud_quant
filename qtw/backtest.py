@@ -22,7 +22,7 @@ import pandas as pd
 from . import rebalance as RB
 from .risk import scale_to_room, size
 from .settings import taker_rate
-from .strategy import btc_regime_blocks_long, combine, indicators, market_of, side_of, trend_ok
+from .strategy import btc_regime_blocks_long, combine, port_vol_factor, indicators, market_of, side_of, trend_ok
 
 BARS_PER_YEAR = {"15m": 35040, "1h": 8760, "4h": 2190, "1d": 365}
 
@@ -116,6 +116,11 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         b = spot_d["BTCUSDT"].sort_values("open_time").set_index("open_time")
         RGL = btc_regime_blocks_long(b["close"], rg_n).reindex(idx).fillna(False).to_numpy(dtype=bool)
     MK = {"long": "spot", "short": "perp"}
+    # 可选组合波动率目标（默认关闭，port_vol_target = 0）：每根开盘前用最近 port_vol_lookback 根收盘权益的年化波动 σ
+    # 算 k = min(1, 目标/σ)，新开仓与调仓的单笔风险上限、单币权重上限都 × k（总敞口上限不变）。
+    pv_t, pv_l = float(st.get("port_vol_target", 0) or 0), int(st.get("port_vol_lookback", 180) or 180)
+    base_risk, base_w = float(rk["max_risk_per_trade"]), float(rk["max_weight_per_name"])
+    cfg_eff = cfg
 
     def P(side, col, s):
         return PX[MK[side]][col][s]
@@ -168,6 +173,10 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
                 blocked.pop(s)
         # 2) 入场（同一根 K 线的多个新仓按剩余总敞口额度等比缩放）
         eq_prev = prev_eq
+        pv_k = port_vol_factor([c["equity"] for c in curve[-(pv_l + 1):]], pv_t, pv_l, BARS_PER_YEAR.get(st["interval"], 2190)) if pv_t > 0 else 1.0
+        risk_now, w_now = base_risk * pv_k, base_w * pv_k
+        if pv_t > 0:
+            cfg_eff = {**cfg, "risk": {**rk, "max_risk_per_trade": risk_now, "max_weight_per_name": w_now}}
         gross = sum(abs(t.qty) * P(t.side, "open", s)[i] for s, t in pos.items())
         want: dict = {}
         for s in syms:
@@ -184,7 +193,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
             if not trend_ok(sg, P(sd, "close", s)[i - 1], P(sd, "trend_ma", s)[i - 1], st.get("trend_ma", 0)):
                 continue
             z = size(side=sd, equity=eq_prev, price=P(sd, "open", s)[i], atr=P(sd, "atr", s)[i - 1],
-                     max_risk=rk["max_risk_per_trade"], max_weight=rk["max_weight_per_name"],
+                     max_risk=risk_now, max_weight=w_now,
                      atr_mult=st["atr_stop_mult"])
             if z.notional > 0:
                 want[s] = (sg, z)
@@ -214,7 +223,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
                 if R <= 0 or d * (P(t.side, "close", s)[i - 1] - t.entry_price) < pyr_k * R:
                     continue
                 px = P(t.side, "open", s)[i]
-                add_n = min(pyr_f * t.notional_usdt, eq_prev * float(rk["max_weight_per_name"]) - abs(t.qty) * px, room_add)
+                add_n = min(pyr_f * t.notional_usdt, eq_prev * w_now - abs(t.qty) * px, room_add)
                 if add_n < 1.0:
                     continue
                 aq = add_n / px
@@ -238,7 +247,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
             g_now = sum(abs(x.qty) * P(x.side, "open", y)[i] for y, x in pos.items())
             rb_plan = RB.plan(held, {q: float(P(t.side, "open", q)[i]) for q, t in held.items()},
                               {q: float(P(t.side, "atr", q)[i - 1]) for q, t in held.items()},
-                              equity=eq_prev, new_notional=new_n, cfg=cfg, gross_now=g_now, fee=fee)
+                              equity=eq_prev, new_notional=new_n, cfg=cfg_eff, gross_now=g_now, fee=fee)
             for it in rb_plan:  # 与引擎 _rebalance 同一个计划函数（qtw/rebalance.py）
                 q, px, delta = it["symbol"], it["price"], it["delta_usdt"]
                 t = pos[q]
@@ -334,7 +343,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": round(FEE["spot"] * 10_000, 4), "spot_taker_bps": round(FEE["spot"] * 10_000, 4), "perp_taker_bps": round(FEE["perp"] * 10_000, 4), "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
-        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_mode": rb_mode,
+        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l,
         "resizes": int(sum(t.resizes for t in closed + open_trades)), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
     }

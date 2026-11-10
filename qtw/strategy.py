@@ -53,6 +53,22 @@ def btc_regime_blocks_long(close, n: int):
     return (c < c.rolling(int(n)).mean()).fillna(False)
 
 
+def port_vol_factor(equity, target: float, lookback: int, bars_per_year: float = 2190) -> float:
+    """组合波动率目标（可选，默认关闭）：用最近 lookback 根已收盘权益的逐根收益算年化波动 σ，
+    返回 k = min(1, target / σ)，调用方把单笔风险上限与单币权重上限都乘以 k（只缩不放）。
+    target = 0 关闭；权益历史不足 lookback + 1 根、或 σ = 0 时返回 1（不缩）。"""
+    if not target or lookback < 2:
+        return 1.0
+    q = np.asarray(equity, dtype=float)
+    if len(q) < lookback + 1:
+        return 1.0
+    q = q[-(lookback + 1):]
+    if (q <= 0).any():
+        return 1.0
+    sd = float(np.std(np.diff(q) / q[:-1]) * np.sqrt(bars_per_year))
+    return min(1.0, float(target) / sd) if sd > 0 else 1.0
+
+
 def side_of(sig: int) -> str:
     return {1: "long", -1: "short"}.get(int(sig), "flat")
 

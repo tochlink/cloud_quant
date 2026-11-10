@@ -58,6 +58,12 @@ DEFAULTS: dict[str, Any] = {
         # 真实费率（现货 10 / 永续 5.1 bps）：前 6 段选出 0.1，后 6 段（未参与选择）OKX +33.6% vs 基线 +29.4%，
         # Gate +33.2% vs +29.3%；费率 ×2 仍更好；0.1/0.25/0.5 三档全优（平台而非尖峰）。0 = 关闭
         "rebalance_band": 0.1,
+        # 2026-11-10 13:00：可选组合波动率目标（默认关闭，仅回测生效，引擎尚未接入）。最近 port_vol_lookback 根 4h 权益收益的年化波动 σ，
+        # 单笔风险与单币权重上限 × min(1, 目标/σ)。Gate / OKX 4500 根长历史、新基线：目标 25–40% × 回看 90/180/360 共 12 组最大回撤全部
+        # 从 −28.3% 降到 −20%~−26%、日夏普 1.25→1.3–1.5；30%/180：Gate 调参前 +42.2%→+54.7%、之后 +56.7%→+55.4%，回撤 −23.5%。
+        # （output/research_long_history_drawdown_equity_vol_throttle.csv、research_long_history_port_vol_target_robustness.csv）0=关闭
+        "port_vol_target": 0.0,
+        "port_vol_lookback": 180,
         "rebalance_mode": "stop",  # stop：按现有止损距离定目标；atr：再取与最新 ATR 止损距离的较大者（更保守）
         "lookback_bars": 200,
     },
@@ -171,6 +177,12 @@ def validate(s: dict) -> dict:
     st["rebalance_band"] = float(st.get("rebalance_band", 0) or 0)
     if st["rebalance_band"] and not 0.05 <= st["rebalance_band"] <= 2:
         raise ValueError("调仓阈值需为 0（关闭）或 0.05–2（即 5%–200%）")
+    st["port_vol_target"] = float(st.get("port_vol_target", 0) or 0)
+    if st["port_vol_target"] and not 0.05 <= st["port_vol_target"] <= 2:
+        raise ValueError("组合波动率目标需为 0（关闭）或 0.05–2（年化 5%–200%）")
+    st["port_vol_lookback"] = int(st.get("port_vol_lookback", 180) or 180)
+    if not 30 <= st["port_vol_lookback"] <= 1000:
+        raise ValueError("组合波动率回看根数需在 30–1000 之间")
     st["rebalance_mode"] = str(st.get("rebalance_mode", "stop") or "stop")
     if st["rebalance_mode"] not in ("stop", "atr"):
         raise ValueError("调仓模式只能是 stop 或 atr")
