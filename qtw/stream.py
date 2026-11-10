@@ -337,6 +337,10 @@ def _freshness(quotes: list, conns: list, last_ws: float, now: float) -> tuple[s
     up = sum(1 for c in conns if c["status"] == "connected")
     trying = sum(1 for c in conns if c["status"] in ("connected", "reconnecting", "connecting"))
     recent_ws = bool(last_ws) and (now - last_ws) < WS_MODE_HOLD_SEC
+    # Time the machine was frozen does not count against the WS hold: right after
+    # a host freeze the sockets are reconnecting, so show "recovering", not "rest".
+    if not recent_ws and last_ws and _last_host_freeze_at and (now - _last_host_freeze_at) < WS_MODE_HOLD_SEC:
+        recent_ws = (_last_host_freeze_at - (_last_host_freeze_gap_sec or 0.0)) - last_ws < WS_MODE_HOLD_SEC
     mode = classify_mode(live=live, rest=rest, up=up, trying=trying, recent_ws=recent_ws)
     return mode, live, rest
 
