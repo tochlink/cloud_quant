@@ -22,7 +22,7 @@ import pandas as pd
 from . import rebalance as RB
 from .risk import scale_to_room, size
 from .settings import taker_rate
-from .strategy import combine, indicators, market_of, side_of, trend_ok
+from .strategy import btc_regime_blocks_long, combine, indicators, market_of, side_of, trend_ok
 
 BARS_PER_YEAR = {"15m": 35040, "1h": 8760, "4h": 2190, "1d": 365}
 
@@ -109,6 +109,12 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     PX = {m: {c: arr(m, c) for c in ("open", "high", "low", "close", "atr", "signal", "trend_ma")} for m in ("spot", "perp")}
     SB = short_breaker(data, cfg)["mask"] if st.get("short_breaker_bars") and rk["allow_perp_short"] else {}
     SIG = {s: combine(PX["spot"]["signal"][s], PX["perp"]["signal"][s]) for s in syms}
+    # 可选 BTC 熊市体制过滤：BTC 现货收盘 < SMA_N（上一根）时不新开多单（不平已有仓）。BTCUSDT 不在数据里则不生效
+    rg_n = int(st.get("btc_regime_ma", 0) or 0)
+    RGL = np.zeros(len(idx), dtype=bool)
+    if rg_n and "BTCUSDT" in spot_d:
+        b = spot_d["BTCUSDT"].sort_values("open_time").set_index("open_time")
+        RGL = btc_regime_blocks_long(b["close"], rg_n).reindex(idx).fillna(False).to_numpy(dtype=bool)
     MK = {"long": "spot", "short": "perp"}
 
     def P(side, col, s):
@@ -172,6 +178,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
                 continue
             sd = side_of(sg)
             if sg < 0 and SB.get(when, False):
+                continue
+            if sg > 0 and RGL[i - 1]:
                 continue
             if not trend_ok(sg, P(sd, "close", s)[i - 1], P(sd, "trend_ma", s)[i - 1], st.get("trend_ma", 0)):
                 continue

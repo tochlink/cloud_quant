@@ -43,6 +43,16 @@ def trend_ok(sig: int, close: float, tma: float, trend_ma: int) -> bool:
     return close > tma if sig > 0 else close < tma
 
 
+def btc_regime_blocks_long(close, n: int):
+    """BTC 熊市体制过滤（仅拦新开多单）：BTC 现货收盘 < SMA_n 时为 True。
+    n = 0 关闭；SMA 尚未形成（历史不足 n 根）时为 False（不拦），与研究口径一致。
+    调用方用「上一根已收盘 K 线」的值决定本根是否允许开多（因果）。"""
+    c = pd.Series(close, dtype=float)
+    if not n:
+        return pd.Series(False, index=c.index)
+    return (c < c.rolling(int(n)).mean()).fillna(False)
+
+
 def side_of(sig: int) -> str:
     return {1: "long", -1: "short"}.get(int(sig), "flat")
 

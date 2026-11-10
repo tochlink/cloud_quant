@@ -19,7 +19,7 @@ from .paper import ORDER_COLS, PaperBook
 from .paths import OUTPUT_DIR
 from .backtest import short_breaker
 from .risk import cap_at_entry, scale_to_room, size
-from .strategy import combine, indicators, last_cross, market_of, side_of, trend_ok
+from .strategy import btc_regime_blocks_long, combine, indicators, last_cross, market_of, side_of, trend_ok
 from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
@@ -183,6 +183,21 @@ def _held_row_without_signal(pos, eq: float, error: str, *, in_universe: bool, h
     }
 
 
+def _btc_regime_state(cfg: dict) -> dict:
+    """BTC 熊市体制过滤（与回测同口径）：最新已收盘 BTC 现货收盘 < SMA_N 时不新开多单。
+    BTC K 线取不到时不拦（并返回错误文本），历史不足 N 根时同样不拦。"""
+    st = cfg["strategy"]
+    n = int(st.get("btc_regime_ma", 0) or 0)
+    if not n:
+        return {"n": 0, "blocked": False, "error": ""}
+    try:
+        df = mcache.candles(cfg["venue"], "BTCUSDT", st["interval"], n + 5, "spot")
+        b = btc_regime_blocks_long(df["close"], n)
+        return {"n": n, "blocked": bool(b.iloc[-1]) if len(b) else False, "error": ""}
+    except Exception as e:  # noqa: BLE001 —— 真实错误原样上报
+        return {"n": n, "blocked": False, "error": str(e)}
+
+
 def listed_symbols(cfg: dict, bk=None) -> list[str]:
     """标的池 ∪ 当前持仓：已移出池但仍持有的标的也要出现在信号列表里，并继续接受止损 / 信号离场。"""
     out = []
@@ -202,6 +217,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     syms = listed_symbols(cfg, bk)
     frames, errs = mcache.many(venue, syms, st["interval"], need)
     sb = _short_breaker_state(frames, cfg)
+    rg = _btc_regime_state(cfg)
     eq = bk.equity()
     step = pd.Timedelta(milliseconds=INTERVAL_MS[st["interval"]])
     rows = []
@@ -286,6 +302,10 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         tma = float(last["trend_ma"]) if tl else float("nan")
         tok = trend_ok(sig, float(last["close"]), tma, tl)
         row.update({"trend_ma": tma if tl else None, "trend_ok": bool(tok)})
+        if rg["n"]:
+            row["btc_regime_block_long"] = bool(rg["blocked"])
+            if sig > 0 and rg["blocked"]:
+                row["regime_ok"] = False
         row["suggested_stop_price"] = z.stop_price
         row["in_universe"] = sym in universe
         row["halted"] = sym in bk.halts
@@ -318,6 +338,11 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         elif sig < 0 and sb["blocked_now"]:
             entry = f"空头熔断中：最近 {sb['bars']} 根 K 线影子空单合计 {sb['trailing_pnl']:+.2f} USDT，暂不新开空单（转正后恢复）"
             exit_, state = "—", "short_paused"
+            row["stop_source"] = "suggested"
+            row["stop_side"] = side
+        elif sig > 0 and row.get("regime_ok") is False:
+            entry = f"BTC 熊市过滤中：BTC 现货收盘低于 SMA{rg['n']}，暂不新开多单（BTC 站回均线后恢复；已有持仓不受影响）"
+            exit_, state = "—", "regime_wait"
             row["stop_source"] = "suggested"
             row["stop_side"] = side
         elif not tok:
@@ -359,7 +384,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
                 entry_equity=_equity_near(led, p.entry_time, bk.starting),
                 max_risk=rk["max_risk_per_trade"], max_weight=rk["max_weight_per_name"])
     return {"generated_at": iso(utcnow()), "generated_at_la": la(utcnow()), "generated_at_sh": sh(utcnow()),
-            "venue": venue, "equity": eq, "short_breaker": sb,
+            "venue": venue, "equity": eq, "short_breaker": sb, "btc_regime": rg,
             "rows": rows, "errors": errs}
 
 
@@ -479,7 +504,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         want = {}
         for s in cfg["symbols"]:
             r = rows.get(s)
-            if not r or s in bk.positions or s in bk.halts or r["signal"] == 0 or block_active(bk, s, r) or r.get("trend_ok") is False or r.get("state") == "short_paused":
+            if not r or s in bk.positions or s in bk.halts or r["signal"] == 0 or block_active(bk, s, r) or r.get("trend_ok") is False or r.get("regime_ok") is False or r.get("state") == "short_paused":
                 continue
             if r["side"] == "long" and not rk["allow_spot_long"] or r["side"] == "short" and not rk["allow_perp_short"]:
                 continue

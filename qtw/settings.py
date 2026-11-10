@@ -38,6 +38,13 @@ DEFAULTS: dict[str, Any] = {
         # 2026-11-10 12:30：随 50/150 改为 0（关闭）。长历史上 50/150 + 熔断 60 调参前段只有 +7.8%（不熔断 +27.0%），
         # 2025Q1 熔断拦掉了盈利空单。仍可手动设为 10–500 开启
         "short_breaker_bars": 0,
+        # 2026-11-10 12:45：BTC 熊市体制过滤（仅入场）。BTC 现货 4h 收盘 < SMA_N（上一根已收盘）时不新开多单，不平已有仓、空单不受影响。
+        # 1200 根 4h ≈ 日线 SMA200。Gate / OKX 官方 4500 根长历史、50/150 基线：调参前段（未见）Gate +27.0%→+42.2%、OKX +30.3%→+45.6%，
+        # 2026-03 后 +21.9%→+56.7% / +25.0%→+57.9%；N = 300–1500 全部两段都优于不过滤，压力费率（现货 20 / 永续 15.1 bps）同向；
+        # 滚动选 N（回看 90/180/365 天、测下 30 天）12 组全部优于不过滤。最大回撤不变（约 −28%）。0=关闭
+        # （output/research_long_history_regime_filter_and_knobs_50_150.csv、research_long_history_btc_regime_fee_stress.csv、
+        #   research_long_history_btc_regime_walkforward.csv）
+        "btc_regime_ma": 1200,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -148,6 +155,9 @@ def validate(s: dict) -> dict:
     st["short_breaker_bars"] = int(st.get("short_breaker_bars", 0) or 0)
     if st["short_breaker_bars"] and not 10 <= st["short_breaker_bars"] <= 500:
         raise ValueError("空头熔断回看根数需为 0（关闭）或 10–500")
+    st["btc_regime_ma"] = int(st.get("btc_regime_ma", 0) or 0)
+    if st["btc_regime_ma"] and not 50 <= st["btc_regime_ma"] <= 2000:
+        raise ValueError("BTC 熊市过滤 SMA 需为 0（关闭）或 50–2000")
     st["pyramid_r"] = float(st.get("pyramid_r", 0) or 0)
     st["pyramid_frac"] = float(st.get("pyramid_frac", 0.5) or 0)
     if st["pyramid_r"] and not 0.5 <= st["pyramid_r"] <= 5:
