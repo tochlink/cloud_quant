@@ -189,6 +189,16 @@ set QTW_PROXY=http://127.0.0.1:7890
 
 CSV 均带 `venue` / `data_source` / `fetched_at` 等来源字段。纸面账本本体在 SQLite 中，**重启不丢失**。
 
+## 你的模拟盘 / 实盘成交对账
+
+把你那边的成交按 `docs/templates/my_fills_template.csv` 的表头导出成 CSV（`venue, mode, symbol, market, side, action, fill_time, fill_price, qty, fee_usdt, order_id, reason`；`side` 填 long / short，`action` 填 open / close，`fill_time` 用带时区的 ISO 时间），然后运行：
+
+```bash
+.venv/bin/python -m qtw.reconcile --fills 我的成交.csv --venue okx
+```
+
+它会用同一交易所的官方 K 线跑一次当前默认策略的回测，按 symbol + 方向 + 入场时间（±1 根 K 线）逐笔配对，在 `output/` 写出 `reconcile_trades.csv`（逐笔入场 / 离场滑点 bps、入场延迟分钟、价格收益对比）、`reconcile_summary.csv`（汇总）和 `reconcile_missed.csv`（回测有、你那边没成交的信号）。滑点为正表示比回测更差。只读，不下单，不读取密钥。
+
 ## 已知局限
 
 * 回测未计资金费率、滑点与强平；历史表现不代表未来。资金费率实测（Gate 官方近 180 天资金费率历史，默认参数）：空单净收到约 +3.6 USDT，约为同期空单盈亏的 2%，方向对空头有利，所以不计入是偏保守的；滑点可用费率参数（如 14 bps/边）做压力测试。
