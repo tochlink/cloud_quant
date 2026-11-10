@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from .risk import scale_to_room, size
+from .settings import taker_rate
 from .strategy import combine, indicators, market_of, side_of, trend_ok
 
 BARS_PER_YEAR = {"15m": 35040, "1h": 8760, "4h": 2190, "1d": 365}
@@ -70,8 +71,10 @@ def short_breaker(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
 
 
 def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
-    st, rk, fee_bps = cfg["strategy"], cfg["risk"], float(cfg["fees"]["taker_bps"])
-    fee = fee_bps / 10_000
+    st, rk = cfg["strategy"], cfg["risk"]
+    # 分市场 taker 费率：多单在现货、空单在永续成交（下一根开盘市价 = taker），每条市价腿各收一次
+    FEE = {"spot": taker_rate(cfg, "spot"), "perp": taker_rate(cfg, "perp")}
+    fee = max(FEE.values())  # 仅用于总敞口缩放时的保守预留
     start_eq = float(rk["starting_equity_usdt"])
     need = st["slow_ma"] + 2
     spot_d, perp_d = data.get("spot", {}), data.get("perp", {})
@@ -121,7 +124,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         nonlocal realized
         t = pos.pop(s)
         added.discard(s)
-        f = abs(t.qty * px) * fee
+        f = abs(t.qty * px) * FEE[t.market]
         g = upnl(t, px)
         realized += g - f
         t.exit_time, t.exit_price, t.exit_reason = when, float(px), reason
@@ -170,7 +173,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
                 continue
             px = P(side_of(sg), "open", s)[i]
             qty = notional / px
-            f = notional * fee
+            f = notional * FEE[market_of(sg)]
             realized -= f
             pos[s] = Trade(s, market_of(sg), side_of(sg), when, float(px), qty, notional, z.stop_price, fees_usdt=f)
             entry_i[s] = i
@@ -191,11 +194,11 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
                 if add_n < 1.0:
                     continue
                 aq = add_n / px
-                realized -= add_n * fee
+                realized -= add_n * FEE[t.market]
                 t.entry_price = (t.qty * t.entry_price + aq * px) / (t.qty + aq)
                 t.qty += aq
                 t.notional_usdt += add_n
-                t.fees_usdt += add_n * fee
+                t.fees_usdt += add_n * FEE[t.market]
                 room_add -= add_n
                 added.add(s)
         # 3) 盘中止损
@@ -260,7 +263,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         "spot_signal_long_bars": int(sum((PX["spot"]["signal"][s][warm:] == 1).sum() for s in syms)),
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
-        "fee_bps": fee_bps, "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
+        "fee_bps": round(FEE["spot"] * 10_000, 4), "spot_taker_bps": round(FEE["spot"] * 10_000, 4), "perp_taker_bps": round(FEE["perp"] * 10_000, 4), "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
         "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
     }

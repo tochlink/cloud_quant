@@ -47,7 +47,10 @@ DEFAULTS: dict[str, Any] = {
         "allow_spot_long": True,
         "allow_perp_short": True,
     },
-    "fees": {"taker_bps": 4.0},
+    # 手续费（bps，1 bp = 0.01%）。2026-11-10 按 kean 实际账户费率：现货 maker 0.08% / taker 0.10%，
+    # 永续 maker 0.02% / taker 0.051%。策略在下一根开盘以市价成交，按 taker 计费、每条市价腿各收一次。
+    # taker_bps 为旧版单一费率字段（仅在缺少分市场费率时回退使用）。
+    "fees": {"spot_taker_bps": 10.0, "spot_maker_bps": 8.0, "perp_taker_bps": 5.1, "perp_maker_bps": 2.0, "taker_bps": 4.0},
     "worker": {"enabled": True, "interval_sec": 60},  # 7×24 纸面自动交易（服务运行即运行；紧急停止会关闭）
     "live": {
         "mode": "paper",  # paper | live
@@ -96,8 +99,22 @@ def load() -> dict:
         return _merge(DEFAULTS, data)
 
 
+def taker_rate(cfg: dict, market: str) -> float:
+    """某市场（spot / perp）的 taker 费率（小数）。缺少分市场字段时回退到旧版 taker_bps。"""
+    fees = cfg.get("fees") or {}
+    v = fees.get(f"{market}_taker_bps")
+    if v is None:
+        v = fees.get("taker_bps", 0.0)
+    return float(v) / 10_000
+
+
 def validate(s: dict) -> dict:
     st, rk = s["strategy"], s["risk"]
+    for k in ("spot_taker_bps", "spot_maker_bps", "perp_taker_bps", "perp_maker_bps", "taker_bps"):
+        if k in s["fees"]:
+            s["fees"][k] = float(s["fees"][k])
+            if not 0 <= s["fees"][k] <= 100:
+                raise ValueError("手续费需在 0–100 bps 之间")
     if st["interval"] not in ("15m", "1h", "4h", "1d"):
         raise ValueError("K 线周期只支持 15m / 1h / 4h / 1d")
     st["fast_ma"], st["slow_ma"], st["atr_period"] = int(st["fast_ma"]), int(st["slow_ma"]), int(st["atr_period"])

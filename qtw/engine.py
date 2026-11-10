@@ -33,9 +33,10 @@ def book(cfg: dict | None = None) -> PaperBook:
     with _BOOK_LOCK:
         if _BOOK is None:
             cfg = cfg or S.load()
-            _BOOK = PaperBook(cfg["risk"]["starting_equity_usdt"], cfg["fees"]["taker_bps"])
+            _BOOK = PaperBook(cfg["risk"]["starting_equity_usdt"], cfg["fees"].get("taker_bps", 4.0),
+                              fee_by_market={m: S.taker_rate(cfg, m) for m in ("spot", "perp")})
         elif cfg:
-            _BOOK.fee = cfg["fees"]["taker_bps"] / 10_000
+            _BOOK.set_fees(float(cfg["fees"].get("taker_bps", 4.0)) / 10_000, {m: S.taker_rate(cfg, m) for m in ("spot", "perp")})
         if cfg:
             _MARK["venue"] = cfg["venue"]
         return _BOOK
@@ -130,7 +131,7 @@ def _short_breaker_state(frames: dict, cfg: dict) -> dict:
         return {"blocked_now": False, "trailing_pnl": 0.0, "bars": 0, "error": ""}
     try:
         last = max(str(df["open_time"].iloc[-1]) for m in frames.values() for df in m.values())
-        key = (cfg["venue"], last, repr(sorted(st.items())), repr(sorted(cfg["risk"].items())), tuple(cfg["symbols"]), cfg["fees"]["taker_bps"])
+        key = (cfg["venue"], last, repr(sorted(st.items())), repr(sorted(cfg["risk"].items())), tuple(cfg["symbols"]), repr(sorted(cfg["fees"].items())))
         if key not in _SB_CACHE:
             _SB_CACHE.clear()
             r = short_breaker({"spot": frames.get("spot", {}), "perp": frames.get("perp", {})}, cfg)

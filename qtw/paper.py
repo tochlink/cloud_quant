@@ -110,11 +110,20 @@ def migrate_csv(conn, src: Path = PAPER_DIR) -> dict:
 
 
 class PaperBook:
-    def __init__(self, starting_equity: float = 1000.0, fee_bps: float = 4.0, conn=None):
+    def __init__(self, starting_equity: float = 1000.0, fee_bps: float = 4.0, conn=None, fee_by_market: dict | None = None):
         self.conn = conn or db.connect()
-        self.fee = fee_bps / 10_000
+        self.set_fees(fee_bps / 10_000, fee_by_market)
         self.migrated = migrate_csv(self.conn) if conn is None else {}
         self.load(starting_equity)
+
+    def set_fees(self, default: float, by_market: dict | None = None):
+        """default：小数费率；by_market：{"spot": 小数, "perp": 小数}（taker）。self.fee = 最大值，用于敞口预留。"""
+        self.fee_by_market = dict(by_market or {})
+        self.default_fee = float(default)
+        self.fee = max([self.default_fee, *self.fee_by_market.values()]) if self.fee_by_market else self.default_fee
+
+    def fee_for(self, market: str) -> float:
+        return float(self.fee_by_market.get(market, self.default_fee))
 
     # ---------- 持久化 ----------
     def _q(self, sql, args=()):
@@ -196,7 +205,7 @@ class PaperBook:
              data_source="", price_time=""):
         with _LOCK, db.tx(self.conn) as c:
             notional = qty * price
-            fee = notional * self.fee
+            fee = notional * self.fee_for(market)
             self.realized -= fee
             now = iso(utcnow())
             self.positions[symbol] = Position(symbol, market, side, qty, price, now, stop, price, now, notional, fee,
@@ -212,7 +221,7 @@ class PaperBook:
         with _LOCK, db.tx(self.conn) as c:
             p = self.positions.pop(symbol)
             notional = p.qty * price
-            fee = notional * self.fee
+            fee = notional * self.fee_for(p.market)
             pnl = p.upnl(price)
             self.realized += pnl - fee
             _ins(c, "paper_fills", dict(time=iso(utcnow()), symbol=symbol, market=p.market,
