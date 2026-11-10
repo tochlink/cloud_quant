@@ -1,15 +1,17 @@
 """官方公共 WebSocket 实时行情（无需 API Key）+ REST 轮询兜底。
 
 连接（每个交易所现货 / 永续各一条，外加 OKX K 线 business 通道）：
-  OKX  public   wss://ws.okx.com/ws/v5/public（优先 443；被拦时再试 :8443 / wsaws）
+  OKX  public   wss://ws.okx.com/ws/v5/public（443；可用 QTW_OKX_WS_HOST 指定官方域名）
        频道：tickers（现货 BTC-USDT…）、mark-price（永续 BTC-USDT-SWAP…）
-  OKX  business wss://ws.okx.com/ws/v5/business（优先 443；回退 :8443 / wsaws）  频道：candle4H（现货 + 永续）
+  OKX  business wss://ws.okx.com/ws/v5/business  频道：candle4H（现货 + 永续成交价）、mark-price-candle4H（仅永续标记价，不参与信号）
   Gate spot     wss://api.gateio.ws/ws/v4/            频道：spot.tickers、spot.candlesticks
   Gate futures  wss://fx-ws.gateio.ws/v4/ws/usdt       频道：futures.tickers（含 mark_price）、futures.candlesticks
 规则：
   * 只保存交易所真实推送的数据；收盘确认的 K 线（OKX confirm=1 / Gate w=true）写入 SQLite candles 表，
     data_source = okx_public_ws / gate_public_ws；未收盘 K 线只推给前端图表，不参与信号。
-  * 断线指数退避自动重连；某个价格超过 20 秒没有 WS 更新 → 用官方公共 REST 拉取（data_source=*_public_rest）。
+  * 断线指数退避自动重连（5s→10→20→…→300s）；连续失败时日志节流，并在 status.hint 给出原因与代理建议。
+  * 某个价格超过 20 秒没有 WS 更新 → 用官方公共 REST 拉取（data_source=*_public_rest）。
+  * QTW_DISABLE_OKX_WS=1 时不连 OKX WebSocket，OKX 价格改走 REST；Gate WS 不受影响。绝不编造价格。
   * 应用层心跳：OKX 文本 ping/pong；Gate JSON 的 channel 以 .pong 结尾（不是字符串 "pong"）。二者都视为连接活跃并刷新 last_msg，不交给行情 handle。
     recv 超时后先再发一次 ping 并多等一轮，仍无消息才重连，避免短暂静默导致连接一起抖动。
     发出订阅 / ping 也有超时：半开 TCP 让 send 挂起时会主动重连，避免状态仍是 connected 但 last_msg 数分钟不刷新。
@@ -26,7 +28,9 @@
   * 若 rest_fill_inflight 持续超过 FILLING_STALL_SEC（填隙协程卡在已冻结的 loop 上、depth 无法清零），取消 filling 护盾，按真 stall 处理。
   * `_note_activity`（recv/pong）也刷新 loop heartbeat：supervisor 卡在 S.load/DB 时，只要事件循环仍在处理帧就不误报 stall。
   * 真 stall 时用更短的 STALL_ZOMBIE_SEC 门槛踢套接字；尚无僵尸前就从 **后台线程** 走官方 REST 填隙（不经冻结的 asyncio loop 的 run_coroutine_threadsafe，也不阻塞 watchdog 自身）。填隙有合并 + EARLY_FILL_COOLDOWN_SEC 冷却，避免每 2s 打一轮 32 路 HTTP 把 watchdog 卡住、错过下一轮僵尸踢除（曾出现 stall 恢复后紧接着 98s 心跳空白、中间没有任何 watchdog 日志）。
-  * WebSocket 握手显式 ``proxy=None``（关闭 websockets 15 默认的代理探测）并限制 ``family=AF_INET``，避免 get_proxy / IPv6 happy-eyeballs 在事件循环线程上拖死四路同时重连。
+  * WebSocket 握手使用 ``QTW_PROXY`` / ``HTTPS_PROXY`` / ``HTTP_PROXY`` / ``ALL_PROXY``（若已设置）；
+    未设置时显式 ``proxy=None``（关闭 websockets 15 默认的代理探测），并限制 ``family=AF_INET``，
+    避免 get_proxy / IPv6 happy-eyeballs 在事件循环线程上拖死四路同时重连。
   * REST 填隙优先当前纸面行情源（settings.venue），同批内有限并发，避免僵尸踢掉后纸面标记价排在另一所 32 路串行 REST 后面。
   * 状态 mode 带迟滞：WS 断线重连 / 报价短暂被 REST 填隙时标为 recovering，不立刻翻成 rest，避免 UI 误报「REST 兜底」。
   * 拿不到就报错 / 标记过期，绝不编造价格；永续价格只来自永续频道，现货只来自现货频道。
@@ -46,12 +50,27 @@ from datetime import datetime, timezone
 from . import db
 from . import settings as S
 from .market.base import INTERVAL_MS, MarketDataError, Quote, get_client
+from .net import (
+    classify_ws_error,
+    env_flag,
+    okx_ws_urls,
+    reconnect_backoff,
+    reconnect_summary,
+    redact_proxy,
+    resolve_proxy,
+    should_log_reconnect,
+    venue_unreachable_hint,
+    RECONNECT_BACKOFF_START_SEC,
+    RECONNECT_LOG_FIRST,
+)
 from .timeutil import iso, utcnow
 
 log = logging.getLogger("qtw.stream")
 
-OKX_PUBLIC = ["wss://ws.okx.com/ws/v5/public", "wss://ws.okx.com:8443/ws/v5/public", "wss://wsaws.okx.com/ws/v5/public", "wss://wsaws.okx.com:8443/ws/v5/public"]
-OKX_BUSINESS = ["wss://ws.okx.com/ws/v5/business", "wss://ws.okx.com:8443/ws/v5/business", "wss://wsaws.okx.com/ws/v5/business", "wss://wsaws.okx.com:8443/ws/v5/business"]
+# Defaults (port 443). Task start uses okx_ws_urls() so QTW_OKX_WS_HOST is honored.
+# aws.okx.com / wsaws.okx.com ceased 2025-04-28; :8443 public WS discontinued 2026-10-31.
+OKX_PUBLIC = ["wss://ws.okx.com/ws/v5/public"]
+OKX_BUSINESS = ["wss://ws.okx.com/ws/v5/business"]
 GATE_SPOT = ["wss://api.gateio.ws/ws/v4/"]
 GATE_FUT = ["wss://fx-ws.gateio.ws/v4/ws/usdt"]
 OKX_BAR = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1Dutc"}
@@ -124,6 +143,8 @@ _last_early_stall_fill_at: float = 0.0  # wall time of last sync stall fill
 _last_early_stall_fill_n: int = 0  # quotes filled in that sync pass
 _early_fill_inflight = False  # background stall-fill worker is running
 _fill_state_lock = threading.Lock()  # depth / started_at / inflight
+_reconnect_log_at: dict[str, float] = {}  # connection name -> last reconnect log wall time
+_okx_ws_disabled_current = False  # last supervisor decision (for status.hint)
 GAP_FILL_TIMEOUT_SEC = 5.0
 GAP_FILL_RETRIES = 2
 GAP_FILL_BACKOFF_SEC = 0.25
@@ -392,6 +413,21 @@ def status(venue: str | None = None) -> dict:
            "last_zombie_max_age_sec": _last_zombie_max_age_sec}
     if v:
         out["venue"] = v
+    last_errs = [c.get("last_error") or "" for c in c_use]
+    disabled = bool(_okx_ws_disabled_current)
+    out["okx_ws_disabled"] = disabled
+    out["hint"] = venue_unreachable_hint(
+        venue=v or "",
+        mode=mode,
+        quotes_ws_fresh=live,
+        quotes_rest_fresh=rest,
+        rest_errors=rest_err,
+        last_errors=last_errs,
+        okx_ws_disabled=disabled,
+    )
+    out["unreachable"] = bool(
+        live == 0 and rest == 0 and mode in ("rest", "down") and (rest_err or last_errs)
+    )
     return out
 
 
@@ -404,7 +440,13 @@ def snapshot(venue: str) -> dict:
     for (v, sym, mkt), q in items:
         prices.setdefault(sym, {})[mkt] = {"price": q.price, "kind": q.kind, "ts": iso(q.ts), "source": q.data_source,
                                           "age_sec": round(now - q.ts.timestamp(), 1)}
-    return {"venue": venue, "prices": prices, "forming": forming}
+    # Latest OKX mark-price candle per symbol (market=perp_mark). Display only; not used by signals.
+    mark_candles: dict = {}
+    for key, val in forming.items():
+        parts = str(key).split(":")
+        if len(parts) >= 3 and parts[-1] == "perp_mark":
+            mark_candles[parts[1]] = dict(val)
+    return {"venue": venue, "prices": prices, "forming": forming, "mark_candles": mark_candles}
 
 
 def _ms(x) -> datetime:
@@ -524,16 +566,16 @@ async def _connect_ws(url: str, *, opener=None):
     reconnect loop to make progress.
 
     Default ``websockets`` 15 sets ``proxy=True`` (env / OS proxy autodetect).
-    Official OKX/Gate public sockets must go direct; probing a proxy on every
-    reconnect after a mass abort has no benefit and can serialize four
-    handshakes behind a dead lookup. Restrict ``family`` to IPv4 so a broken
-    IPv6 path cannot hold the loop in getaddrinfo / happy-eyeballs.
+    Autodetect can stall four simultaneous handshakes, so we only pass a proxy
+    when ``QTW_PROXY`` / ``HTTPS_PROXY`` / ``HTTP_PROXY`` / ``ALL_PROXY`` is
+    explicitly set; otherwise ``proxy=None`` (go direct). Restrict ``family``
+    to IPv4 so a broken IPv6 path cannot hold the loop in getaddrinfo.
     """
     import websockets
     fn = opener or websockets.connect
     kw = dict(open_timeout=OPEN_TIMEOUT_SEC, ping_interval=None, close_timeout=3, max_size=2**22)
     if opener is None:
-        kw["proxy"] = None
+        kw["proxy"] = resolve_proxy()
         kw["family"] = socket.AF_INET
     _bump_loop_heartbeat()
     try:
@@ -556,8 +598,22 @@ async def _close_ws_quietly(ws) -> None:
             pass
 
 
+def _log_ws_disconnect(name: str, exc: BaseException, fail_count: int, backoff: float) -> None:
+    """Log a WS drop: first few at INFO, then a throttled WARNING with a fix hint."""
+    typ, reason = classify_ws_error(exc)
+    now = time.time()
+    last = _reconnect_log_at.get(name) or 0.0
+    if not should_log_reconnect(fail_count, last, now):
+        return
+    _reconnect_log_at[name] = now
+    if fail_count <= RECONNECT_LOG_FIRST:
+        log.info("%s 断开（%s），%.0f 秒后重连", name, typ, backoff)
+        return
+    log.warning("%s", reconnect_summary(name, fail_count, reason, backoff))
+
+
 async def _run_ws(name, urls, subscribe_msgs, handle, ping):
-    backoff, i = 1.0, 0
+    backoff, i, fail_n = RECONNECT_BACKOFF_START_SEC, 0, 0
     while True:
         url = urls[i % len(urls)]
         was_connected = False
@@ -573,7 +629,10 @@ async def _run_ws(name, urls, subscribe_msgs, handle, ping):
                 for m in subscribe_msgs():
                     await _send(ws, m)
                 _conn_state(name, status="connected", connected_at=iso(utcnow()), last_msg=iso(utcnow()), last_error="")
-                backoff, was_connected = 1.0, True
+                if fail_n:
+                    log.info("%s 实时连接已恢复（此前连续失败 %d 次）", name, fail_n)
+                backoff, was_connected, fail_n = RECONNECT_BACKOFF_START_SEC, True, 0
+                _reconnect_log_at.pop(name, None)
                 last_ping = time.time()
                 while True:
                     if time.time() - last_ping > PING_EVERY_SEC:
@@ -609,16 +668,88 @@ async def _run_ws(name, urls, subscribe_msgs, handle, ping):
         except Exception as e:  # noqa: BLE001
             with _lock:
                 _conns[name]["reconnects"] += 1
-            _conn_state(name, status="reconnecting", last_error=f"{type(e).__name__}: {str(e)[:160]}")
-            log.info("%s 断开（%s），%.0f 秒后重连", name, type(e).__name__, backoff)
+            typ, _reason = classify_ws_error(e)
+            _conn_state(name, status="reconnecting", last_error=f"{typ}: {str(e)[:160]}")
+            fail_n += 1
+            backoff = reconnect_backoff(fail_n)
+            _log_ws_disconnect(name, e, fail_n, backoff)
             if not was_connected:
                 i += 1  # 这个地址连不上就换下一个官方地址；连上过的地址断线后先原地重连
             await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, 60)
 
 
 def _host(url):
     return url.split("/")[2]
+
+
+def parse_okx_ws_candle(channel: str, row) -> dict | None:
+    """Parse one official OKX WS candle row. Returns None if the row is unusable.
+
+    Trade-price candles (channel ``candle{bar}``):
+      [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
+    Mark-price candles (channel ``mark-price-candle{bar}``, docs: business WS):
+      [ts, o, h, l, c, confirm]  — no volume; confirm is the last field.
+    """
+    if not isinstance(row, (list, tuple)) or len(row) < 5:
+        return None
+    ch = str(channel or "")
+    is_mark = ch.startswith("mark-price-candle")
+    try:
+        open_ms = int(float(row[0]))
+        o, h, l, c = (float(row[1]), float(row[2]), float(row[3]), float(row[4]))
+    except (TypeError, ValueError, IndexError):
+        return None
+    if is_mark:
+        if len(row) < 6:
+            return None
+        closed = str(row[5]) == "1"
+        vol = 0.0
+        kind = "mark"
+    else:
+        # Unconfirmed / short rows: treat as open (not closed) if confirm is missing.
+        closed = len(row) > 8 and str(row[8]) == "1"
+        try:
+            vol = float(row[5]) if len(row) > 5 else 0.0
+        except (TypeError, ValueError):
+            vol = 0.0
+        kind = "trade"
+    return {"open_ms": open_ms, "open": o, "high": h, "low": l, "close": c,
+            "volume": vol, "closed": closed, "kind": kind}
+
+
+def apply_okx_candle_message(m, url, interval, inst_map) -> int:
+    """Apply one OKX business-channel candle / mark-price-candle push.
+
+    Mark-price bars are stored as market='perp_mark' with data_source
+    ``okx_mark_price_ws`` so they never mix into trade-price perp candles
+    used by signals and backtests. Returns the number of rows applied.
+    """
+    arg = m.get("arg") or {}
+    ch = str(arg.get("channel") or "")
+    sym, mkt = inst_map.get(arg.get("instId"), (None, None))
+    if not sym:
+        return 0
+    is_mark = ch.startswith("mark-price-candle")
+    if is_mark:
+        if mkt != "perp":
+            return 0
+        store_mkt, source = "perp_mark", "okx_mark_price_ws"
+    else:
+        store_mkt, source = mkt, "okx_public_ws"
+    n = 0
+    for row in m.get("data", []) or []:
+        parsed = parse_okx_ws_candle(ch, row)
+        if not parsed:
+            continue
+        _forming_put("okx", store_mkt, sym, interval, parsed["open_ms"],
+                     parsed["open"], parsed["high"], parsed["low"], parsed["close"],
+                     parsed["closed"], source)
+        if parsed["closed"]:
+            _store_closed("okx", store_mkt, sym, interval, parsed["open_ms"],
+                          parsed["open"], parsed["high"], parsed["low"], parsed["close"],
+                          parsed["volume"], source, _host(url))
+        n += 1
+    return n
 
 
 def _okx_tasks(symbols, interval):
@@ -632,7 +763,10 @@ def _okx_tasks(symbols, interval):
         return [json.dumps({"op": "subscribe", "args": args})]
 
     def sub_bus():
-        return [json.dumps({"op": "subscribe", "args": [{"channel": f"candle{bar}", "instId": x} for x in spot + swap]})]
+        args = [{"channel": f"candle{bar}", "instId": x} for x in spot + swap]
+        # Official mark-price candlesticks on the same business socket (SWAP only).
+        args += [{"channel": f"mark-price-candle{bar}", "instId": x} for x in swap]
+        return [json.dumps({"op": "subscribe", "args": args})]
 
     def h_pub(m, url):
         arg = m.get("arg", {})
@@ -648,19 +782,15 @@ def _okx_tasks(symbols, interval):
             _conn_state("okx_public", last_error=str(m)[:200])
 
     def h_bus(m, url):
-        sym, mkt = rev.get(m.get("arg", {}).get("instId"), (None, None))
-        for d in m.get("data", []) or []:
-            if not sym:
-                continue
-            closed = len(d) > 8 and str(d[8]) == "1"
-            _forming_put("okx", mkt, sym, interval, d[0], d[1], d[2], d[3], d[4], closed, "okx_public_ws")
-            if closed:
-                _store_closed("okx", mkt, sym, interval, d[0], d[1], d[2], d[3], d[4], d[5], "okx_public_ws", _host(url))
+        if m.get("event") == "error":
+            _conn_state("okx_business", last_error=str(m)[:200])
+            return
+        apply_okx_candle_message(m, url, interval, rev)
 
     _conn_state("okx_public", channels=["tickers(spot)", "mark-price(swap)"])
-    _conn_state("okx_business", channels=[f"candle{bar}(spot+swap)"])
-    return [_run_ws("okx_public", OKX_PUBLIC, sub_pub, h_pub, lambda: "ping"),
-            _run_ws("okx_business", OKX_BUSINESS, sub_bus, h_bus, lambda: "ping")]
+    _conn_state("okx_business", channels=[f"candle{bar}(spot+swap)", f"mark-price-candle{bar}(swap)"])
+    return [_run_ws("okx_public", okx_ws_urls("public"), sub_pub, h_pub, lambda: "ping"),
+            _run_ws("okx_business", okx_ws_urls("business"), sub_bus, h_bus, lambda: "ping")]
 
 
 def _gate_tasks(symbols, interval):
@@ -1245,6 +1375,21 @@ async def _load_settings():
     return await loop.run_in_executor(_ensure_io_pool(), S.load)
 
 
+def _market_ws_coros(symbols, interval):
+    """Build the live WS + REST-fallback coroutines for the supervisor."""
+    global _okx_ws_disabled_current
+    coros = []
+    disabled = env_flag("QTW_DISABLE_OKX_WS")
+    _okx_ws_disabled_current = disabled
+    if disabled:
+        log.info("QTW_DISABLE_OKX_WS=1：不连接 OKX WebSocket，OKX 价格走官方 REST 轮询；Gate 不受影响")
+    else:
+        coros.extend(_okx_tasks(symbols, interval))
+    coros.extend(_gate_tasks(symbols, interval))
+    coros.append(_rest_fallback(symbols))
+    return coros
+
+
 async def _supervisor():
     global _loop_heartbeat, _watch_symbols, _watch_venue
     cur, tasks = None, []
@@ -1264,10 +1409,16 @@ async def _supervisor():
                 _forming.clear()
                 _ws_refs.clear()
             syms, interval = list(want[0]), want[1]
-            coros = _okx_tasks(syms, interval) + _gate_tasks(syms, interval) + [_rest_fallback(syms)]
+            proxy = resolve_proxy()
+            if proxy:
+                log.info("行情 WebSocket / REST 将使用代理 %s", redact_proxy(proxy))
+            coros = _market_ws_coros(syms, interval)
             tasks = [asyncio.create_task(c) for c in coros]
             cur = want
-            log.info("实时行情订阅：%d 个标的 · %s · OKX + Gate（现货 + 永续）", len(syms), interval)
+            if _okx_ws_disabled_current:
+                log.info("实时行情订阅：%d 个标的 · %s · Gate WebSocket + OKX REST（已关闭 OKX WS）", len(syms), interval)
+            else:
+                log.info("实时行情订阅：%d 个标的 · %s · OKX + Gate（现货 + 永续）", len(syms), interval)
         _watch_symbols = list(syms)
         _watch_venue = cfg.get("venue")
         _loop_heartbeat = time.time()

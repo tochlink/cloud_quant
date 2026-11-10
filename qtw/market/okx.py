@@ -8,8 +8,9 @@ from qtw.timeutil import from_ms
 from .base import INTERVAL_MS, HttpJson, MarketDataError, Quote, finalize
 
 BAR = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1Dutc"}
-# aws.okx.com 是 OKX 官方提供的备用域名，仅在主域名被地区限制时使用。
-BASES = ["https://www.okx.com", "https://aws.okx.com"]
+# openapi.okx.com 是 2026-05-20 起官方推荐的 Global REST 域名；www.okx.com 仍可用。
+# aws.okx.com 已于 2025-04-28 停用，不再作为默认备用。可用 QTW_OKX_REST_HOST 指定官方域名。
+BASES = ["https://openapi.okx.com", "https://www.okx.com"]
 
 
 def spot_id(sym: str) -> str:
@@ -27,7 +28,8 @@ class OkxPublic:
     def __init__(self, *, timeout: float = 15, max_retries: int = 3, backoff: float = 1.0):
         # Gap-fill callers pass a short timeout so a hung REST host cannot pin
         # the stream IO pool for tens of seconds (default stays research-friendly).
-        self.http = HttpJson(BASES, timeout=timeout, max_retries=max_retries, backoff=backoff)
+        from qtw.net import okx_rest_bases
+        self.http = HttpJson(okx_rest_bases(), timeout=timeout, max_retries=max_retries, backoff=backoff)
 
     def _data(self, path, params):
         j = self.http.get(path, params)

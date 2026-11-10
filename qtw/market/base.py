@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 
+from qtw.net import apply_proxy_to_session
+
 log = logging.getLogger(__name__)
 
 INTERVAL_MS = {"15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
@@ -41,6 +43,7 @@ class HttpJson:
         self.last_host = ""
         self.s = requests.Session()
         self.s.headers.update({"User-Agent": "qtw/2.0 (+public market data)", "Accept": "application/json"})
+        apply_proxy_to_session(self.s)
 
     def get(self, path: str, params: dict | None = None):
         errors: list[str] = []
