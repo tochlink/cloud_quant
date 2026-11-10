@@ -32,7 +32,7 @@ def target_notional(*, side: str, price: float, stop: float, atr: float | None, 
 
 
 def plan(positions: dict, prices: dict, atrs: dict, *, equity: float, new_notional: float, cfg: dict,
-         gross_now: float, fee: float) -> list[dict]:
+         gross_now: float, fee: float, name_mult: dict | None = None) -> list[dict]:
     """纯函数：返回调仓计划 [{symbol, delta_usdt, target_usdt, current_usdt, price}]（先减后加，已按额度截断）。"""
     st, rk = cfg["strategy"], cfg["risk"]
     band = float(st.get("rebalance_band", 0) or 0)
@@ -44,8 +44,9 @@ def plan(positions: dict, prices: dict, atrs: dict, *, equity: float, new_notion
         px = prices.get(s)
         if not px or px <= 0:
             continue
+        nm = float((name_mult or {}).get(s, 1.0))  # 单币波动率封顶系数（name_vol_target，默认 1）
         v = target_notional(side=p.side, price=px, stop=p.stop_price, atr=atrs.get(s), equity=equity,
-                            max_risk=float(rk["max_risk_per_trade"]), max_weight=float(rk["max_weight_per_name"]),
+                            max_risk=float(rk["max_risk_per_trade"]) * nm, max_weight=float(rk["max_weight_per_name"]) * nm,
                             atr_mult=float(st["atr_stop_mult"]), mode=mode)
         if v > 0:
             tg[s] = v

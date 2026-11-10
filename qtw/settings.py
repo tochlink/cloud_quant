@@ -67,6 +67,14 @@ DEFAULTS: dict[str, Any] = {
         # （output/research_long_history_drawdown_equity_vol_throttle.csv、research_long_history_port_vol_target_robustness.csv）0=关闭
         "port_vol_target": 0.30,
         "port_vol_lookback": 180,
+        # 2026-11-10 14:10 新默认：单币波动率封顶。σ_s = 最近 name_vol_lookback 根 4h 对数收益年化标准差（多头用现货、空头用永续），
+        # 单笔风险与单币权重上限再 × min(1, name_vol_target/σ_s)（叠加在组合波动率系数之上，只缩不放）。默认风险 5% 在 2×ATR 下几乎总被
+        # 单币 20% 截住，原本接近等名义；封顶只压极高波动的币。Gate / OKX 4500 根：abs 0.6–0.7 × L 60–360 是平台，回撤 −23.5%→−19~−21%，
+        # 夏普 1.47→1.55–1.68；严格月度 walk-forward（候选 关闭 / 0.6 / 0.7 × L120 / 180，训练 3/6/12 月 × Calmar/夏普，两所 × 真实/压力费率
+        # 共 24 组）：固定 0.6/120 相对关闭在全部 12 个样本外窗口回撤都更小、夏普都更高，收益 11/12 更高，2026-03 后段也略高
+        # （output/research_inverse_vol_sizing.csv、_abs_nbhd.csv、_monthly_walkforward.csv）。0 = 关闭
+        "name_vol_target": 0.60,
+        "name_vol_lookback": 120,
         "rebalance_mode": "stop",  # stop：按现有止损距离定目标；atr：再取与最新 ATR 止损距离的较大者（更保守）
         "lookback_bars": 200,
     },
@@ -186,6 +194,12 @@ def validate(s: dict) -> dict:
     st["port_vol_lookback"] = int(st.get("port_vol_lookback", 180) or 180)
     if not 30 <= st["port_vol_lookback"] <= 1000:
         raise ValueError("组合波动率回看根数需在 30–1000 之间")
+    st["name_vol_target"] = float(st.get("name_vol_target", 0) or 0)
+    if st["name_vol_target"] and not 0.1 <= st["name_vol_target"] <= 5:
+        raise ValueError("单币波动率封顶需为 0（关闭）或 0.1–5（年化 10%–500%）")
+    st["name_vol_lookback"] = int(st.get("name_vol_lookback", 120) or 120)
+    if not 20 <= st["name_vol_lookback"] <= 1000:
+        raise ValueError("单币波动率回看根数需在 20–1000 之间")
     st["rebalance_mode"] = str(st.get("rebalance_mode", "stop") or "stop")
     if st["rebalance_mode"] not in ("stop", "atr"):
         raise ValueError("调仓模式只能是 stop 或 atr")

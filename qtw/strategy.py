@@ -69,6 +69,22 @@ def port_vol_factor(equity, target: float, lookback: int, bars_per_year: float =
     return min(1.0, float(target) / sd) if sd > 0 else 1.0
 
 
+def name_vol_mult(close, target: float, lookback: int, bars_per_year: float = 2190) -> np.ndarray:
+    """单币波动率封顶（可选，name_vol_target = 0 关闭）：σ_t = 最近 lookback 根对数收益的样本标准差 × √bars_per_year
+    （含第 t 根收盘），返回逐根 m_t = min(1, target / σ_t)；调用方在第 t+1 根用 m_t 乘单笔风险上限与单币权重上限（只缩不放）。
+    历史不足、σ 非有限或为 0 时 m = 1。研究：output/research_inverse_vol_sizing*.csv。"""
+    c = np.asarray(close, dtype=float)
+    if not target or lookback < 2 or len(c) == 0:
+        return np.ones(len(c))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = pd.Series(np.log(c)).diff()
+    sd = r.rolling(int(lookback)).std().to_numpy() * np.sqrt(bars_per_year)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        m = np.minimum(1.0, float(target) / sd)
+    m[~np.isfinite(m)] = 1.0
+    return m
+
+
 def bar_close_equity(ledger: list[dict], interval_ms: int) -> list[float]:
     """把账本权益快照按 K 线周期分桶，取每根内最后一条（≈该根收盘权益），时间升序。
     用于实盘/模拟引擎的组合波动率目标，与回测逐根收盘权益口径一致。时间无法解析的行丢弃。"""
