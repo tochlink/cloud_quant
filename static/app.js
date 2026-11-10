@@ -307,7 +307,7 @@ async function pageSignals() {
   renderSigGrid();
   loadCandles();
 }
-const STATE = { holding: ["持有中", "info"], entry_pending: ["待入场", "warn"], blocked: ["止损后观望", "flat"], flat: ["空仓观望", "flat"] };
+const STATE = { holding: ["持有中", "info"], entry_pending: ["待入场", "warn"], blocked: ["止损后观望", "flat"], trend_wait: ["逆趋势·暂缓", "flat"], flat: ["空仓观望", "flat"] };
 const sigCn = (x) => (x > 0 ? "做多" : x < 0 ? "做空" : "空仓");
 function renderSigGrid() {
   const g = $("#sigGrid"); if (!g || !S.signals) return;
@@ -471,13 +471,14 @@ function pageRisk() {
       <span class="note">固定：永续 1 倍杠杆 · 总敞口 ≤ 1× 权益</span>
     </div></div>
   <div class="panel" style="margin-top:18px"><div class="sec-title"><h3>策略参数 · ${esc(s.strategy.rule_id)}</h3></div>
-    <div class="grid form6">
+    <div class="grid form4">
       <label class="field">K 线周期<select id="sInt">${["15m", "1h", "4h", "1d"].map((x) => `<option ${x === s.strategy.interval ? "selected" : ""}>${x}</option>`).join("")}</select></label>
       <label class="field">快线 SMA<input id="sFast" type="number" value="${s.strategy.fast_ma}"/></label>
       <label class="field">慢线 SMA<input id="sSlow" type="number" value="${s.strategy.slow_ma}"/></label>
       <label class="field">ATR 周期<input id="sAtrP" type="number" value="${s.strategy.atr_period}"/></label>
       <label class="field">ATR 止损倍数<input id="sAtr" type="number" step="0.5" value="${s.strategy.atr_stop_mult}"/></label>
       <label class="field" title="交叉后方向需连续保持几根已收盘 K 线才入场">信号确认根数<input id="sConf" type="number" min="1" max="5" step="1" value="${s.strategy.confirm_bars ?? 1}"/></label>
+      <label class="field" title="只拦截逆势新开仓：做多需收盘价在该 SMA 之上，做空需在其下；不会因此平掉已有持仓。填 0 关闭">趋势过滤 SMA（0=关闭）<input id="sTrend" type="number" min="0" max="400" step="10" value="${s.strategy.trend_ma ?? 0}"/></label>
     </div></div>
   <div class="panel" style="margin-top:18px"><div class="sec-title"><h3>标的池（USDT 交易对）</h3></div>
     <div class="chips" id="chips"></div>
@@ -496,7 +497,7 @@ function pageRisk() {
       await api("/api/settings", { method: "PUT", body: { symbols: syms, worker: { interval_sec: +$("#wInt").value },
         risk: { starting_equity_usdt: +$("#rEq").value, max_risk_per_trade: +$("#rRisk").value, max_weight_per_name: +$("#rW").value, allow_spot_long: $("#rSpot").checked, allow_perp_short: $("#rPerp").checked },
         fees: { taker_bps: +$("#rFee").value },
-        strategy: { interval: $("#sInt").value, fast_ma: +$("#sFast").value, slow_ma: +$("#sSlow").value, atr_period: +$("#sAtrP").value, atr_stop_mult: +$("#sAtr").value, confirm_bars: +$("#sConf").value } } });
+        strategy: { interval: $("#sInt").value, fast_ma: +$("#sFast").value, slow_ma: +$("#sSlow").value, atr_period: +$("#sAtrP").value, atr_stop_mult: +$("#sAtr").value, confirm_bars: +$("#sConf").value, trend_ma: +$("#sTrend").value } } });
       toast("设置已保存"); S.signals = null; await refreshAll(); pageRisk();
     } catch (e) { toast("保存失败：" + e.message, true); b.disabled = false; }
   };
@@ -580,6 +581,7 @@ function pageHelp() {
   <section><h4>顶部栏</h4><ul><li><b>纸面模式 / 实盘已开启</b>：当前交易模式，点击查看运行状态。</li><li><b>实时 · OKX</b>：行情连接状态（实时 / 部分重连 / 恢复中 / REST 兜底 / 数据延迟 / 中断），点击看每条连接。</li><li><b>行情源 OKX | Gate</b>：只切换公共行情来源，始终保持纸面。开启实盘只能在「设置」页完成。</li><li><b>跑一轮</b>：立即执行一次系统化周期（纸面调仓）。</li></ul></section>
   <section><h4>策略 · ${esc(s.rule_id)}</h4><ul>
   <li>现货与 USDT 永续<b>各自</b>在自己已收盘的 ${s.interval} K 线上计算 SMA${s.fast_ma} / SMA${s.slow_ma}；方向需连续 <b>${s.confirm_bars ?? 1}</b> 根已收盘 K 线一致才算有效信号。</li>
+  <li>趋势过滤：${s.trend_ma ? `新开多仓需收盘价在 SMA${s.trend_ma} 之上、新开空仓需在其下，否则显示「逆趋势·暂缓」；已有持仓不受影响。` : "已关闭。"}</li>
   <li>现货看多且永续不看空 → <b>做多·现货</b>；永续看空且现货不看多 → <b>做空·USDT 永续</b>（1 倍）；两者冲突或无信号 → 空仓。</li>
   <li>离场：收盘出现反向或归零信号，或价格触及 <b>${s.atr_stop_mult}×ATR${s.atr_period}</b> 止损；止损后等信号方向改变才再入场。</li></ul></section>
   <section><h4>仓位与风控</h4><ul><li>风险预算 = 权益 × ${pct(st.risk.max_risk_per_trade, 0)}；名义 = 风险预算 ÷ 止损百分比。</li><li>单币名义 ≤ 权益 × ${pct(st.risk.max_weight_per_name, 0)}；总敞口 ≤ 1× 权益，同时入场按比例缩放。</li><li>永续空头按 1 倍保证金占用现金；空头价格上涨时名义会超过权益，可用现金显示为负属正常记账，此时不会开新仓。</li></ul></section>
