@@ -688,6 +688,7 @@ def _live_payload() -> dict:
         "connections": [{k: c.get(k) for k in ("name", "status", "url", "last_msg", "last_msg_age_sec", "reconnects", "last_error")}
                         for c in st.get("connections") or []],
         "prices": snap["prices"], "forming": snap["forming"],
+        "mark_candles": snap.get("mark_candles") or {},
         "paper": {"equity": eq, "realized": bk.realized, "unrealized": eq - bk.realized, "gross": bk.gross(),
                   "net": bk.net(), "total_pnl": eq - bk.starting,
                   "positions": {p.symbol: {"mark": p.mark_price, "mark_time": p.mark_time, "source": p.mark_source,

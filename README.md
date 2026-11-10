@@ -19,6 +19,48 @@ cd /workspace/quant-trading-web
 
 可选：`QTW_PORT=9000 ./start.sh` 换端口；`QTW_MASTER_PASSPHRASE='你的口令' ./start.sh` 用口令派生主密钥（见“密钥存储”）。`ensure_up.sh` 默认强制 `QTW_ALLOW_LIVE_ORDERS=0`（除非你事先已显式 export=1）。
 
+## 网络 / 代理（国内访问 OKX）
+
+OKX 的 WebSocket / REST 在部分网络（尤其是国内）会出现 `ConnectionResetError`（连接被重置）或 `gaierror`（DNS 解析失败）。这不是策略故障：系统不会编造价格，会自动改用官方 REST 轮询；Gate 行情仍可独立工作。日志在连续失败几次后会收成一条警告，重连间隔按 5 秒、10 秒、20 秒……最长 5 分钟递增，避免每分钟刷屏。
+
+**在 Windows（CMD）里先开本地代理再启动**（端口改成你自己的代理端口，常见为 Clash 的 7890）：
+
+```bat
+cd /d D:\PRD\cloud_quant
+set HTTPS_PROXY=http://127.0.0.1:7890
+set HTTP_PROXY=http://127.0.0.1:7890
+.venv\Scripts\python -m qtw serve
+```
+
+PowerShell：
+
+```powershell
+cd D:\PRD\cloud_quant
+$env:HTTPS_PROXY="http://127.0.0.1:7890"
+$env:HTTP_PROXY="http://127.0.0.1:7890"
+.venv\Scripts\python -m qtw serve
+```
+
+若用 Git Bash，在同一终端里 `export HTTPS_PROXY=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890` 后执行 `./start.sh`。
+
+也可以只设 `QTW_PROXY`（优先级最高，WebSocket 与 REST 都会走它）：
+
+```bat
+set QTW_PROXY=http://127.0.0.1:7890
+```
+
+`set QTW_PROXY=none` 可强制直连（忽略系统里已有的 `HTTPS_PROXY`）。环境变量必须在**启动进程的同一个窗口**里设置，设好后重启本程序才会生效。
+
+其他可选变量：
+
+| 变量 | 作用 |
+|---|---|
+| `QTW_OKX_REST_HOST` | 指定官方 REST 域名，例如 `openapi.okx.com` 或 `www.okx.com`（推荐前者）。地区站账户才用 `us.okx.com` / `eea.okx.com` / `tr.okx.com`。 |
+| `QTW_OKX_WS_HOST` | 指定官方 WebSocket 域名，默认 `ws.okx.com`。地区站才用 `wsus.okx.com` / `wseea.okx.com`。 |
+| `QTW_DISABLE_OKX_WS=1` | 不连 OKX WebSocket，OKX 价格只走官方 REST 轮询；Gate 实时连接不受影响。 |
+
+只使用 OKX 文档里的官方域名。`aws.okx.com` / `wsaws.okx.com` 已于 2025-04-28 停用；WebSocket `:8443` 已于 2026-10-31 对公网停止，默认不再尝试。顶部行情状态若显示「REST 兜底」或「OKX 不可达」，点击可看到原因和上述配置建议。
+
 命令行（不开页面也能用）：
 
 ```bash
@@ -71,16 +113,16 @@ cd /workspace/quant-trading-web
 
 | 交易所 | 连接 | 频道 |
 |---|---|---|
-| OKX | `wss://ws.okx.com/ws/v5/public`（优先；回退 `:8443` / `wsaws`） | `tickers`（现货）、`mark-price`（永续） |
-| OKX | `wss://ws.okx.com/ws/v5/business`（同上回退） | `candle4H`（现货 + 永续） |
+| OKX | `wss://ws.okx.com/ws/v5/public`（443；可用 `QTW_OKX_WS_HOST` 指定官方域名） | `tickers`（现货）、`mark-price`（永续） |
+| OKX | `wss://ws.okx.com/ws/v5/business` | `candle4H`（现货 + 永续成交价）、`mark-price-candle4H`（仅永续标记价 K 线，只展示、不参与信号与回测） |
 | Gate | `wss://api.gateio.ws/ws/v4/` | `spot.tickers`、`spot.candlesticks` |
 | Gate | `wss://fx-ws.gateio.ws/v4/ws/usdt` | `futures.tickers`（mark_price）、`futures.candlesticks` |
 
-* 两个交易所都订阅整个标的池；断线指数退避自动重连；任何价格 20 秒没有 WS 更新就改用官方 REST 拉取（`*_public_rest`）。 REST 填隙**优先当前纸面行情源**（`settings.venue`），同批有限并发，僵尸踢掉后纸面标记价不必排在另一所串行 REST 后面。监控别名 `GET /api/paper/book` 与 `GET /api/paper/snapshot` 与 `/api/paper` 同载荷；`GET /api/market/status` ≡ `/api/stream/status`；`GET /api/config` ≡ `/api/settings`（无密钥）。 纸面快照另附 `book_capital`（= `realized` 账面资本）与 `realized_pnl`（= 账面资本 − 起始资金）。 FastAPI 启停改用 lifespan（替代已弃用的 `on_event`），关闭时会停止 worker / 行情 supervisor，并 **join** mark-persist（含盘中止损轮询）且做一次最终标记价落盘，避免清空纸面账本单例时仍有线程在写。`/api/health` 另暴露 `persist_running`、`stream.ws_conn_max_age_sec`、`stream.early_stall_fill_count` / `last_early_stall_fill_*`。 asyncio 循环真卡死时，watchdog 在**后台线程**走官方 REST 填隙（不依赖已冻结 loop 上的 `run_coroutine_threadsafe`，也不阻塞 watchdog 自己每 2 秒的扫描），带合并与约 15 秒冷却，纸面标记价可在踢僵尸之前恢复。WebSocket 握手关闭代理自动探测并只用 IPv4，减轻四路同时重连时的 DNS/代理卡顿。
+* 两个交易所都订阅整个标的池；断线指数退避自动重连；任何价格 20 秒没有 WS 更新就改用官方 REST 拉取（`*_public_rest`）。 REST 填隙**优先当前纸面行情源**（`settings.venue`），同批有限并发，僵尸踢掉后纸面标记价不必排在另一所串行 REST 后面。监控别名 `GET /api/paper/book` 与 `GET /api/paper/snapshot` 与 `/api/paper` 同载荷；`GET /api/market/status` ≡ `/api/stream/status`；`GET /api/config` ≡ `/api/settings`（无密钥）。 纸面快照另附 `book_capital`（= `realized` 账面资本）与 `realized_pnl`（= 账面资本 − 起始资金）。 FastAPI 启停改用 lifespan（替代已弃用的 `on_event`），关闭时会停止 worker / 行情 supervisor，并 **join** mark-persist（含盘中止损轮询）且做一次最终标记价落盘，避免清空纸面账本单例时仍有线程在写。`/api/health` 另暴露 `persist_running`、`stream.ws_conn_max_age_sec`、`stream.early_stall_fill_count` / `last_early_stall_fill_*`。 asyncio 循环真卡死时，watchdog 在**后台线程**走官方 REST 填隙（不依赖已冻结 loop 上的 `run_coroutine_threadsafe`，也不阻塞 watchdog 自己每 2 秒的扫描），带合并与约 15 秒冷却，纸面标记价可在踢僵尸之前恢复。WebSocket / REST 会使用已设置的 `QTW_PROXY` 或 `HTTPS_PROXY`；未设置时关闭代理自动探测并只用 IPv4，避免空探测卡住重连。
 * **有纸面持仓时不能切换行情源（OKX ↔ Gate）**：入场价 / 止损 / 标记价必须来自同一交易所公共行情；请先紧急停止平仓或重置账本后再切换。加载账本时会把旧持仓缺失的 `venue` 从开仓成交记录回填。
-* 心跳：OKX 文本 `pong`、Gate JSON（`channel` 以 `.pong` 结尾，例如 `spot.pong` / `futures.pong`）都算连接活跃并刷新 `last_msg`，不交给行情处理函数。recv 超时会先再发一次应用层 ping 并多等一轮，避免短暂静默就重连。发出订阅 / ping 也有超时，半开连接导致 send 挂起时会主动重连。 已收盘 K 线写库走线程池，避免 SQLite/WAL 卡住事件循环；`status` 把「已连接但 last_msg 过旧」标为 `stale`（无响应）；supervisor 对僵尸套接字优先 `transport.abort()` 硬中断（并行踢掉、短超时 close 兜底），避免 close 握手挂起导致重连卡住；连接成功即写入 `last_msg`，空 `last_msg` 用 `connected_at` 计龄；踢掉后立刻官方 REST 填一次过期报价，不等 10 秒轮询。 supervisor 读配置经线程池，避免 `S.load()`/SQLite 锁卡住事件循环。REST 填隙走独立 IO 线程池 + 短超时报价，并在填隙期间刷新心跳；`rest_fill_inflight` 时 watchdog 不把心跳迟滞当成 loop stall（仍踢超过 ZOMBIE+宽限的真僵尸），避免填隙误杀重连中的套接字。recv/pong 也刷新 loop heartbeat；真 stall 用更短 `STALL_ZOMBIE_SEC` 踢套接字并在后台线程提前 REST 填隙（`EARLY_FILL_COOLDOWN_SEC` 冷却，避免 watchdog 被 32 路 HTTP 堵住）；`rest_fill_inflight` 卡住超过 `FILLING_STALL_SEC` 会取消护盾。握手显式 `proxy=None` + IPv4。另有侧线程 watchdog：当 asyncio 心跳过旧或僵尸套接字超过 ZOMBIE+宽限仍未被踢掉时，先 `shutdown` 底层 TCP 套接字（线程安全），再经 `call_soon_threadsafe` 在行情循环上 `transport.abort()`，由 `connection_lost` 关闭 `recv_messages`；不要在 watchdog 线程直接调用 `set_recv_exc` / `recv_messages.close`，否则会与 `SSLProtocol._do_read` 竞态并触发 `Fatal error on SSL protocol`（2026-11-10 07:11 CST+8 踢除后紧接着 07:12 出现 98 秒 loop stall）。abort 仍失败时再 threadsafe 调度 `close()`，同时调度 REST 填隙。`start()` 在行情线程已存活时也会补拉 watchdog。纸面 `mark` 报价回调经单线程队列旁路，不在 asyncio 线程同步拿 `PaperBook` 锁，避免写库拖死 recv/ping/僵尸踢除。`/api/stream/status` 与 `/api/health` 暴露 `watchdog_running` / `loop_heartbeat_age_sec`。顶部行情 pill 只按当前行情源（OKX / Gate）的连接判断「无响应」，不会被另一所的 stale 误伤。WebSocket 握手除库自带 `open_timeout` 外再包一层超时，避免 DNS / 半开 TCP 让单条连接的状态一直停在 `connecting`。
+* 心跳：OKX 文本 `pong`、Gate JSON（`channel` 以 `.pong` 结尾，例如 `spot.pong` / `futures.pong`）都算连接活跃并刷新 `last_msg`，不交给行情处理函数。recv 超时会先再发一次应用层 ping 并多等一轮，避免短暂静默就重连。发出订阅 / ping 也有超时，半开连接导致 send 挂起时会主动重连。 已收盘 K 线写库走线程池，避免 SQLite/WAL 卡住事件循环；`status` 把「已连接但 last_msg 过旧」标为 `stale`（无响应）；supervisor 对僵尸套接字优先 `transport.abort()` 硬中断（并行踢掉、短超时 close 兜底），避免 close 握手挂起导致重连卡住；连接成功即写入 `last_msg`，空 `last_msg` 用 `connected_at` 计龄；踢掉后立刻官方 REST 填一次过期报价，不等 10 秒轮询。 supervisor 读配置经线程池，避免 `S.load()`/SQLite 锁卡住事件循环。REST 填隙走独立 IO 线程池 + 短超时报价，并在填隙期间刷新心跳；`rest_fill_inflight` 时 watchdog 不把心跳迟滞当成 loop stall（仍踢超过 ZOMBIE+宽限的真僵尸），避免填隙误杀重连中的套接字。recv/pong 也刷新 loop heartbeat；真 stall 用更短 `STALL_ZOMBIE_SEC` 踢套接字并在后台线程提前 REST 填隙（`EARLY_FILL_COOLDOWN_SEC` 冷却，避免 watchdog 被 32 路 HTTP 堵住）；`rest_fill_inflight` 卡住超过 `FILLING_STALL_SEC` 会取消护盾。握手在未配置代理时显式 `proxy=None` + IPv4；已配置则走该代理。另有侧线程 watchdog：当 asyncio 心跳过旧或僵尸套接字超过 ZOMBIE+宽限仍未被踢掉时，先 `shutdown` 底层 TCP 套接字（线程安全），再经 `call_soon_threadsafe` 在行情循环上 `transport.abort()`，由 `connection_lost` 关闭 `recv_messages`；不要在 watchdog 线程直接调用 `set_recv_exc` / `recv_messages.close`，否则会与 `SSLProtocol._do_read` 竞态并触发 `Fatal error on SSL protocol`（2026-11-10 07:11 CST+8 踢除后紧接着 07:12 出现 98 秒 loop stall）。abort 仍失败时再 threadsafe 调度 `close()`，同时调度 REST 填隙。`start()` 在行情线程已存活时也会补拉 watchdog。纸面 `mark` 报价回调经单线程队列旁路，不在 asyncio 线程同步拿 `PaperBook` 锁，避免写库拖死 recv/ping/僵尸踢除。`/api/stream/status` 与 `/api/health` 暴露 `watchdog_running` / `loop_heartbeat_age_sec`。顶部行情 pill 只按当前行情源（OKX / Gate）的连接判断「无响应」，不会被另一所的 stale 误伤。WebSocket 握手除库自带 `open_timeout` 外再包一层超时，避免 DNS / 半开 TCP 让单条连接的状态一直停在 `connecting`。
 * `stream.mode` 与 `quotes_ws_fresh` / `quotes_rest_fresh` 按当前行情源（`settings.venue`）统计：OKX 标记价全部来自 REST 时，不会因为 Gate 的 WebSocket 仍在线而显示 `mode=ws`。顶部行情 pill 与该口径一致（只按当前所判断无响应 / 实时 / 恢复中 / REST 兜底）。`mode` 仍带迟滞：`ws`（当前所有新鲜 WS 报价）→ `recovering`（该所插座仍在 / 刚重连、REST 短暂填隙）→ `rest`（该所 WS 路径真正不可用、仅 REST）→ `down`。重连风暴时不会立刻误报「REST 兜底」。
-* 收盘确认的 K 线（`confirm=1` / `w=true`）写入 SQLite `candles` 表（`data_source=okx_public_ws / gate_public_ws`）；未收盘 K 线只用于图表最后一根的实时跳动。
+* 收盘确认的 K 线（`confirm=1` / `w=true`）写入 SQLite `candles` 表（`data_source=okx_public_ws / gate_public_ws`）；未收盘 K 线只用于图表最后一根的实时跳动。OKX 另订阅永续 `mark-price-candle*`（`market=perp_mark`，`data_source=okx_mark_price_ws`），与成交价永续 K 线分开存放，**不参与信号、止损或回测**，仅在信号详情与实时推送里展示最新一根。
 * 纸面持仓按同一交易所、同一市场的实时价格计价（现货多 → 现货最新价，永续空 → 永续标记价），每 15 秒落库；落库后对 SQLite WAL 做 `PASSIVE` checkpoint（不阻塞并发读），约每 5 分钟再尝试 `TRUNCATE` 真正缩小 `-wal` 文件（此前仅 PASSIVE 时曾观察到数 MB 的空 WAL）。约每 10 分钟裁剪 K 线缓存（每序列保留最近 1200 根）与账本快照（保留最近约 7 天），避免 24/7 无限膨胀。`mark()` 与落库共用锁，避免 WS 计价与 `save` 竞态。
 * 页面通过 **SSE `/api/stream`** 每 1.5 秒收到更新：顶部状态（实时 / 部分重连 / 恢复中 / REST 兜底）、右栏价格与盈亏、总览权益、信号卡片价格、K 线最后一根。
 * 冒烟：`GET /api/health` 返回 `ok`、纸面/实盘 `mode`、`venue`、`live_enabled` / `live_gate_open`、`stream.mode`（含 recovering）/ `stream.running`、`quotes_ws_fresh`、`watchdog_running` / `loop_heartbeat_age_sec` / `rest_fill_inflight` / `stall_suspect_count` / `host_freeze_count` / `last_host_freeze_gap_sec`（看门狗线程自身 >15s 未运行＝主机/进程被冻结，如虚拟机暂停；随后的 stall 恢复是冻结后恢复，并非行情代码故障；若自动交易开启，恢复后会立刻补跑一轮信号与止损检查，不等下一个周期） / `last_zombie_kick_age_sec` / `last_zombie_max_age_sec`、`worker.running`、`persist_running`、精简 `paper`（equity / positions / starting_equity）、`btc_perp`（标记价 / age / source）、`time` / `time_sh`；不含密钥或完整设置。`ensure_up.sh` 与 10 分钟打磨例程用它做保活探测；`ensure_up.sh` 还要求 `live_enabled` 与 `live_gate_open` 均为 false 才算 healthy。
@@ -152,13 +194,13 @@ CSV 均带 `venue` / `data_source` / `fetched_at` 等来源字段。纸面账本
 * OKX `history-candles` 每次 100 根，首次长回测需要数秒到数十秒（已做 2 分钟缓存与 4 并发）。
 * 实盘模式按纸面账本的调仓意图发单，**没有与交易所实际持仓 / 成交对账**，也不处理部分成交；实盘前请先在 OKX 模拟盘或 Gate 合约测试网验证。Gate 现货没有测试网。
 * 仅监听 127.0.0.1，没有登录鉴权；不要暴露到公网。
-* OKX WebSocket 优先连 443 端口官方地址；若失败再回退 :8443 / wsaws（部分网络会重置 8443）。
+* OKX WebSocket 默认只连官方 443 地址 `ws.okx.com`（`openapi.okx.com` / `www.okx.com` 用于 REST）。国内网络若被重置或 DNS 失败，请按上文「网络 / 代理」配置 `HTTPS_PROXY` 或 `QTW_PROXY`；也可设 `QTW_DISABLE_OKX_WS=1` 仅用 REST / Gate。
 * 持仓 ATR 止损除了后台周期检查外，还会在标记价持久化线程里约每 15 秒用最新公共价轮询一次，缩短止损延迟。
 * 信号确认（`confirm_bars`，默认 2）：原始 SMA 方向需连续 N 根已收盘 K 线一致才算有效，否则视为空仓。2026-11-10 在 OKX 与 Gate 官方 4h 历史上做 3 段滚动样本外验证，6 个样本外窗口均优于 1（研究脚本输出不入库）。
 * 趋势过滤（`trend_ma`，默认 100，0=关闭）：**只作用于新开仓**，做多需上一根收盘价 > 该市场（现货）SMA100，做空需上一根收盘价 < 该市场（永续）SMA100；不会因此平掉已有持仓，离场仍只看信号反转 / 归零与 ATR 止损。2026-11-10 在 OKX 与 Gate 官方 4h 历史上切 6 段不重叠窗口：只用前 3 段从 {关闭, 100, 200, 300} 中选出 100，后 3 段（未参与选择）在两家交易所、单边 4 / 14 bps 成本下累计收益均高于不过滤（OKX 4bps +12.0% vs +10.4%，14bps +8.9% vs +6.8%）；整段 OKX +34.1% vs +24.7%，Sharpe 1.59 vs 1.27，最大回撤 −17.1% vs −19.0%。注意第 3 段更差（−7.2% vs −4.6%），并非每段都胜出。
 * 空头熔断（`short_breaker_bars`，默认 60，0=关闭）：用同一套规则跑一本「只做空」的影子账本，若最近 60 根 4h K 线内已平仓的影子空单合计亏损，则暂停新开空单（只用当根之前已平仓的数据，无前视；不平已有仓）。2026-11-10 在 OKX / Gate 官方 4h 历史上切 6 段与 12 段不重叠窗口：前半段从 {60,120,240} 中选出 60，后半段（未参与选择）在两家交易所、单边 4 / 14 bps 下均明显优于不熔断（6 段 OKX 4bps 后 3 段 +34.1% vs +17.2%）。整段 OKX（含 SMA100 趋势过滤）+33.4% vs +22.8%，Sharpe 1.49 vs 1.06，最大回撤 −11.8% vs −17.1%，盈亏比 1.47 vs 1.15。注意：样本期大部分时间空头处于熔断（约 70%），收益主要来自少做逆势空单；历史只覆盖一次明显的多空切换。
 * 界面自适应：侧栏与平板同在一个网格里随窗口 / 缩放一起伸缩；≤1180px 右栏变成抽屉（顶部按钮打开），≤760px 底部胶囊导航。
-* 若某交易所在你所在地区被限制（HTTP 403 / 451），客户端会尝试官方备用域名（OKX `aws.okx.com`，Gate `api.gate.io`），仍失败就报错——**绝不伪造行情**。
+* 若某交易所在你所在地区被限制（HTTP 403 / 451，或 WebSocket 被重置 / DNS 失败），客户端会尝试其他**仍在服务**的官方域名（OKX REST：`openapi.okx.com` 与 `www.okx.com`；Gate：`api.gate.io`），并可用代理。仍失败就报错并在页面提示——**绝不伪造行情**。
 
 ## 目录
 

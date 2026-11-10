@@ -328,7 +328,7 @@ function renderSigGrid() {
         <p><i>分市场</i><span>现货 ${sigCn(r.spot_signal)} · 永续 ${sigCn(r.perp_signal)}${r.conflict ? " → 冲突时空仓" : ""}</span></p>
         <p><i>仓位上限</i><span>${({ risk: "5% 单笔风险", weight: "20% 单币权重", gross: "总敞口 1×", none: "—" })[r.capped_by]}</span></p>
         <p><i>时间</i><span>信号截至 ${t(r.as_of)} 收盘 · 下次检查 ${t(r.next_check)}</span></p>
-        <p><i>数据</i><span class="src">${esc(r.data_source)} · ${esc(r.source_host)} · 拉取 ${t(r.fetched_at)}${r.warning ? ` · <span class="neg">${esc(r.warning)}</span>` : ""}</span></p></div></details>
+        <p><i>数据</i><span class="src">${esc(r.data_source)} · ${esc(r.source_host)} · 拉取 ${t(r.fetched_at)}${r.warning ? ` · <span class="neg">${esc(r.warning)}</span>` : ""}</span></p>${markCandleLine(r.symbol)}</div></details>
     </article>`).join("");
   g.querySelectorAll(".sig[data-sym]").forEach((el) => {
     el.onclick = (e) => { if (e.target.closest("details")) return; selectSignal(el.dataset.sym); };
@@ -625,18 +625,19 @@ async function refreshSignalsNow() {
 /* 行情状态：实时 / 部分重连 / 恢复中 / REST 兜底 / 数据延迟 / 中断 */
 function liveState() {
   const L = S.live, st = S.status;
-  const src = L ? { mode: L.stream.mode, conns: L.connections, venue: L.venue, n: L.stream.quotes_ws_fresh, rest: L.stream.quotes_rest_fresh }
-    : st && st.stream ? { mode: st.stream.mode, conns: st.stream.connections, venue: st.settings.venue, n: st.stream.quotes_ws_fresh, rest: st.stream.quotes_rest_fresh } : null;
+  const src = L ? { mode: L.stream.mode, conns: L.connections, venue: L.venue, n: L.stream.quotes_ws_fresh, rest: L.stream.quotes_rest_fresh, unreachable: L.stream.unreachable, hint: L.stream.hint }
+    : st && st.stream ? { mode: st.stream.mode, conns: st.stream.connections, venue: st.settings.venue, n: st.stream.quotes_ws_fresh, rest: st.stream.quotes_rest_fresh, unreachable: st.stream.unreachable, hint: st.stream.hint } : null;
   if (!src) return ["wait", "行情连接中…"];
   const V = VN[src.venue] || src.venue;
   if (S.esDown) return ["warn", `重连中 · ${V}`];
   if (L && S.liveAt && Date.now() - S.liveAt > 30000) return ["bad", `数据延迟 · ${Math.round((Date.now() - S.liveAt) / 1000)} 秒无更新`];
   // Only judge the selected venue's sockets — Gate being stale must not flash「无响应」on OKX (and vice versa).
-  const mine = (src.conns || []).filter((c) => c.name.startsWith(src.venue));
+  const mine = (src.conns || []).filter((c) => c.name && c.name.startsWith(src.venue));
   if (mine.some((c) => c.status === "stale")) return ["warn", `连接无响应 · ${V}`];
   if (src.mode === "ws") return mine.length && mine.every((c) => c.status === "connected") ? ["ok", `实时 · ${V}`] : ["warn", `实时 · ${V} 部分重连`];
   // WS sockets reconnecting / quote gap filled by REST — not a full REST-only fallback
   if (src.mode === "recovering") return ["warn", `恢复中 · ${V}`];
+  if (src.unreachable || (src.mode === "down" && !src.n && !src.rest)) return ["bad", `${V} 不可达`];
   if (src.mode === "rest") return ["warn", `REST 兜底 · ${V}`];
   return ["bad", `行情中断 · ${V}`];
 }
@@ -661,6 +662,7 @@ function applyLive() {
   });
   renderRight();
   applyForming();
+  applyMarkCandles();
   const now = Date.now();
   if ((S.page === "dashboard" || S.page === "positions") && now - (S._lastLiveRender || 0) > 5000 && !$("#modal:not(.hidden)") && !document.querySelector("#page :hover:is(button,a)")) {
     S._lastLiveRender = now; PAGES[S.page]();
@@ -674,6 +676,22 @@ function stopRisk(p) {
   const dist = Math.abs(st - e) / e;
   return `<br><small class="muted" title="开仓价到止损价的距离；触发止损时这笔最多亏的金额">距 ${pct(dist, 1)} · 最多亏 ${f2(Math.max(loss, 0))} U</small>`;
 }
+function markCandleText(sym) {
+  const m = S.live && S.live.mark_candles && S.live.mark_candles[sym];
+  if (!m) return "—";
+  const st = m.closed ? "已收盘" : "进行中";
+  return `${fp(m.close)} · ${st}（仅展示，不参与信号）`;
+}
+function markCandleLine(sym) {
+  const has = S.live && S.live.mark_candles && S.live.mark_candles[sym];
+  if (!has && (S.status?.settings?.venue !== "okx")) return "";
+  return `<p><i>标记价K线</i><span data-mark-candle="${sym}">${markCandleText(sym)}</span></p>`;
+}
+function applyMarkCandles() {
+  document.querySelectorAll("[data-mark-candle]").forEach((el) => {
+    el.textContent = markCandleText(el.dataset.markCandle);
+  });
+}
 function connectLive() {
   try {
     const es = new EventSource("/api/stream");
@@ -684,8 +702,8 @@ function connectLive() {
 }
 $("#livePill").onclick = () => {
   const L = S.live, conns = L ? L.connections : S.status?.stream?.connections || [], sm = L ? L.stream : S.status?.stream || {};
-  modal(`<h3>实时行情连接</h3><div class="note" style="margin-bottom:8px">官方公共接口，无需 API Key。当前行情源：<b>${VN[S.status.settings.venue]}</b></div><div class="conn-list">${conns.map((c) => { const lab = ({connected:"已连接",connecting:"连接中",reconnecting:"重连中",stale:"无响应",stopped:"已停止"})[c.status] || c.status; const ok = c.status === "connected"; return `<div><b class="${ok ? "ok" : "bad"}">●</b> ${esc(c.name)} · ${esc(lab)}${c.last_msg ? ` · 最后消息 ${tFull(c.last_msg, true)}` : ""}${c.last_msg_age_sec != null ? `（${Math.round(c.last_msg_age_sec)} 秒前）` : ""}${c.reconnects ? ` · 累计重连 ${c.reconnects} 次` : ""}<br><span class="src">${esc(c.url)}</span>${c.last_error ? `<br><span class="src neg">${esc(c.last_error)}</span>` : ""}</div>`; }).join("") || "暂无连接信息"}</div>
-   <div class="note" style="margin-top:10px">模式 ${sm.mode ?? "—"} · 当前行情源 WebSocket 新鲜报价 ${sm.quotes_ws_fresh ?? "—"} 个 · REST 兜底 ${sm.quotes_rest_fresh ?? "—"} 个。价格超过 20 秒无 WS 更新时自动改用官方 REST；重连窗口内标为「恢复中」而非误报 REST；已连接但长时间无消息标为「无响应」；获取失败只报错，不会编造价格。${sm.host_freeze_count ? `<br><span class="muted">本机曾暂停 ${sm.host_freeze_count} 次（最近一次约 ${Math.round(sm.last_host_freeze_gap_sec || 0)} 秒，${sm.last_host_freeze_age_sec != null ? Math.round(sm.last_host_freeze_age_sec / 60) + " 分钟前" : "—"}）；恢复后已自动重连并补齐价格，这不是行情故障。</span>` : ""}${Object.keys(sm.rest_errors || {}).length ? "<br><span class='neg'>REST 错误：" + Object.entries(sm.rest_errors).slice(0, 4).map(([k, v]) => esc(k + " " + v)).join("；") + "</span>" : ""}</div>
+  modal(`<h3>实时行情连接</h3><div class="note" style="margin-bottom:8px">官方公共接口，无需 API Key。当前行情源：<b>${VN[S.status.settings.venue]}</b></div>${sm.hint ? `<div class="note ${sm.unreachable ? "neg" : ""}" style="margin-bottom:8px">${esc(sm.hint)}</div>` : ""}<div class="conn-list">${conns.map((c) => { const lab = ({connected:"已连接",connecting:"连接中",reconnecting:"重连中",stale:"无响应",stopped:"已停止",disabled:"已关闭"})[c.status] || c.status; const ok = c.status === "connected"; return `<div><b class="${ok ? "ok" : "bad"}">●</b> ${esc(c.name)} · ${esc(lab)}${c.last_msg ? ` · 最后消息 ${tFull(c.last_msg, true)}` : ""}${c.last_msg_age_sec != null ? `（${Math.round(c.last_msg_age_sec)} 秒前）` : ""}${c.reconnects ? ` · 累计重连 ${c.reconnects} 次` : ""}<br><span class="src">${esc(c.url)}</span>${c.last_error ? `<br><span class="src neg">${esc(c.last_error)}</span>` : ""}</div>`; }).join("") || "暂无连接信息"}</div>
+   <div class="note" style="margin-top:10px">模式 ${sm.mode ?? "—"} · 当前行情源 WebSocket 新鲜报价 ${sm.quotes_ws_fresh ?? "—"} 个 · REST 兜底 ${sm.quotes_rest_fresh ?? "—"} 个。价格超过 20 秒无 WS 更新时自动改用官方 REST；重连窗口内标为「恢复中」而非误报 REST；已连接但长时间无消息标为「无响应」；获取失败只报错，不会编造价格。国内访问 OKX 失败时请配置 HTTPS_PROXY 或 QTW_PROXY 后重启。${sm.host_freeze_count ? `<br><span class="muted">本机曾暂停 ${sm.host_freeze_count} 次（最近一次约 ${Math.round(sm.last_host_freeze_gap_sec || 0)} 秒，${sm.last_host_freeze_age_sec != null ? Math.round(sm.last_host_freeze_age_sec / 60) + " 分钟前" : "—"}）；恢复后已自动重连并补齐价格，这不是行情故障。</span>` : ""}${Object.keys(sm.rest_errors || {}).length ? "<br><span class='neg'>REST 错误：" + Object.entries(sm.rest_errors).slice(0, 4).map(([k, v]) => esc(k + " " + v)).join("；") + "</span>" : ""}</div>
    <div class="acts"><button class="btn" data-close>关闭</button></div>`, (m) => (m.querySelector("[data-close]").onclick = closeModal));
 };
 
