@@ -478,10 +478,25 @@ table.tbl{width:100%;border-collapse:separate;border-spacing:0 8px;font-size:12.
 #posTable,#tradeTable,#btTrades{flex:1;min-height:0;overflow:hidden}
 .fit .tbl-wrap{max-height:none;height:100%;overflow:hidden}
 .trades-page .trades-panel{flex:1;min-height:0;display:flex;flex-direction:column}
-.trades-tbl{table-layout:auto}
+.trades-tbl{table-layout:fixed;width:100%}
+.trades-tbl col.c-time{width:6.2em}
+.trades-tbl col.c-qty{width:4.4em}
+.trades-tbl col.c-px{width:5.6em}
+.trades-tbl col.c-id{width:2.6em}
+.trades-tbl col.c-fee{width:4em}
+.trades-tbl col.c-pnl{width:5.4em}
+.trades-tbl .reason,.trades-tbl td.time-c{overflow:hidden}
 .trades-tbl td,.trades-tbl th{white-space:nowrap}
+.trades-tbl td.time-c,.trades-tbl td.sym-c{white-space:normal}
+.trades-tbl td.time-c{font-size:12px;line-height:1.35}
+.trades-tbl .sym-line{display:flex;gap:8px;align-items:center;min-width:0}
+.trades-tbl .sym-line>div{min-width:0}
 .trades-tbl td.pnl-cell,.pos-tbl td:last-child,[data-live-pnl-txt]{white-space:pre-line;line-height:1.25;font-variant-numeric:tabular-nums}
-.trades-tbl .reason{white-space:normal;line-height:1.45;font-size:11.5px;color:var(--ink-2);font-weight:500;margin-top:4px;max-width:28em}
+.trades-tbl td.pnl-cell{overflow:visible;text-align:right;padding-right:10px}
+.trades-tbl .reason{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px;color:var(--ink-2);font-weight:500;margin-top:4px;max-width:100%}
+.trades-tbl .exit-dash{display:block}
+.trades-tbl .exit-live{display:block;margin-top:2px;font-size:10.5px;font-weight:600;color:var(--muted);letter-spacing:0}
+.r-row{padding:6px 4px}
 .pos-tbl td.num:last-child{white-space:nowrap}
 @media (max-width:1500px){
   .pos-tbl .col-venue,.pos-tbl .col-etime,.pos-tbl .col-notional{display:none}

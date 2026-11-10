@@ -52,6 +52,13 @@ const VN = { okx: "OKX", gate: "Gate.io" };
 const base = (sym) => sym.replace(/USDT$/, "");
 const pxOk = (x) => x != null && isFinite(Number(x)) && Number(x) > 0;
 const fpPx = (x) => (pxOk(x) ? fp(x) : "—");
+const tCompact = (iso) => { if (!iso) return "—"; return PT.short(iso).replace(/ 北京时间$/, ""); };
+function fqty(x) {
+  if (x == null || !isFinite(Number(x))) return "—";
+  const n = Number(x), a = Math.abs(n);
+  const d = a >= 100 ? 2 : a >= 1 ? 4 : 5;
+  return n.toLocaleString("zh-CN", { minimumFractionDigits: 0, maximumFractionDigits: d });
+}
 const STALE_SEC = 20;
 S.pg = S.pg || {};
 function quoteFresh(q) {
@@ -104,7 +111,8 @@ function setTextFlash(el, text) {
 function updateLiveCells() {
   document.querySelectorAll("[data-live='px']").forEach((el) => {
     const px = currentPx(el.dataset.sym, el.dataset.mkt || "spot", el.dataset.mark, el.dataset.markTime);
-    setTextFlash(el, fpPx(px));
+    const pre = el.dataset.pxPrefix || "";
+    setTextFlash(el, pre ? (pxOk(px) ? pre + fpPx(px) : "—") : fpPx(px));
   });
   document.querySelectorAll("[data-live='pnl']").forEach((el) => {
     const px = currentPx(el.dataset.sym, el.dataset.mkt || "spot", el.dataset.mark, el.dataset.markTime);
@@ -136,7 +144,7 @@ function updateLiveCells() {
 function pgState(key, total, size) {
   size = Math.max(1, size | 0);
   const st = S.pg[key] || { i: 0 };
-  if (st._fit && st._fit < size) size = Math.max(1, st._fit);
+  if (st._fit) size = Math.max(1, st._fit);
   const pages = Math.max(1, Math.ceil((total || 0) / size));
   st.n = size;
   if (st.i >= pages) st.i = pages - 1;
@@ -170,7 +178,23 @@ function tightenIfOverflow(host, key, redraw) {
     if (st && st.n > 2 && st._fit !== st.n - 1) { st._fit = st.n - 1; redraw(); }
   }
 }
+function refitByActualRows(host, key, rowSel, redraw, min = 2) {
+  const row = host && host.querySelector(rowSel);
+  if (!host || !row || host.clientHeight <= 0) return;
+  const rowH = row.getBoundingClientRect().height;
+  if (!(rowH > 8)) return;
+  const n = Math.max(min, Math.floor((host.clientHeight + 1) / rowH));
+  const st = S.pg[key];
+  if (!st || n === st.n) return;
+  if (n < st.n && host.scrollHeight <= host.clientHeight + 2) return;
+  st._fit = n;
+  redraw();
+}
 function relayoutPagers() {
+  const page = $("#page"), rail = $("#rList");
+  const sig = `${page?.clientWidth||0}x${page?.clientHeight||0}:${rail?.clientWidth||0}x${rail?.clientHeight||0}`;
+  if (S._fitSig === sig) return;
+  S._fitSig = sig;
   Object.keys(S.pg || {}).forEach((k) => { if (S.pg[k]) S.pg[k]._fit = null; });
   if (S.page === "signals") renderSigList();
   else if (S.page === "trades" && S.trades) renderTradesPage(false);
@@ -311,7 +335,7 @@ function renderRight() {
     $("#railBtnLbl").textContent = `持仓 ${d.positions.length}`;
     $("#rSub").textContent = `${d.positions.length} 个纸面持仓 · 点击查看该币信号与 K 线`;
     const allPos = d.positions.filter((p) => !q || p.symbol.includes(q)).sort((a, b) => b.weight - a.weight);
-    const stP = pgState("rail", allPos.length, fitRows($("#rList"), 108, 0, 2));
+    const stP = pgState("rail", allPos.length, fitRows($("#rList"), 82, 0, 2));
     html = allPos.slice(stP.start, stP.end).map((p) => {
       const mark = posMark(p), pnl = posUpnl(p, mark);
       const live = `data-sym="${p.symbol}" data-mkt="${p.market}" data-entry="${p.entry_price}" data-qty="${p.qty}" data-side="${p.side}" data-mark="${p.mark_price ?? ""}" data-mark-time="${esc(p.mark_time || "")}"`;
@@ -343,7 +367,10 @@ function renderRight() {
   $("#rList").querySelectorAll("[data-sym]").forEach((el) => (el.onclick = () => goSignal(el.dataset.sym, el.dataset.mkt)));
   const rp = $("#rPager");
   if (rp) { rp.innerHTML = S._railPager ? pagerHtml("rail", S._railPager) : ""; bindPager("rail", renderRight); }
-  if (S._railPager) tightenIfOverflow($("#rList"), "rail", renderRight);
+  if (S._railPager) {
+    tightenIfOverflow($("#rList"), "rail", renderRight);
+    requestAnimationFrame(() => refitByActualRows($("#rList"), "rail", ".r-row", renderRight, 2));
+  }
   const st = S.status;
   let msg;
   if (st.mode === "live") msg = `⚠️ 实盘已开启<small>订单将真实发送到 ${VN[st.settings.venue]}，随时可按“紧急停止”。</small>`;
@@ -678,7 +705,9 @@ function renderTradesPage(rebuild) {
   if (!rows.length) { host.innerHTML = '<div class="empty">暂无成交</div>'; const pg = $("#tradePager"); if (pg) pg.innerHTML = ""; return; }
   const st = pgState("trades", rows.length, fitRows(host, 100, 52, 3));
   const slice = rows.slice(st.start, st.end);
-  host.innerHTML = `<div class="tbl-wrap"><table class="tbl trades-tbl"><thead><tr><th>时间</th><th>标的 / 原因</th><th>数量</th><th>进场价</th><th>出场价</th><th>单号</th><th>手续费</th><th>盈亏</th></tr></thead><tbody>
+  host.innerHTML = `<div class="tbl-wrap"><table class="tbl trades-tbl"><colgroup>
+    <col class="c-time"/><col class="c-sym"/><col class="c-qty"/><col class="c-px"/><col class="c-px"/><col class="c-id"/><col class="c-fee"/><col class="c-pnl"/>
+  </colgroup><thead><tr><th>时间</th><th>标的 / 原因</th><th>数量</th><th>进场价</th><th>出场价</th><th>单号</th><th>手续费</th><th>盈亏</th></tr></thead><tbody>
   ${slice.map((tr) => tradeRowHtml(tr)).join("")}</tbody></table></div>`;
   const pg = $("#tradePager"); if (pg) { pg.innerHTML = pagerHtml("trades", st); bindPager("trades", () => renderTradesPage(false)); }
   tightenIfOverflow(host, "trades", () => renderTradesPage(false));
@@ -686,8 +715,6 @@ function renderTradesPage(rebuild) {
 function tradeRowHtml(tr) {
   const open = tr.status === "open";
   const mark = open ? currentPx(tr.symbol, tr.market, tr.mark_price, tr.mark_time) : null;
-  const exitPx = open ? mark : tr.exit_price;
-  const feeOpen = open; // exit fee not yet
   let pnl = { usdt: tr.pnl_usdt, pct: tr.pnl_pct };
   if (open) pnl = posUpnl({ entry_price: tr.entry_price, qty: tr.qty, side: tr.side }, mark);
   // open: show price pnl net of known fees when we have a live/book price
@@ -695,13 +722,16 @@ function tradeRowHtml(tr) {
   const live = open ? `data-sym="${tr.symbol}" data-mkt="${tr.market}" data-entry="${tr.entry_price}" data-qty="${tr.qty}" data-side="${tr.side}" data-mark="${tr.mark_price ?? ""}" data-mark-time="${esc(tr.mark_time || "")}"` : "";
   const reason = [tr.entry_reason ? "入场：" + ptText(tr.entry_reason) : "", tr.exit_reason ? "离场：" + ptText(tr.exit_reason) : ""].filter(Boolean).join("  ");
   const mode = (tr.mode === "live" ? "实盘" : "纸面") + (tr.venue ? " · " + String(tr.venue).toUpperCase() : "");
+  const exitCell = open
+    ? `<span class="exit-dash">—</span><span class="exit-live" data-live="px" data-px-prefix="现价 " ${live}>${pxOk(mark) ? "现价 " + fpPx(mark) : "—"}</span>`
+    : fpPx(tr.exit_price);
   return `<tr class="${open ? "open-tr" : ""}">
-    <td><div>${tr.entry_time ? tFull(tr.entry_time) : "—"}</div><div class="ds">${open ? "持仓中" : (tr.exit_time ? tFull(tr.exit_time) : "—")}</div></td>
-    <td><div style="display:flex;gap:8px;align-items:center">${coin(tr.symbol)}<div><b>${base(tr.symbol)}</b><div class="ds"><span class="side-tag ${tr.side}">${sideCn(tr.side)}</span> ${mktCn(tr.market)} · ${esc(mode)}</div></div></div>
+    <td class="time-c"><div>${tr.entry_time ? tCompact(tr.entry_time) : "—"}</div><div class="ds">${open ? "持仓中" : (tr.exit_time ? tCompact(tr.exit_time) : "—")}</div></td>
+    <td class="sym-c"><div class="sym-line">${coin(tr.symbol)}<div><b>${base(tr.symbol)}</b><div class="ds"><span class="side-tag ${tr.side}">${sideCn(tr.side)}</span> ${mktCn(tr.market)} · ${esc(mode)}</div></div></div>
       ${reason ? `<div class="reason" title="${esc(reason)}">${esc(reason)}</div>` : ""}</td>
-    <td class="num">${fp(tr.qty)}</td>
+    <td class="num">${fqty(tr.qty)}</td>
     <td class="num">${fpPx(tr.entry_price)}</td>
-    <td class="num">${open ? `<span data-live="px" ${live}>${fpPx(exitPx)}</span>` : fpPx(tr.exit_price)}</td>
+    <td class="num exit-cell">${exitCell}</td>
     <td class="num">${tr.trade_id ?? "—"}</td>
     <td class="num">${f2(tr.fee_usdt, 4)}</td>
     <td class="num pnl-cell ${cls(pnl.usdt)}" ${open ? `data-live="pnl" data-stacked="1" data-fee="${tr.fee_usdt || 0}" ${live}` : ""}><span data-live-pnl-txt>${fmtPnl(pnl, true)}</span></td>
