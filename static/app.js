@@ -184,6 +184,21 @@ function bindPager(key, redraw) {
   if (!bar) return;
   bar.querySelectorAll("[data-d]").forEach((b) => (b.onclick = () => { S.pg[key].i += +b.dataset.d; redraw(); }));
 }
+function bindTabs(stateKey, rootSel, initial) {
+  const root = $(rootSel); if (!root) return;
+  const go = (tab) => {
+    S[stateKey] = tab;
+    root.querySelectorAll(".set-nav [data-tab]").forEach((b) => {
+      const on = b.dataset.tab === tab;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    root.querySelectorAll(".set-pane").forEach((p) => p.classList.toggle("on", p.dataset.pane === tab));
+  };
+  root.querySelectorAll(".set-nav [data-tab]").forEach((b) => (b.onclick = () => go(b.dataset.tab)));
+  const first = root.querySelector(".set-nav [data-tab]");
+  go(initial || S[stateKey] || (first && first.dataset.tab));
+}
 function fitRows(host, rowH, extraH = 0, min = 3) {
   if (!host) return min;
   const h = host.clientHeight || 0;
@@ -761,57 +776,77 @@ function tradeRowHtml(tr) {
 function pageRisk() {
   const s = S.status.settings, w = S.status.worker;
   $("#page").innerHTML = `
-  <div class="fit fit-scroll">
-  <div class="grid risk-top">
-    <div class="panel"><div class="sec-title"><h3>自动交易 <span class="muted" style="font-weight:500;font-size:13px">纸面执行</span>${infoTip("<b>后台循环每隔设定秒数：</b><ol><li>拉取 OKX / Gate 官方公共行情</li><li>用已收盘 K 线计算信号</li><li>检查止损</li><li>在<b>纸面账本</b>按最新价调仓</li></ol>实盘只有在「设置」页通过全部闸门后才会发单。", "自动交易说明")}</h3>
-        <span class="pill ${w.running ? "long" : "flat"}">${w.running ? "运行中" : "已停止"}</span></div>
-      <div class="worker-row">
-        <label class="field" style="width:150px">检查间隔（秒）<input id="wInt" type="number" min="60" value="${s.worker.interval_sec}"/></label>
-        <button class="btn ${w.running ? "stop" : "go"}" id="wToggle" aria-pressed="${w.running}">${w.running ? ic("stop") + "停止自动交易" : ic("play") + "开启自动交易"}</button>
-        <button class="btn ghost" id="cycleNow" title="手动跑一轮系统化周期（纸面）">${ic("play")}跑一轮</button>
+  <div class="fit set-page" id="riskPage">
+    <nav class="set-nav" role="tablist" aria-label="风控分类">
+      <button type="button" role="tab" data-tab="auto">${ic("play")}自动交易</button>
+      <button type="button" role="tab" data-tab="kill">${ic("alert")}紧急操作</button>
+      <button type="button" role="tab" data-tab="rules">${ic("risk")}风控规则</button>
+      <button type="button" role="tab" data-tab="strategy">${ic("settings")}策略参数</button>
+      <button type="button" role="tab" data-tab="universe">${ic("trades")}标的池</button>
+    </nav>
+    <div class="set-main">
+      <div class="set-panes">
+        <section class="set-pane panel" data-pane="auto" role="tabpanel">
+          <div class="sec-title"><h3>自动交易 <span class="muted" style="font-weight:500;font-size:13px">纸面执行</span>${infoTip("<b>后台循环每隔设定秒数：</b><ol><li>拉取 OKX / Gate 官方公共行情</li><li>用已收盘 K 线计算信号</li><li>检查止损</li><li>在<b>纸面账本</b>按最新价调仓</li></ol>实盘只有在「设置」页通过全部闸门后才会发单。", "自动交易说明")}</h3>
+            <span class="pill ${w.running ? "long" : "flat"}">${w.running ? "运行中" : "已停止"}</span></div>
+          <div class="worker-row">
+            <label class="field" style="width:150px">检查间隔（秒）<input id="wInt" type="number" min="60" value="${s.worker.interval_sec}"/></label>
+            <button class="btn ${w.running ? "stop" : "go"}" id="wToggle" aria-pressed="${w.running}">${w.running ? ic("stop") + "停止自动交易" : ic("play") + "开启自动交易"}</button>
+            <button class="btn ghost" id="cycleNow" title="手动跑一轮系统化周期（纸面）">${ic("play")}跑一轮</button>
+          </div>
+          <div class="note" style="margin-top:12px">上次执行：${tFull(w.last_run, true)}${w.running ? ` · 下次约 ${w.next_run_in_sec ?? "—"} 秒后` : ""}${w.last_error ? `<br><span class="neg">错误：${esc(w.last_error)}</span>` : ""}</div>
+        </section>
+        <section class="set-pane panel danger-panel" data-pane="kill" role="tabpanel">
+          <div class="sec-title"><h3>紧急操作</h3></div>
+          <div class="danger-acts">
+            <div class="da"><button class="btn danger" id="killBig">${ic("stop")}紧急停止</button>${infoTip("<b>紧急停止（Kill Switch）</b><ul><li>停止后台自动交易</li><li>关闭实盘开关，切回纸面</li><li>按最新公共价<b>平掉全部纸面持仓</b></li></ul>不会向交易所发送任何订单。点击后还会再确认一次。", "紧急停止说明")}</div>
+            <div class="da"><button class="btn ghost danger-ghost" id="resetPaper">重置纸面账本</button>${infoTip("<b>重置纸面账本</b><ul><li>清空全部纸面持仓、成交与账本历史</li><li>恢复起始资金（当前 " + f2(s.risk.starting_equity_usdt, 0) + " USDT）</li><li>需先停止自动交易</li></ul>点击后还会再确认一次。", "重置说明")}</div>
+          </div>
+        </section>
+        <section class="set-pane panel" data-pane="rules" role="tabpanel">
+          <div class="sec-title"><h3>风控规则</h3><span class="note">上限只能调低，不能调高</span></div>
+          <div class="grid form4">
+            <label class="field">起始纸面资金 (USDT)<input id="rEq" type="number" value="${s.risk.starting_equity_usdt}"/><span class="hint">重置账本后生效</span></label>
+            <label class="field">单笔最大风险<input id="rRisk" type="number" step="0.005" max="0.05" value="${s.risk.max_risk_per_trade}"/><span class="hint">≤ 0.05（5%）；止损较近时单币上限先生效，实际单笔风险≈单币上限×止损距离</span></label>
+            <label class="field">单币最大权重<input id="rW" type="number" step="0.01" max="0.2" value="${s.risk.max_weight_per_name}"/><span class="hint">≤ 0.20（20%）</span></label>
+            <label class="field">手续费假设 (bps)<input id="rFee" type="number" step="0.5" value="${s.fees.taker_bps}"/><span class="hint">默认 taker 4 bps</span></label>
+          </div>
+          <div style="display:flex;gap:28px;margin-top:16px;flex-wrap:wrap;align-items:center">
+            <label class="toggle"><input type="checkbox" id="rSpot" ${s.risk.allow_spot_long ? "checked" : ""}/><span class="tr"></span>允许现货做多</label>
+            <label class="toggle"><input type="checkbox" id="rPerp" ${s.risk.allow_perp_short ? "checked" : ""}/><span class="tr"></span>允许永续做空</label>
+            <span class="note">固定：永续 1 倍杠杆 · 总敞口 ≤ 1× 权益</span>
+          </div>
+        </section>
+        <section class="set-pane panel" data-pane="strategy" role="tabpanel">
+          <div class="sec-title"><h3>策略参数 · ${esc(s.strategy.rule_id)}</h3></div>
+          <div class="grid form4">
+            <label class="field">K 线周期<select id="sInt">${["15m", "1h", "4h", "1d"].map((x) => `<option ${x === s.strategy.interval ? "selected" : ""}>${x}</option>`).join("")}</select></label>
+            <label class="field">快线 SMA<input id="sFast" type="number" value="${s.strategy.fast_ma}"/></label>
+            <label class="field">慢线 SMA<input id="sSlow" type="number" value="${s.strategy.slow_ma}"/></label>
+            <label class="field">ATR 周期<input id="sAtrP" type="number" value="${s.strategy.atr_period}"/></label>
+            <label class="field">ATR 止损倍数<input id="sAtr" type="number" step="0.5" value="${s.strategy.atr_stop_mult}"/></label>
+            <label class="field" title="交叉后方向需连续保持几根已收盘 K 线才入场">信号确认根数<input id="sConf" type="number" min="1" max="5" step="1" value="${s.strategy.confirm_bars ?? 1}"/></label>
+            <label class="field" title="只拦截逆势新开仓：做多需收盘价在该 SMA 之上，做空需在其下；不会因此平掉已有持仓。填 0 关闭">趋势过滤 SMA（0=关闭）<input id="sTrend" type="number" min="0" max="400" step="10" value="${s.strategy.trend_ma ?? 0}"/></label>
+            <label class="field" title="用同一规则跑一本只做空的影子账本：最近 N 根 K 线已平仓影子空单合计亏损时，暂停新开空单；转正后自动恢复。不会平掉已有持仓。填 0 关闭">空头熔断回看根数（0=关闭）<input id="sSB" type="number" min="0" max="500" step="10" value="${s.strategy.short_breaker_bars ?? 0}"/></label>
+            <label class="field" title="仅回测生效（模拟盘 / 实盘暂不加仓）：持仓前一根收盘浮盈 ≥ k × R（R = 入场价到止损的距离）时，下一根开盘加仓一次，止损不动。填 0 关闭">浮盈加仓触发 R（0=关闭·仅回测）<input id="sPyrR" type="number" min="0" max="5" step="0.25" value="${s.strategy.pyramid_r ?? 0}"/></label>
+            <label class="field" title="加仓名义 = 比例 × 原名义，同时受单币权重上限与总敞口上限约束">加仓比例（× 原名义）<input id="sPyrF" type="number" min="0" max="1" step="0.25" value="${s.strategy.pyramid_frac ?? 0.5}"/></label>
+          </div>
+        </section>
+        <section class="set-pane panel" data-pane="universe" role="tabpanel">
+          <div class="sec-title"><h3>标的池（USDT 交易对）</h3></div>
+          <div class="chips" id="chips"></div>
+          <div style="display:flex;gap:10px;margin-top:14px"><input id="addSym" class="r-search" style="margin:0;width:220px" placeholder="例如 LINK 或 LINKUSDT" aria-label="添加交易对"/><button class="btn ghost sm" id="addSymBtn">添加</button></div>
+        </section>
       </div>
-      <div class="note" style="margin-top:12px">上次执行：${tFull(w.last_run, true)}${w.running ? ` · 下次约 ${w.next_run_in_sec ?? "—"} 秒后` : ""}${w.last_error ? `<br><span class="neg">错误：${esc(w.last_error)}</span>` : ""}</div>
+      <div class="savebar" id="saveBar"><span class="note" id="saveHint">修改参数后，点「保存设置」才会生效。</span><button class="btn" id="saveRisk">保存设置</button></div>
     </div>
-    <div class="panel danger-panel"><div class="sec-title"><h3>紧急操作</h3></div>
-      <div class="danger-acts">
-        <div class="da"><button class="btn danger" id="killBig">${ic("stop")}紧急停止</button>${infoTip("<b>紧急停止（Kill Switch）</b><ul><li>停止后台自动交易</li><li>关闭实盘开关，切回纸面</li><li>按最新公共价<b>平掉全部纸面持仓</b></li></ul>不会向交易所发送任何订单。点击后还会再确认一次。", "紧急停止说明")}</div>
-        <div class="da"><button class="btn ghost danger-ghost" id="resetPaper">重置纸面账本</button>${infoTip("<b>重置纸面账本</b><ul><li>清空全部纸面持仓、成交与账本历史</li><li>恢复起始资金（当前 " + f2(s.risk.starting_equity_usdt, 0) + " USDT）</li><li>需先停止自动交易</li></ul>点击后还会再确认一次。", "重置说明")}</div>
-      </div></div>
-  </div>
-  <div class="panel" style="margin-top:18px"><div class="sec-title"><h3>风控规则</h3><span class="note">上限只能调低，不能调高</span></div>
-    <div class="grid form4">
-      <label class="field">起始纸面资金 (USDT)<input id="rEq" type="number" value="${s.risk.starting_equity_usdt}"/><span class="hint">重置账本后生效</span></label>
-      <label class="field">单笔最大风险<input id="rRisk" type="number" step="0.005" max="0.05" value="${s.risk.max_risk_per_trade}"/><span class="hint">≤ 0.05（5%）；止损较近时单币上限先生效，实际单笔风险≈单币上限×止损距离</span></label>
-      <label class="field">单币最大权重<input id="rW" type="number" step="0.01" max="0.2" value="${s.risk.max_weight_per_name}"/><span class="hint">≤ 0.20（20%）</span></label>
-      <label class="field">手续费假设 (bps)<input id="rFee" type="number" step="0.5" value="${s.fees.taker_bps}"/><span class="hint">默认 taker 4 bps</span></label>
-    </div>
-    <div style="display:flex;gap:28px;margin-top:16px;flex-wrap:wrap;align-items:center">
-      <label class="toggle"><input type="checkbox" id="rSpot" ${s.risk.allow_spot_long ? "checked" : ""}/><span class="tr"></span>允许现货做多</label>
-      <label class="toggle"><input type="checkbox" id="rPerp" ${s.risk.allow_perp_short ? "checked" : ""}/><span class="tr"></span>允许永续做空</label>
-      <span class="note">固定：永续 1 倍杠杆 · 总敞口 ≤ 1× 权益</span>
-    </div></div>
-  <div class="panel" style="margin-top:18px"><div class="sec-title"><h3>策略参数 · ${esc(s.strategy.rule_id)}</h3></div>
-    <div class="grid form4">
-      <label class="field">K 线周期<select id="sInt">${["15m", "1h", "4h", "1d"].map((x) => `<option ${x === s.strategy.interval ? "selected" : ""}>${x}</option>`).join("")}</select></label>
-      <label class="field">快线 SMA<input id="sFast" type="number" value="${s.strategy.fast_ma}"/></label>
-      <label class="field">慢线 SMA<input id="sSlow" type="number" value="${s.strategy.slow_ma}"/></label>
-      <label class="field">ATR 周期<input id="sAtrP" type="number" value="${s.strategy.atr_period}"/></label>
-      <label class="field">ATR 止损倍数<input id="sAtr" type="number" step="0.5" value="${s.strategy.atr_stop_mult}"/></label>
-      <label class="field" title="交叉后方向需连续保持几根已收盘 K 线才入场">信号确认根数<input id="sConf" type="number" min="1" max="5" step="1" value="${s.strategy.confirm_bars ?? 1}"/></label>
-      <label class="field" title="只拦截逆势新开仓：做多需收盘价在该 SMA 之上，做空需在其下；不会因此平掉已有持仓。填 0 关闭">趋势过滤 SMA（0=关闭）<input id="sTrend" type="number" min="0" max="400" step="10" value="${s.strategy.trend_ma ?? 0}"/></label>
-      <label class="field" title="用同一规则跑一本只做空的影子账本：最近 N 根 K 线已平仓影子空单合计亏损时，暂停新开空单；转正后自动恢复。不会平掉已有持仓。填 0 关闭">空头熔断回看根数（0=关闭）<input id="sSB" type="number" min="0" max="500" step="10" value="${s.strategy.short_breaker_bars ?? 0}"/></label>
-      <label class="field" title="仅回测生效（模拟盘 / 实盘暂不加仓）：持仓前一根收盘浮盈 ≥ k × R（R = 入场价到止损的距离）时，下一根开盘加仓一次，止损不动。填 0 关闭">浮盈加仓触发 R（0=关闭·仅回测）<input id="sPyrR" type="number" min="0" max="5" step="0.25" value="${s.strategy.pyramid_r ?? 0}"/></label>
-      <label class="field" title="加仓名义 = 比例 × 原名义，同时受单币权重上限与总敞口上限约束">加仓比例（× 原名义）<input id="sPyrF" type="number" min="0" max="1" step="0.25" value="${s.strategy.pyramid_frac ?? 0.5}"/></label>
-    </div></div>
-  <div class="panel" style="margin-top:18px"><div class="sec-title"><h3>标的池（USDT 交易对）</h3></div>
-    <div class="chips" id="chips"></div>
-    <div style="display:flex;gap:10px;margin-top:14px"><input id="addSym" class="r-search" style="margin:0;width:220px" placeholder="例如 LINK 或 LINKUSDT" aria-label="添加交易对"/><button class="btn ghost sm" id="addSymBtn">添加</button></div></div>
-  <div class="savebar" id="saveBar"><span class="note" id="saveHint">修改上面的参数后，点「保存设置」才会生效。</span><button class="btn" id="saveRisk">保存设置</button></div></div>`;
+  </div>`;
+  bindTabs("riskTab", "#riskPage", S.riskTab || "auto");
   let syms = [...s.symbols];
   const dirty = () => { $("#saveBar").classList.add("dirty"); $("#saveHint").textContent = "有未保存的修改"; };
   const chips = () => { $("#chips").innerHTML = syms.map((x) => `<span class="c">${coin(x)}${x}<button data-rm="${x}" title="移除 ${x}" aria-label="移除 ${x}">×</button></span>`).join(""); document.querySelectorAll("[data-rm]").forEach((b) => (b.onclick = () => { syms = syms.filter((x) => x !== b.dataset.rm); chips(); dirty(); })); };
   chips();
-  document.querySelectorAll("#page .panel input:not(#addSym), #page .panel select").forEach((i) => i.addEventListener("input", dirty));
+  document.querySelectorAll("#page .set-pane input:not(#addSym), #page .set-pane select").forEach((i) => i.addEventListener("input", dirty));
   const add = () => { let v = $("#addSym").value.trim().toUpperCase().replace(/[-_/]/g, ""); if (!v) return; if (!v.endsWith("USDT")) v += "USDT"; if (!syms.includes(v)) { syms.push(v); dirty(); } $("#addSym").value = ""; chips(); };
   $("#addSymBtn").onclick = add; $("#addSym").onkeydown = (e) => { if (e.key === "Enter") add(); };
   $("#saveRisk").onclick = async () => {
@@ -844,40 +879,56 @@ function pageSettings() {
   const kc = (ex, name) => `<div class="keycard">${KEYWAVE}<h4>${name}</h4><div class="st">${v[ex].configured ? "已加密保存（AES / Fernet）" : "未配置 · 不影响行情、回测与纸面交易"}</div>
      <div class="masked">${v[ex].configured ? esc(v[ex].api_key_masked) : "•••• •••• •••• ••••"}</div><div class="st">Secret ${v[ex].secret_set ? "已保存（不可回显）" : "未保存"}${ex === "okx" ? ` · Passphrase ${v.okx.passphrase_set ? "已保存" : "未保存"}` : ""}</div></div>`;
   $("#page").innerHTML = `
-  <div class="fit fit-scroll">
-  <div class="panel"><div class="sec-title"><h3>行情源</h3></div>
-    <div class="venue-row"><div class="venue big" role="group" aria-label="行情源">${["okx", "gate"].map((x) => `<button type="button" data-v2="${x}" class="${s.venue === x ? "on" : ""}" ${(live || ((S.dash?.positions?.length || 0) && x !== s.venue)) ? "disabled" : ""}>${VN[x]}</button>`).join("")}</div>
-    <div class="note">信号、K 线和纸面账本的计价都来自这里选择的交易所官方<b>公共</b>行情，不需要 API Key，切换后仍是纸面模式。${live ? '<br><span class="neg">实盘开启时不能切换，请先在下方关闭实盘。</span>' : (S.dash?.positions?.length ? `<br><span class="neg">当前有 ${S.dash.positions.length} 个纸面持仓：请先平仓或重置后再切换行情源，避免入场/止损跨所混价。</span>` : "有纸面持仓时不能切换；只有在下方实盘开关通过全部闸门后，才会用它下真实单。")}</div></div></div>
-  <div class="grid two-col" style="margin-top:18px">
-    <div class="panel">
-      ${kc("okx", "OKX API 密钥")}
-      <div class="grid" style="margin-top:16px">
-        <label class="field">API Key<input id="okKey" autocomplete="off" placeholder="${v.okx.configured ? "留空 = 保持不变" : "粘贴 API Key"}"/></label>
-        <label class="field">Secret Key<input id="okSec" type="password" autocomplete="new-password" placeholder="${v.okx.secret_set ? "留空 = 保持不变" : "粘贴 Secret"}"/></label>
-        <label class="field">Passphrase<input id="okPass" type="password" autocomplete="new-password" placeholder="${v.okx.passphrase_set ? "留空 = 保持不变" : "创建 API 时设置的口令"}"/></label>
-        <label class="toggle"><input type="checkbox" id="okDemo" ${s.live.okx_demo ? "checked" : ""}/><span class="tr"></span>使用 OKX 模拟盘环境</label>
-        <div class="form-acts"><button class="btn" data-save="okx">${ic("key")}加密保存</button><button class="btn ghost" data-test="okx">只读连接测试</button><button class="btn ghost danger-ghost" data-del="okx">删除密钥</button></div>
-      </div></div>
-    <div class="panel">
-      ${kc("gate", "Gate.io API 密钥")}
-      <div class="grid" style="margin-top:16px">
-        <label class="field">API Key<input id="gtKey" autocomplete="off" placeholder="${v.gate.configured ? "留空 = 保持不变" : "粘贴 API Key"}"/></label>
-        <label class="field">Secret Key<input id="gtSec" type="password" autocomplete="new-password" placeholder="${v.gate.secret_set ? "留空 = 保持不变" : "粘贴 Secret"}"/></label>
-        <label class="toggle"><input type="checkbox" id="gtTest" ${s.live.gate_testnet ? "checked" : ""}/><span class="tr"></span>使用 Gate 合约测试网（现货无测试网）</label>
-        <div class="note">建议创建 API 时只勾选“交易 + 读取”，<b>不要开启提现权限</b>，并绑定 IP 白名单。</div>
-        <div class="form-acts"><button class="btn" data-save="gate">${ic("key")}加密保存</button><button class="btn ghost" data-test="gate">只读连接测试</button><button class="btn ghost danger-ghost" data-del="gate">删除密钥</button></div>
-      </div></div>
-  </div>
-  <div class="note" style="margin:12px 4px 0">密钥以 Fernet（AES-128 + HMAC）加密保存在 <b>data/secrets.enc</b>；主密钥来源：<b>${st.vault.key_source === "passphrase" ? "环境变量 QTW_MASTER_PASSPHRASE（scrypt 派生，不落盘）" : "本地密钥文件 data/vault.key（权限 600）"}</b>。密钥不写入数据库、CSV 或日志，页面只显示掩码。${st.vault.error ? `<br><span class="neg">${esc(st.vault.error)}</span>` : ""}</div>
-  <div class="live-box" style="margin-top:18px">
-    <h4>⚠️ 实盘交易开关（默认关闭）</h4>
-    <div class="note" style="color:#7b3141">实盘交易可能亏损全部资金。本工具是系统化研究 / 纸面工具，不构成投资建议。开启需同时满足：模式=实盘、开关打开、输入确认语、启动时设置 <b>QTW_ALLOW_LIVE_ORDERS=1</b>、对应交易所密钥完整。任何一项不满足，订单只会被记录为“blocked”。</div>
-    <div style="display:flex;gap:14px;align-items:end;margin-top:14px;flex-wrap:wrap">
-      <label class="field" style="flex:1;min-width:280px">确认语（请完整输入：${esc(st.confirm_phrase_required)}）<input id="livePhrase" autocomplete="off" placeholder="${esc(st.confirm_phrase_required)}"/></label>
-      ${st.settings.live.live_enabled ? '<button class="btn" id="liveOff">关闭实盘，回到纸面</button>' : '<button class="btn danger" id="liveOn">开启实盘模式</button>'}
+  <div class="fit set-page" id="settingsPage">
+    <nav class="set-nav" role="tablist" aria-label="设置分类">
+      <button type="button" role="tab" data-tab="venue">${ic("signals")}行情源</button>
+      <button type="button" role="tab" data-tab="okx">${ic("key")}OKX 密钥</button>
+      <button type="button" role="tab" data-tab="gate">${ic("key")}Gate 密钥</button>
+      <button type="button" role="tab" data-tab="live">${ic("alert")}实盘开关</button>
+    </nav>
+    <div class="set-main">
+      <div class="set-panes">
+        <section class="set-pane panel" data-pane="venue" role="tabpanel">
+          <div class="sec-title"><h3>行情源</h3></div>
+          <div class="venue-row"><div class="venue big" role="group" aria-label="行情源">${["okx", "gate"].map((x) => `<button type="button" data-v2="${x}" class="${s.venue === x ? "on" : ""}" ${(live || ((S.dash?.positions?.length || 0) && x !== s.venue)) ? "disabled" : ""}>${VN[x]}</button>`).join("")}</div>
+          <div class="note">信号、K 线和纸面账本的计价都来自这里选择的交易所官方<b>公共</b>行情，不需要 API Key，切换后仍是纸面模式。${live ? '<br><span class="neg">实盘开启时不能切换，请先到「实盘开关」关闭实盘。</span>' : (S.dash?.positions?.length ? `<br><span class="neg">当前有 ${S.dash.positions.length} 个纸面持仓：请先平仓或重置后再切换行情源，避免入场/止损跨所混价。</span>` : "有纸面持仓时不能切换；只有在「实盘开关」通过全部闸门后，才会用它下真实单。")}</div></div>
+        </section>
+        <section class="set-pane panel" data-pane="okx" role="tabpanel">
+          ${kc("okx", "OKX API 密钥")}
+          <div class="grid" style="margin-top:16px">
+            <label class="field">API Key<input id="okKey" autocomplete="off" placeholder="${v.okx.configured ? "留空 = 保持不变" : "粘贴 API Key"}"/></label>
+            <label class="field">Secret Key<input id="okSec" type="password" autocomplete="new-password" placeholder="${v.okx.secret_set ? "留空 = 保持不变" : "粘贴 Secret"}"/></label>
+            <label class="field">Passphrase<input id="okPass" type="password" autocomplete="new-password" placeholder="${v.okx.passphrase_set ? "留空 = 保持不变" : "创建 API 时设置的口令"}"/></label>
+            <label class="toggle"><input type="checkbox" id="okDemo" ${s.live.okx_demo ? "checked" : ""}/><span class="tr"></span>使用 OKX 模拟盘环境</label>
+            <div class="form-acts"><button class="btn" data-save="okx">${ic("key")}加密保存</button><button class="btn ghost" data-test="okx">只读连接测试</button><button class="btn ghost danger-ghost" data-del="okx">删除密钥</button></div>
+          </div>
+          <div class="note" style="margin-top:12px">密钥以 Fernet（AES-128 + HMAC）加密保存在 <b>data/secrets.enc</b>；主密钥来源：<b>${st.vault.key_source === "passphrase" ? "环境变量 QTW_MASTER_PASSPHRASE（scrypt 派生，不落盘）" : "本地密钥文件 data/vault.key（权限 600）"}</b>。密钥不写入数据库、CSV 或日志，页面只显示掩码。${st.vault.error ? `<br><span class="neg">${esc(st.vault.error)}</span>` : ""}</div>
+        </section>
+        <section class="set-pane panel" data-pane="gate" role="tabpanel">
+          ${kc("gate", "Gate.io API 密钥")}
+          <div class="grid" style="margin-top:16px">
+            <label class="field">API Key<input id="gtKey" autocomplete="off" placeholder="${v.gate.configured ? "留空 = 保持不变" : "粘贴 API Key"}"/></label>
+            <label class="field">Secret Key<input id="gtSec" type="password" autocomplete="new-password" placeholder="${v.gate.secret_set ? "留空 = 保持不变" : "粘贴 Secret"}"/></label>
+            <label class="toggle"><input type="checkbox" id="gtTest" ${s.live.gate_testnet ? "checked" : ""}/><span class="tr"></span>使用 Gate 合约测试网（现货无测试网）</label>
+            <div class="note">建议创建 API 时只勾选“交易 + 读取”，<b>不要开启提现权限</b>，并绑定 IP 白名单。</div>
+            <div class="form-acts"><button class="btn" data-save="gate">${ic("key")}加密保存</button><button class="btn ghost" data-test="gate">只读连接测试</button><button class="btn ghost danger-ghost" data-del="gate">删除密钥</button></div>
+          </div>
+        </section>
+        <section class="set-pane" data-pane="live" role="tabpanel">
+          <div class="live-box">
+            <h4>⚠️ 实盘交易开关（默认关闭）</h4>
+            <div class="note" style="color:#7b3141">实盘交易可能亏损全部资金。本工具是系统化研究 / 纸面工具，不构成投资建议。开启需同时满足：模式=实盘、开关打开、输入确认语、启动时设置 <b>QTW_ALLOW_LIVE_ORDERS=1</b>、对应交易所密钥完整。任何一项不满足，订单只会被记录为“blocked”。</div>
+            <div style="display:flex;gap:14px;align-items:end;margin-top:14px;flex-wrap:wrap">
+              <label class="field" style="flex:1;min-width:280px">确认语（请完整输入：${esc(st.confirm_phrase_required)}）<input id="livePhrase" autocomplete="off" placeholder="${esc(st.confirm_phrase_required)}"/></label>
+              ${st.settings.live.live_enabled ? '<button class="btn" id="liveOff">关闭实盘，回到纸面</button>' : '<button class="btn danger" id="liveOn">开启实盘模式</button>'}
+            </div>
+            <ul class="reasons">${st.live_block_reasons.length ? st.live_block_reasons.map((r) => `<li>${esc(r)}</li>`).join("") : "<li><b>全部闸门已通过：订单会真实发送！</b></li>"}</ul>
+          </div>
+        </section>
+      </div>
     </div>
-    <ul class="reasons">${st.live_block_reasons.length ? st.live_block_reasons.map((r) => `<li>${esc(r)}</li>`).join("") : "<li><b>全部闸门已通过：订单会真实发送！</b></li>"}</ul>
-  </div></div>`;
+  </div>`;
+  bindTabs("settingsTab", "#settingsPage", S.settingsTab || "venue");
   document.querySelectorAll("[data-v2]").forEach((b) => (b.onclick = () => setVenue(b.dataset.v2)));
   document.querySelectorAll("[data-save]").forEach((b) => (b.onclick = async () => {
     const ex = b.dataset.save;

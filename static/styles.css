@@ -563,3 +563,21 @@ svg.icon path,svg.icon g{stroke:none;fill:currentColor}
 .info svg.icon{width:12px;height:12px;stroke:none;fill:currentColor}
 .r-row svg.chev,.tx svg.chev{width:16px;height:16px;color:var(--muted);stroke:none;fill:currentColor}
 i[data-icon]{display:inline-flex;align-items:center;justify-content:center;line-height:0;flex:none}
+
+/* 风控 / 设置：左侧分类，一屏一块，保存栏固定 */
+.set-page{flex:1;min-height:0;display:flex;flex-direction:row;gap:14px;overflow:hidden}
+.set-nav{flex:none;width:148px;display:flex;flex-direction:column;gap:4px;padding:4px 0;min-height:0}
+.set-nav button{border:0;background:transparent;color:var(--ink-2);text-align:left;border-radius:14px;padding:10px 14px;font-size:13.5px;font-weight:700;display:flex;align-items:center;gap:8px}
+.set-nav button:hover,.set-nav button:focus-visible{background:var(--lav-2);outline:none;color:var(--violet)}
+.set-nav button.on{background:#fff;color:var(--violet);box-shadow:0 8px 18px -12px rgba(60,40,150,.5),inset 0 0 0 1.5px #ddd6f7}
+.set-nav button svg.icon{width:16px;height:16px}
+.set-main{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.set-panes{flex:1;min-height:0;position:relative;overflow:hidden}
+.set-pane{display:none;height:100%;min-height:0;overflow:auto;scrollbar-width:thin}
+.set-pane.on{display:block}
+.set-page .savebar{flex:none;margin-top:10px}
+@media (max-width:900px){
+  .set-page{flex-direction:column}
+  .set-nav{flex-direction:row;flex-wrap:wrap;width:auto;gap:6px}
+  .set-nav button{padding:8px 12px}
+}
