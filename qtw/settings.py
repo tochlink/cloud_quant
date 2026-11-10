@@ -21,8 +21,12 @@ DEFAULTS: dict[str, Any] = {
     "strategy": {
         "rule_id": "dual_ma_trend_4h_v1",
         "interval": "4h",
-        "fast_ma": 20,
-        "slow_ma": 60,
+        # 2026-11-10 12:30：由 20/60 改为 50/150。官方 Gate / OKX 4h 长历史（4500 根，2024-10 起）上，
+        # 20/60 在调参窗口之前（2024-12-31 ~ 2026-03-05）亏 −41%（回撤 −47.6%）；40~60 / 120~200 慢均线是一片平台，
+        # 50/150 两段都为正：Gate +27.0% / +21.9%、OKX +30.3% / +25.0%，整段回撤约 −28%，压力费率同向
+        # （output/research_gate_long_history_param_revalidation.csv、research_gate_long_history_slow_ma_plateau.csv）
+        "fast_ma": 50,
+        "slow_ma": 150,
         "atr_period": 14,
         "atr_stop_mult": 2.0,
         "confirm_bars": 2,  # 2026-11-10：OKX+Gate 各 3 段滚动样本外均优于 1
@@ -31,7 +35,9 @@ DEFAULTS: dict[str, Any] = {
         "trend_ma": 100,
         # 2026-11-10：空头熔断。影子「只做空」账本最近 N 根已平仓合计亏损时暂停新开空单（因果，不平已有仓）。
         # 6/12 段不重叠窗口：前半段从 {60,120,240} 选出 60，后半段（未参与选择）在 OKX/Gate、4/14bps 下均明显优于不熔断。0=关闭
-        "short_breaker_bars": 60,
+        # 2026-11-10 12:30：随 50/150 改为 0（关闭）。长历史上 50/150 + 熔断 60 调参前段只有 +7.8%（不熔断 +27.0%），
+        # 2025Q1 熔断拦掉了盈利空单。仍可手动设为 10–500 开启
+        "short_breaker_bars": 0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,

@@ -66,11 +66,12 @@ def test_backtest_no_lookahead():
     np.testing.assert_allclose(ea, eb)
     # 入场字段（第一笔成交）不受未来数据影响；已在 cut 前平仓的交易，包括调仓后的数量，也必须完全一致
     cols = ["symbol", "entry_time"]
-    ta = ra["trades"][ra["trades"]["entry_time"] < cut][cols].reset_index(drop=True)
-    tb = rb["trades"][rb["trades"]["entry_time"] < cut][cols].reset_index(drop=True)
+    # 交易表按平仓顺序追加；篡改后的数据可能让同一批持仓在不同时刻平仓，所以先按入场排序再比
+    ent = lambda t: t[t["entry_time"] < cut][cols].sort_values(cols).reset_index(drop=True)
+    ta, tb = ent(ra["trades"]), ent(rb["trades"])
     pd.testing.assert_frame_equal(ta, tb)
     cols = ["symbol", "entry_time", "entry_price", "qty", "exit_price", "pnl_usdt"]
-    done = lambda t: t[(t["status"] == "closed") & (t["exit_time"] < cut)][cols].reset_index(drop=True)
+    done = lambda t: t[(t["status"] == "closed") & (t["exit_time"] < cut)][cols].sort_values(["entry_time", "symbol"]).reset_index(drop=True)
     pd.testing.assert_frame_equal(done(ra["trades"]), done(rb["trades"]))
 
 

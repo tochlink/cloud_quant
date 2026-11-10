@@ -44,7 +44,7 @@ def test_trend_default_and_validation():
 
 
 def test_short_breaker_default_and_validation():
-    assert S.DEFAULTS["strategy"]["short_breaker_bars"] == 60
+    assert S.DEFAULTS["strategy"]["short_breaker_bars"] == 0
     cfg = S._merge(S.DEFAULTS, {})
     cfg["strategy"]["short_breaker_bars"] = 3
     try:
