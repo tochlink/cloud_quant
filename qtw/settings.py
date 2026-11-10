@@ -29,6 +29,9 @@ DEFAULTS: dict[str, Any] = {
         # 2026-11-10：仅入场的趋势过滤（多需收盘>SMA100，空需收盘<SMA100；不强制平仓）。
         # 6 段不重叠窗口：前 3 段选出 100，后 3 段（未参与选择）在 OKX/Gate、4/14bps 下均优于不过滤。0=关闭
         "trend_ma": 100,
+        # 2026-11-10：空头熔断。影子「只做空」账本最近 N 根已平仓合计亏损时暂停新开空单（因果，不平已有仓）。
+        # 6/12 段不重叠窗口：前半段从 {60,120,240} 选出 60，后半段（未参与选择）在 OKX/Gate、4/14bps 下均明显优于不熔断。0=关闭
+        "short_breaker_bars": 60,
         "lookback_bars": 200,
     },
     "risk": {
@@ -105,6 +108,9 @@ def validate(s: dict) -> dict:
     st["trend_ma"] = int(st.get("trend_ma", 0) or 0)
     if st["trend_ma"] and not 20 <= st["trend_ma"] <= 400:
         raise ValueError("趋势过滤 SMA 需为 0（关闭）或 20–400")
+    st["short_breaker_bars"] = int(st.get("short_breaker_bars", 0) or 0)
+    if st["short_breaker_bars"] and not 10 <= st["short_breaker_bars"] <= 500:
+        raise ValueError("空头熔断回看根数需为 0（关闭）或 10–500")
     rk["max_risk_per_trade"] = float(rk["max_risk_per_trade"])
     rk["max_weight_per_name"] = float(rk["max_weight_per_name"])
     if not 0 < rk["max_risk_per_trade"] <= 0.05:

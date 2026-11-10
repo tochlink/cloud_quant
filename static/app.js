@@ -307,7 +307,7 @@ async function pageSignals() {
   renderSigGrid();
   loadCandles();
 }
-const STATE = { holding: ["持有中", "info"], entry_pending: ["待入场", "warn"], blocked: ["止损后观望", "flat"], trend_wait: ["逆趋势·暂缓", "flat"], flat: ["空仓观望", "flat"] };
+const STATE = { holding: ["持有中", "info"], entry_pending: ["待入场", "warn"], blocked: ["止损后观望", "flat"], trend_wait: ["逆趋势·暂缓", "flat"], short_paused: ["空头熔断·暂缓", "flat"], flat: ["空仓观望", "flat"] };
 const sigCn = (x) => (x > 0 ? "做多" : x < 0 ? "做空" : "空仓");
 function renderSigGrid() {
   const g = $("#sigGrid"); if (!g || !S.signals) return;
@@ -479,6 +479,7 @@ function pageRisk() {
       <label class="field">ATR 止损倍数<input id="sAtr" type="number" step="0.5" value="${s.strategy.atr_stop_mult}"/></label>
       <label class="field" title="交叉后方向需连续保持几根已收盘 K 线才入场">信号确认根数<input id="sConf" type="number" min="1" max="5" step="1" value="${s.strategy.confirm_bars ?? 1}"/></label>
       <label class="field" title="只拦截逆势新开仓：做多需收盘价在该 SMA 之上，做空需在其下；不会因此平掉已有持仓。填 0 关闭">趋势过滤 SMA（0=关闭）<input id="sTrend" type="number" min="0" max="400" step="10" value="${s.strategy.trend_ma ?? 0}"/></label>
+      <label class="field" title="用同一规则跑一本只做空的影子账本：最近 N 根 K 线已平仓影子空单合计亏损时，暂停新开空单；转正后自动恢复。不会平掉已有持仓。填 0 关闭">空头熔断回看根数（0=关闭）<input id="sSB" type="number" min="0" max="500" step="10" value="${s.strategy.short_breaker_bars ?? 0}"/></label>
     </div></div>
   <div class="panel" style="margin-top:18px"><div class="sec-title"><h3>标的池（USDT 交易对）</h3></div>
     <div class="chips" id="chips"></div>
@@ -497,7 +498,7 @@ function pageRisk() {
       await api("/api/settings", { method: "PUT", body: { symbols: syms, worker: { interval_sec: +$("#wInt").value },
         risk: { starting_equity_usdt: +$("#rEq").value, max_risk_per_trade: +$("#rRisk").value, max_weight_per_name: +$("#rW").value, allow_spot_long: $("#rSpot").checked, allow_perp_short: $("#rPerp").checked },
         fees: { taker_bps: +$("#rFee").value },
-        strategy: { interval: $("#sInt").value, fast_ma: +$("#sFast").value, slow_ma: +$("#sSlow").value, atr_period: +$("#sAtrP").value, atr_stop_mult: +$("#sAtr").value, confirm_bars: +$("#sConf").value, trend_ma: +$("#sTrend").value } } });
+        strategy: { interval: $("#sInt").value, fast_ma: +$("#sFast").value, slow_ma: +$("#sSlow").value, atr_period: +$("#sAtrP").value, atr_stop_mult: +$("#sAtr").value, confirm_bars: +$("#sConf").value, trend_ma: +$("#sTrend").value, short_breaker_bars: +$("#sSB").value } } });
       toast("设置已保存"); S.signals = null; await refreshAll(); pageRisk();
     } catch (e) { toast("保存失败：" + e.message, true); b.disabled = false; }
   };
@@ -582,6 +583,7 @@ function pageHelp() {
   <section><h4>策略 · ${esc(s.rule_id)}</h4><ul>
   <li>现货与 USDT 永续<b>各自</b>在自己已收盘的 ${s.interval} K 线上计算 SMA${s.fast_ma} / SMA${s.slow_ma}；方向需连续 <b>${s.confirm_bars ?? 1}</b> 根已收盘 K 线一致才算有效信号。</li>
   <li>趋势过滤：${s.trend_ma ? `新开多仓需收盘价在 SMA${s.trend_ma} 之上、新开空仓需在其下，否则显示「逆趋势·暂缓」；已有持仓不受影响。` : "已关闭。"}</li>
+  <li>空头熔断：${s.short_breaker_bars ? `同一规则的「只做空」影子账本在最近 ${s.short_breaker_bars} 根 K 线内已平仓合计亏损时，暂停新开空单，显示「空头熔断·暂缓」；转正后自动恢复，已有持仓不受影响。` : "已关闭。"}</li>
   <li>现货看多且永续不看空 → <b>做多·现货</b>；永续看空且现货不看多 → <b>做空·USDT 永续</b>（1 倍）；两者冲突或无信号 → 空仓。</li>
   <li>离场：收盘出现反向或归零信号，或价格触及 <b>${s.atr_stop_mult}×ATR${s.atr_period}</b> 止损；止损后等信号方向改变才再入场。</li></ul></section>
   <section><h4>仓位与风控</h4><ul><li>风险预算 = 权益 × ${pct(st.risk.max_risk_per_trade, 0)}；名义 = 风险预算 ÷ 止损百分比。</li><li>单币名义 ≤ 权益 × ${pct(st.risk.max_weight_per_name, 0)}；总敞口 ≤ 1× 权益，同时入场按比例缩放。</li><li>永续空头按 1 倍保证金占用现金；空头价格上涨时名义会超过权益，可用现金显示为负属正常记账，此时不会开新仓。</li></ul></section>

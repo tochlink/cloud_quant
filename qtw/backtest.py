@@ -45,6 +45,30 @@ class Trade:
     status: str = "open"
 
 
+def short_breaker(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
+    """空头熔断（因果）：用同一套规则跑一本「只做空」的影子账本；
+    若最近 N 根 K 线内已平仓的影子空单合计亏损（<0），则暂停新开空单。
+    返回 {"mask": {open_time: bool}（第 i 根入场时是否暂停，只用 i 之前已平仓的单），
+          "blocked_now": 下一根是否暂停, "trailing_pnl": 最近 N 根影子空单盈亏, "bars": N}。"""
+    N = int(cfg["strategy"].get("short_breaker_bars", 0) or 0)
+    if not N:
+        return {"mask": {}, "blocked_now": False, "trailing_pnl": 0.0, "bars": 0}
+    c = {**cfg, "strategy": {**cfg["strategy"], "short_breaker_bars": 0}, "risk": {**cfg["risk"], "allow_spot_long": False, "allow_perp_short": True}}
+    res = run_backtest(data, c)
+    tr, keys = res["trades"], res["bar_open_times"]
+    pnl = pd.Series(0.0, index=keys)
+    if len(tr):
+        tr = tr[tr["status"] == "closed"]
+        for t, p in zip(tr["exit_time"], tr["pnl_usdt"]):
+            if t in pnl.index:
+                pnl[t] += float(p)
+    cum = pnl.cumsum()
+    before = cum.shift(1).fillna(0.0)  # 第 i 根开盘时可知：截至 i-1 根已平仓
+    trail = before - before.shift(N).fillna(0.0)
+    now = float(cum.iloc[-1] - (cum.iloc[-1 - N] if len(cum) > N else 0.0))
+    return {"mask": {t: bool(v < 0) for t, v in trail.items()}, "blocked_now": now < 0, "trailing_pnl": now, "bars": N}
+
+
 def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     st, rk, fee_bps = cfg["strategy"], cfg["risk"], float(cfg["fees"]["taker_bps"])
     fee = fee_bps / 10_000
@@ -69,6 +93,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         return {s: ind[m][s].loc[idx, col].to_numpy() for s in syms}
 
     PX = {m: {c: arr(m, c) for c in ("open", "high", "low", "close", "atr", "signal", "trend_ma")} for m in ("spot", "perp")}
+    SB = short_breaker(data, cfg)["mask"] if st.get("short_breaker_bars") and rk["allow_perp_short"] else {}
     SIG = {s: combine(PX["spot"]["signal"][s], PX["perp"]["signal"][s]) for s in syms}
     MK = {"long": "spot", "short": "perp"}
 
@@ -125,6 +150,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
             if sg > 0 and not rk["allow_spot_long"] or sg < 0 and not rk["allow_perp_short"]:
                 continue
             sd = side_of(sg)
+            if sg < 0 and SB.get(when, False):
+                continue
             if not trend_ok(sg, P(sd, "close", s)[i - 1], P(sd, "trend_ma", s)[i - 1], st.get("trend_ma", 0)):
                 continue
             z = size(side=sd, equity=eq_prev, price=P(sd, "open", s)[i], atr=P(sd, "atr", s)[i - 1],
@@ -207,8 +234,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": fee_bps, "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
-        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "max_risk_per_trade": rk["max_risk_per_trade"],
+        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
     }
-    return {"summary": summary, "equity": ec.drop(columns=["peak"]),
+    return {"summary": summary, "equity": ec.drop(columns=["peak"]), "bar_open_times": [pd.Timestamp(t).isoformat() for t in times],
             "trades": pd.DataFrame([asdict(t) for t in closed + open_trades])}

@@ -15,6 +15,7 @@ from .market.base import INTERVAL_MS
 from . import db
 from .paper import ORDER_COLS, PaperBook
 from .paths import OUTPUT_DIR
+from .backtest import short_breaker
 from .risk import cap_at_entry, scale_to_room, size
 from .strategy import combine, indicators, last_cross, market_of, side_of, trend_ok
 from .timeutil import iso, la, sh, utcnow
@@ -119,11 +120,35 @@ def _quote(venue: str, sym: str, market: str):
 
 
 
+_SB_CACHE: dict = {}
+
+
+def _short_breaker_state(frames: dict, cfg: dict) -> dict:
+    """空头熔断当前状态（影子只做空账本，按最新已收盘 K 线缓存）。失败时不熔断并给出原因。"""
+    st = cfg["strategy"]
+    if not st.get("short_breaker_bars") or not cfg["risk"].get("allow_perp_short"):
+        return {"blocked_now": False, "trailing_pnl": 0.0, "bars": 0, "error": ""}
+    try:
+        last = max(str(df["open_time"].iloc[-1]) for m in frames.values() for df in m.values())
+        key = (cfg["venue"], last, repr(sorted(st.items())), repr(sorted(cfg["risk"].items())), tuple(cfg["symbols"]), cfg["fees"]["taker_bps"])
+        if key not in _SB_CACHE:
+            _SB_CACHE.clear()
+            r = short_breaker({"spot": frames.get("spot", {}), "perp": frames.get("perp", {})}, cfg)
+            _SB_CACHE[key] = {"blocked_now": r["blocked_now"], "trailing_pnl": r["trailing_pnl"], "bars": r["bars"], "error": ""}
+        return _SB_CACHE[key]
+    except Exception as e:  # noqa: BLE001 — 熔断只是附加过滤，数据不足时不阻断主流程
+        log.warning("空头熔断计算失败：%s", e)
+        return {"blocked_now": False, "trailing_pnl": 0.0, "bars": int(st.get("short_breaker_bars") or 0), "error": str(e)}
+
+
 def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     st, rk = cfg["strategy"], cfg["risk"]
     venue = cfg["venue"]
     need = max(st["lookback_bars"], st["slow_ma"] + st["atr_period"] + 5, int(st.get("trend_ma", 0) or 0) + 5)
+    if st.get("short_breaker_bars"):
+        need = max(need, 400)  # 影子账本需要足够历史
     frames, errs = mcache.many(venue, cfg["symbols"], st["interval"], need)
+    sb = _short_breaker_state(frames, cfg)
     bk = book(cfg)
     eq = bk.equity()
     step = pd.Timedelta(milliseconds=INTERVAL_MS[st["interval"]])
@@ -206,6 +231,9 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         elif blocked:
             entry = "已止损，观望中：等待信号方向改变后再入场"
             exit_, state = "—", "blocked"
+        elif sig < 0 and sb["blocked_now"]:
+            entry = f"空头熔断中：最近 {sb['bars']} 根 K 线影子空单合计 {sb['trailing_pnl']:+.2f} USDT，暂不新开空单（转正后恢复）"
+            exit_, state = "—", "short_paused"
         elif not tok:
             where = "下方" if sig > 0 else "上方"
             entry = f"信号有效，但收盘价在 SMA{tl} 趋势线{where}（趋势线 {tma:.6g}）：暂不开新仓"
@@ -241,7 +269,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
                 entry_equity=_equity_near(led, p.entry_time, bk.starting),
                 max_risk=rk["max_risk_per_trade"], max_weight=rk["max_weight_per_name"])
     return {"generated_at": iso(utcnow()), "generated_at_la": la(utcnow()), "generated_at_sh": sh(utcnow()),
-            "venue": venue, "equity": eq,
+            "venue": venue, "equity": eq, "short_breaker": sb,
             "rows": rows, "errors": errs}
 
 
@@ -337,7 +365,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         want = {}
         for s in cfg["symbols"]:
             r = rows.get(s)
-            if not r or s in bk.positions or r["signal"] == 0 or bk.blocks.get(s) == r["signal"] or r.get("trend_ok") is False:
+            if not r or s in bk.positions or r["signal"] == 0 or bk.blocks.get(s) == r["signal"] or r.get("trend_ok") is False or r.get("state") == "short_paused":
                 continue
             if r["side"] == "long" and not rk["allow_spot_long"] or r["side"] == "short" and not rk["allow_perp_short"]:
                 continue
