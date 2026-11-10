@@ -175,7 +175,7 @@ function tightenIfOverflow(host, key, redraw) {
   if (!host || host.clientHeight <= 0) return;
   if (host.scrollHeight > host.clientHeight + 6) {
     const st = S.pg[key];
-    if (st && st.n > 2 && st._fit !== st.n - 1) { st._fit = st.n - 1; redraw(); }
+    if (st && st.n > 1 && st._fit !== st.n - 1) { st._fit = st.n - 1; redraw(); }
   }
 }
 function refitByActualRows(host, key, rowSel, redraw, min = 2) {
@@ -183,7 +183,9 @@ function refitByActualRows(host, key, rowSel, redraw, min = 2) {
   if (!host || !row || host.clientHeight <= 0) return;
   const rowH = row.getBoundingClientRect().height;
   if (!(rowH > 8)) return;
-  const n = Math.max(min, Math.floor((host.clientHeight + 1) / rowH));
+  const head = host.querySelector("thead");
+  const headH = head ? head.getBoundingClientRect().height : 0;
+  const n = Math.max(min, Math.floor((host.clientHeight - headH - 12) / rowH));
   const st = S.pg[key];
   if (!st || n === st.n) return;
   if (n < st.n && host.scrollHeight <= host.clientHeight + 2) return;
@@ -467,8 +469,7 @@ async function pageSignals() {
       <div class="chart-box" id="candleChart"><div class="empty">加载中…</div></div>
       <div class="chart-legend"><span><i style="background:#2cc4c9"></i>快线 SMA${s.fast_ma}</span><span><i style="background:#6c5ce7"></i>慢线 SMA${s.slow_ma}</span><span>▲▼ 收盘确认的均线交叉</span><span class="muted">时间为北京时间 · 图表 TradingView Lightweight Charts™</span></div>
     </div>
-    <div class="sec-title sig-title"><div><h3>当前信号与进出场建议</h3><div class="note">策略 ${esc(s.rule_id)}：${s.interval} 已收盘 K 线上 SMA${s.fast_ma} / SMA${s.slow_ma} 判断方向。做多用现货，做空用 USDT 永续（1 倍）。点击一行在上方图表查看，并打开进出场详情。</div></div>
-      <a class="link sig-csv" href="/api/export/signals.csv" title="下载全部信号 CSV">下载 CSV</a></div>
+    <div class="sec-title sig-title"><div><h3>当前信号与进出场建议</h3><div class="note">策略 ${esc(s.rule_id)}：${s.interval} 已收盘 K 线上 SMA${s.fast_ma} / SMA${s.slow_ma} 判断方向。做多用现货，做空用 USDT 永续（1 倍）。点击一行在上方图表查看，并打开进出场详情。</div></div></div>
     <div class="panel sig-panel"><div class="sig-list" id="sigList"><div class="empty">正在从 ${VN[S.status.settings.venue]} 公共行情计算信号…</div></div><div id="sigPager"></div></div>
     </div>`;
   document.querySelectorAll("#mktSeg [data-m]").forEach((b) => (b.onclick = () => { S.chartMkt = b.dataset.m; loadCandles(); }));
@@ -627,24 +628,24 @@ async function runBacktest() {
   const b = $("#btRun"); b.disabled = true; b.innerHTML = '<span class="spin"></span> 回测中…';
   try {
     S.bt = await api("/api/backtest", { method: "POST", body: { venue: $("#btVenue").value, bars: +$("#btBars").value, fast_ma: +$("#btFast").value, slow_ma: +$("#btSlow").value, atr_stop_mult: +$("#btAtr").value } });
-    renderBt(); toast("回测完成，CSV 已生成");
+    renderBt(); toast("回测完成");
   } catch (e) { toast("回测失败：" + e.message, true); }
   finally { b.disabled = false; b.innerHTML = ic("play") + "运行回测"; }
 }
 function renderBt() {
   const r = S.bt, m = r.summary;
   const M = (k, v, c = "", f = false) => `<div class="metric ${f ? "feature" : ""}"><small>${k}</small><b class="num ${c}">${v}</b></div>`;
-  $("#btOut").innerHTML = `
-  <div class="metrics" style="margin-bottom:18px">
+    $("#btOut").innerHTML = `
+  <div class="metrics">
     ${M("总收益", pct(m.total_return), "", true)}${M("期末权益 (USDT)", f2(m.ending_equity_usdt))}${M("最大回撤", pct(m.max_drawdown), "neg")}${M("夏普比率（年化）", m.sharpe == null ? "—" : m.sharpe.toFixed(2))}
     ${M("胜率", pct(m.win_rate, 1))}${M("盈亏比", m.profit_factor == null ? "—" : m.profit_factor.toFixed(2))}${M("已平 / 持仓中", `${m.closed_trades} / ${m.open_trades}`)}${M(esc(m.benchmark), pct(m.benchmark_return), cls(m.benchmark_return))}
   </div>
-  <div class="panel" style="padding:12px;margin-bottom:18px"><div class="sec-title" style="margin:4px 8px 8px"><h3>权益曲线与回撤</h3><span class="note">#${m.run_id ?? ""} ${esc((m.venue || "").toUpperCase())} · ${esc(m.interval)} · ${tFull(m.start_time)} → ${tFull(m.end_time)} · ${m.bars} 根 · 手续费 ${m.fee_bps} bps · 止损离场 ${m.stop_exits} 次<br>数据：${esc(m.data_source)} · ${esc(m.source_host)} · 拉取 ${tFull(m.fetched_at)} · 做多用${esc(m.long_prices)}，做空用${esc(m.short_prices)}${m.excluded_symbols ? " · 排除 " + esc(m.excluded_symbols) : ""}</span></div><div class="chart-box" id="eqChart"></div></div>
-  <div class="panel"><div class="sec-title"><h3>回测成交（${r.trades.length}）</h3><div style="display:flex;gap:8px">
-    <a class="btn ghost sm" href="/api/export/backtest_summary.csv">${ic("dl")}指标 CSV</a><a class="btn ghost sm" href="/api/export/backtest_equity.csv">${ic("dl")}权益 CSV</a><a class="btn ghost sm" href="/api/export/backtest_trades.csv">${ic("dl")}成交 CSV</a></div></div>
-    <div id="btTrades" class="tbl-wrap"><table class="tbl"><thead><tr><th>标的</th><th>方向</th><th>入场时间</th><th>入场价</th><th>离场时间</th><th>离场价</th><th>名义</th><th>盈亏</th><th>收益率</th><th>持有根数</th><th>离场原因</th></tr></thead><tbody></tbody></table></div>
-    <div id="btPager"></div>
-    <div class="note" style="margin-top:10px">说明：全部为交易所官方公共接口的真实历史 K 线（做多=现货，做空=USDT 永续）；未计资金费率与滑点；历史表现不代表未来收益。生成于 ${tFull(r.generated_at)}，已存入 SQLite。</div></div>`;
+  <div class="panel bt-chart-panel"><div class="sec-title" style="margin:4px 8px 8px"><h3>权益曲线与回撤</h3><span class="note">#${m.run_id ?? ""} ${esc((m.venue || "").toUpperCase())} · ${esc(m.interval)} · ${tFull(m.start_time)} → ${tFull(m.end_time)} · ${m.bars} 根 · 手续费 ${m.fee_bps} bps · 止损离场 ${m.stop_exits} 次</span></div><div class="chart-box" id="eqChart"></div></div>
+  <div class="panel bt-trades-panel">
+    <div class="sec-title"><h3>回测成交（${r.trades.length}）</h3><div id="btPager"></div></div>
+    <div id="btTrades" class="tbl-wrap"></div>
+    <div class="note" title="数据：${esc(m.data_source)} · ${esc(m.source_host)} · 拉取 ${tFull(m.fetched_at)}">官方公共历史 K 线（做多=现货，做空=USDT 永续）；未计资金费率与滑点；不代表未来收益。生成于 ${tFull(r.generated_at)}。</div>
+  </div>`;
   BigCharts.equity($("#eqChart"), r.equity);
   renderBtTrades();
 }
@@ -654,7 +655,7 @@ function pagePositions() {
   const d = S.dash;
   $("#page").innerHTML = `<div class="fit pos-page">
   <div class="metrics"><div class="metric feature"><small>纸面权益</small><b class="num">${f2(d.equity)}</b></div><div class="metric"><small>可用现金</small><b class="num">${f2(d.cash_free)}</b></div><div class="metric"><small>总敞口 / 净敞口</small><b class="num">${f2(d.gross, 0)} / ${sgn(d.net, 0)}</b></div><div class="metric"><small>未实现盈亏</small><b class="num ${cls(d.unrealized)}">${sgn(d.unrealized)}</b></div></div>
-  <div class="panel pos-panel"><div class="sec-title"><h3>当前纸面持仓（${d.positions.length}）</h3><a class="btn ghost sm" href="/api/export/paper_positions.csv">${ic("dl")}导出 CSV</a></div>
+  <div class="panel pos-panel"><div class="sec-title"><h3>当前纸面持仓（${d.positions.length}）</h3></div>
   <div id="posTable"></div>
   <div id="posPager"></div>
   <div class="note">纸面账本持久化保存在 data/qtw.sqlite（重启不丢失；CSV 仅为导出）。永续空头按 1 倍保证金计，占用等额现金。</div></div></div>`;
@@ -691,7 +692,7 @@ function renderTradesPage(rebuild) {
   if (rebuild !== false || !$("#tradeTable")) {
     $("#page").innerHTML = `<div class="fit trades-page">
       <div class="panel trades-panel">
-        <div class="sec-title"><h3>纸面成交（${rows.length}）</h3><div style="display:flex;gap:8px"><a class="btn ghost sm" href="/api/export/paper_trades.csv">${ic("dl")}成交 CSV</a><a class="btn ghost sm" href="/api/export/paper_ledger.csv">${ic("dl")}账本 CSV</a></div></div>
+        <div class="sec-title"><h3>纸面成交（${rows.length}）</h3></div>
         <div id="tradeTable"></div>
         <div id="tradePager"></div>
       </div>
@@ -892,7 +893,7 @@ function pageHelp() {
   <li>现货看多且永续不看空 → <b>做多·现货</b>；永续看空且现货不看多 → <b>做空·USDT 永续</b>（1 倍）；两者冲突或无信号 → 空仓。</li>
   <li>离场：收盘出现反向或归零信号，或价格触及 <b>${s.atr_stop_mult}×ATR${s.atr_period}</b> 止损；止损后等信号方向改变才再入场。</li></ul></section>
   <section><h4>仓位与风控</h4><ul><li>风险预算 = 权益 × ${pct(st.risk.max_risk_per_trade, 0)}；名义 = 风险预算 ÷ 止损百分比。4h 默认参数下止损距离通常只有几个百分点，名义会先被单币上限截住，所以实际单笔风险 ≈ 单币上限 × 止损距离（约 1% 权益）。</li><li>单币名义 ≤ 权益 × ${pct(st.risk.max_weight_per_name, 0)}；总敞口 ≤ 1× 权益，同时入场按比例缩放。</li><li>永续空头按 1 倍保证金占用现金；空头价格上涨时名义会超过权益，可用现金显示为负属正常记账，此时不会开新仓。</li></ul></section>
-  <section><h4>页面</h4><ul><li><b>总览</b>：权益、现金 / 敞口 / 未实现、最近成交、回撤与胜率。</li><li><b>信号</b>：K 线实时图与每个币一行的信号列表（方向、标记价、建议仓位、止损、状态）；点击一行切换图表并打开进出场详情。</li><li><b>回测</b>：真实历史 K 线回测与 CSV 导出。</li><li><b>持仓</b>：纸面持仓，含入仓价、当前价与实时盈亏。</li><li><b>成交</b>：按开平配对的成交记录（进场价、出场价、单号、手续费、盈亏、原因）；持仓中的当前价与未实现盈亏随行情实时更新。</li><li><b>风控</b>：自动交易开关、紧急停止、参数与标的池。</li><li><b>设置</b>：行情源、加密密钥、实盘闸门。</li></ul></section>
+  <section><h4>页面</h4><ul><li><b>总览</b>：权益、现金 / 敞口 / 未实现、最近成交、回撤与胜率。</li><li><b>信号</b>：K 线实时图与每个币一行的信号列表（方向、标记价、建议仓位、止损、状态）；点击一行切换图表并打开进出场详情。</li><li><b>回测</b>：真实历史 K 线回测。</li><li><b>持仓</b>：纸面持仓，含入仓价、当前价与实时盈亏。</li><li><b>成交</b>：按开平配对的成交记录（进场价、出场价、单号、手续费、盈亏、原因）；持仓中的当前价与未实现盈亏随行情实时更新。</li><li><b>风控</b>：自动交易开关、紧急停止、参数与标的池。</li><li><b>设置</b>：行情源、加密密钥、实盘闸门。</li></ul></section>
   <section><h4>数据与时间</h4><ul><li>所有时间按 <b>Asia/Shanghai（北京时间）</b> 显示。</li><li>数据库：<code>data/qtw.sqlite</code>；API 密钥只存在加密文件 <code>data/secrets.enc</code>。</li><li>CSV 导出：<code>output/</code> 与 <code>output/backtest/</code>。图表：TradingView Lightweight Charts™。</li></ul></section>
   <section><h4>局限</h4><ul><li>回测未计资金费率与滑点；历史表现不代表未来。</li><li>实盘模式没有与交易所持仓对账；实盘前请先在 OKX 模拟盘 / Gate 合约测试网验证。</li><li>按 <code>Esc</code> 关闭弹窗 / 右侧抽屉。</li></ul></section></div>`;
 }
@@ -1038,12 +1039,17 @@ function renderDashTx() { /* 总览成交预览本身只取前几条，高度由
 function renderBtTrades() {
   const host = $("#btTrades"); if (!host || !S.bt || !S.bt.trades) return;
   const rows = S.bt.trades.slice().reverse();
-  const st = pgState("btTrades", rows.length, fitRows(host, 44, 36, 5));
+  if (!host.querySelector("table")) {
+    host.innerHTML = `<table class="tbl"><thead><tr><th>标的</th><th>方向</th><th>入场时间</th><th>入场价</th><th>离场时间</th><th>离场价</th><th>名义</th><th>盈亏</th><th>收益率</th><th>持有根数</th><th>离场原因</th></tr></thead><tbody></tbody></table>`;
+  }
+  const st = pgState("btTrades", rows.length, fitRows(host, 36, 28, 2));
   const slice = rows.slice(st.start, st.end);
   const body = host.querySelector("tbody");
-  if (!body) return;
-  body.innerHTML = slice.map((x) => `<tr><td><b>${x.symbol}</b></td><td><span class="pill ${x.side}">${sideCn(x.side)} · ${mktCn(x.market)}</span></td><td>${tFull(x.entry_time)}</td><td class="num">${fp(x.entry_price)}</td><td>${x.exit_time ? tFull(x.exit_time) : "—"}</td><td class="num">${fp(x.exit_price)}</td><td class="num">${f2(x.notional_usdt)}</td><td class="num ${cls(x.pnl_usdt)}">${sgn(x.pnl_usdt)}</td><td class="num ${cls(x.return_pct)}">${pct(x.return_pct)}</td><td class="num">${x.bars_held}</td><td>${esc(x.exit_reason)}</td></tr>`).join("");
+  body.innerHTML = slice.map((x) => `<tr><td><b>${esc(x.symbol)}</b></td><td><span class="pill ${x.side}">${sideCn(x.side)} · ${mktCn(x.market)}</span></td><td>${tFull(x.entry_time)}</td><td class="num">${fp(x.entry_price)}</td><td>${x.exit_time ? tFull(x.exit_time) : "—"}</td><td class="num">${fp(x.exit_price)}</td><td class="num">${f2(x.notional_usdt)}</td><td class="num ${cls(x.pnl_usdt)}">${sgn(x.pnl_usdt)}</td><td class="num ${cls(x.return_pct)}">${pct(x.return_pct)}</td><td class="num">${x.bars_held}</td><td title="${esc(x.exit_reason || "")}">${esc(x.exit_reason)}</td></tr>`).join("");
   const pg = $("#btPager"); if (pg) { pg.innerHTML = pagerHtml("btTrades", st); bindPager("btTrades", renderBtTrades); }
+  requestAnimationFrame(() => refitByActualRows(host, "btTrades", "tbody tr", renderBtTrades, 1));
+  clearTimeout(S._btFitT);
+  S._btFitT = setTimeout(() => refitByActualRows(host, "btTrades", "tbody tr", renderBtTrades, 1), 180);
 }
 window.addEventListener("hashchange", route);
 greet(); setInterval(greet, 60000);
