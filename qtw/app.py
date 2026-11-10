@@ -275,7 +275,7 @@ def _dashboard_data() -> dict:
                   "mark_source": p.mark_source, "venue": p.venue,
                   "stop_price": p.stop_price, "notional": p.qty * p.mark_price,
                   "weight": (p.qty * p.mark_price / eq) if eq else 0, "upnl": p.upnl(),
-                  "upnl_pct": p.upnl_pct()}
+                  "upnl_pct": p.upnl_pct(), "halted": p.symbol in bk.halts}
                  for p in bk.positions.values()]
     fills = bk.fills()
     ledger = bk.ledger()
@@ -420,7 +420,34 @@ def signals(quotes: bool = True):
     cfg = S.load()
     sig = engine.compute_signals(cfg, with_quotes=quotes)
     sig["csv"] = engine.export_signals_csv(sig)
+    sig["cycle"] = _signal_cycle_meta(cfg, sig)
+    try:
+        from . import signal_log
+        sig["signal_log"] = signal_log.recent(30)
+    except Exception as e:  # noqa: BLE001
+        sig["signal_log"], sig["signal_log_error"] = [], str(e)[:200]
     return ok(sig)
+
+
+@app.get("/api/signals/log")
+def signals_log(limit: int = 50):
+    from . import signal_log
+    return ok({"rows": signal_log.recent(max(1, min(500, int(limit))))})
+
+
+def _signal_cycle_meta(cfg: dict, sig: dict) -> dict:
+    """信号重算节奏：页面显示「上次计算 / 依据的已收盘 K 线 / 下次重算（下一根收盘）」，北京时间。"""
+    from . import worker
+    rows = [r for r in sig.get("rows", []) if r.get("as_of")]
+    bar = max((r["as_of"] for r in rows), default="")
+    nxt = min((r["next_check"] for r in rows if r.get("next_check")), default="")
+    to_sh = lambda t: sh(pd.Timestamp(t).to_pydatetime()) if t else ""
+    ws = worker.status()
+    return {"computed_at": sig.get("generated_at"), "computed_at_sh": sig.get("generated_at_sh"),
+            "bar_as_of": bar, "bar_as_of_sh": to_sh(bar), "next_recompute": nxt, "next_recompute_sh": to_sh(nxt),
+            "interval": cfg["strategy"]["interval"], "worker_running": ws.get("running"),
+            "worker_last_run_sh": ws.get("last_run_sh"), "worker_interval_sec": cfg["worker"]["interval_sec"],
+            "rebalance_band": cfg["strategy"].get("rebalance_band", 0)}
 
 
 @app.get("/api/candles")
@@ -482,6 +509,32 @@ def worker_ctl(action: str):
 @app.post("/api/kill")
 def kill():
     return ok(engine.kill_switch())
+
+
+@app.post("/api/paper/flatten")
+def paper_flatten():
+    """一键清仓：按官方价平掉全部纸面持仓。实盘仅在闸门全开时发减仓单；默认纸面、不关闭自动交易。"""
+    return ok(engine.flatten_all())
+
+
+@app.post("/api/positions/{symbol}/close")
+def position_close(symbol: str):
+    out = engine.close_position(symbol)
+    if not out.get("ok"):
+        err = out.get("error") or "平仓失败"
+        code = 404 if "无" in err and "持仓" in err else 409
+        raise HTTPException(code, err)
+    return ok(out)
+
+
+@app.post("/api/positions/{symbol}/halt")
+def position_halt(symbol: str):
+    return ok(engine.set_halt(symbol, True))
+
+
+@app.post("/api/positions/{symbol}/resume")
+def position_resume(symbol: str):
+    return ok(engine.set_halt(symbol, False))
 
 
 @app.post("/api/paper/reset")

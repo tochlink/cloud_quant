@@ -1,7 +1,7 @@
 """SQLite 数据库（标准库 sqlite3，WAL 模式）。
 
 文件：data/qtw.sqlite（data/ 已在 .gitignore）。
-存放：真实公共 K 线缓存、纸面账本（持仓 / 成交 / 账本快照 / 止损锁）、订单路由日志、
+存放：真实公共 K 线缓存、纸面账本（持仓 / 成交 / 账本快照 / 止损锁 / 停止自动）、订单路由日志、
 回测运行记录、非敏感配置。**绝不存放 API Key / Secret / Passphrase**（它们只在加密的 data/secrets.enc 中）。
 """
 from __future__ import annotations
@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS paper_positions (
 );
 
 CREATE TABLE IF NOT EXISTS paper_blocks (symbol TEXT PRIMARY KEY, blocked_signal INTEGER NOT NULL);
+
+CREATE TABLE IF NOT EXISTS paper_halts (symbol TEXT PRIMARY KEY);
 
 CREATE TABLE IF NOT EXISTS paper_fills (
   fill_id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, symbol TEXT NOT NULL, market TEXT NOT NULL,

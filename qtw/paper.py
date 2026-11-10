@@ -141,6 +141,7 @@ class PaperBook:
                 p.venue, p.mark_source = p.venue or "", p.mark_source or ""
             healed = self._heal_venues()
             self.blocks = {r["symbol"]: int(r["blocked_signal"]) for r in self._q("SELECT * FROM paper_blocks")}
+            self.halts = {r["symbol"] for r in self._q("SELECT symbol FROM paper_halts")}
             if not st or healed:
                 self.save()
 
@@ -170,6 +171,9 @@ class PaperBook:
         c.execute("DELETE FROM paper_blocks")
         for k, v in self.blocks.items():
             c.execute("INSERT INTO paper_blocks VALUES(?,?)", (k, int(v)))
+        c.execute("DELETE FROM paper_halts")
+        for s in self.halts:
+            c.execute("INSERT INTO paper_halts VALUES(?)", (s,))
 
     def save(self):
         with _LOCK, db.tx(self.conn) as c:
@@ -177,11 +181,11 @@ class PaperBook:
 
     def reset(self, starting_equity: float):
         with _LOCK, db.tx(self.conn) as c:
-            for t in ("paper_state", "paper_positions", "paper_blocks", "paper_fills", "paper_ledger"):
+            for t in ("paper_state", "paper_positions", "paper_blocks", "paper_halts", "paper_fills", "paper_ledger"):
                 c.execute(f"DELETE FROM {t}")
             self.created = iso(utcnow())
             self.starting = self.realized = float(starting_equity)
-            self.positions, self.blocks = {}, {}
+            self.positions, self.blocks, self.halts = {}, {}, set()
             self._save(c)
 
     # ---------- 记账 ----------
@@ -232,6 +236,35 @@ class PaperBook:
             self._save(c)
             return pnl - fee
 
+    def resize(self, symbol: str, new_qty: float, price: float, price_kind: str, reason: str, venue: str, mode="paper",
+               data_source="", price_time="") -> dict:
+        """调仓（部分减仓 / 加仓）。减仓按加权入场价结算该部分盈亏；加仓更新加权入场价；止损不变。
+        每条市价腿按该市场 taker 费率记账。返回 {action, qty, fee, pnl}。"""
+        with _LOCK, db.tx(self.conn) as c:
+            p = self.positions[symbol]
+            dq = float(new_qty) - p.qty
+            if abs(dq) <= 0 or new_qty <= 0:
+                return {"action": "none", "qty": 0.0, "fee": 0.0, "pnl": 0.0}
+            notional = abs(dq) * price
+            fee = notional * self.fee_for(p.market)
+            if dq < 0:
+                action, g = "reduce", p.direction * (-dq) * (price - p.entry_price)
+                side = "sell" if p.side == "long" else "buy"
+            else:
+                action, g = "add", 0.0
+                side = "buy" if p.side == "long" else "sell"
+                p.entry_price = (p.qty * p.entry_price + dq * price) / (p.qty + dq)
+                p.notional_entry += notional
+            self.realized += g - fee
+            p.qty = float(new_qty)
+            p.fees_paid += fee
+            _ins(c, "paper_fills", dict(time=iso(utcnow()), symbol=symbol, market=p.market, side=side, action=action,
+                                        qty=abs(dq), price=price, price_kind=price_kind, notional_usdt=notional,
+                                        fee_usdt=fee, realized_pnl_usdt=g - fee, reason=reason, mode=mode, venue=venue,
+                                        data_source=data_source, price_time=price_time))
+            self._save(c)
+            return {"action": action, "qty": abs(dq), "fee": fee, "pnl": g - fee}
+
     def snapshot(self, note: str = "") -> dict:
         with _LOCK, db.tx(self.conn) as c:
             eq = self.equity()
@@ -265,7 +298,7 @@ class PaperBook:
             except (TypeError, ValueError):
                 return False
 
-        def rec(op, cl, pos=None):
+        def rec(op, cl, pos=None, adj=()):
             src = op or cl
             if op:
                 side = "long" if op["side"] == "buy" else "short"
@@ -275,17 +308,19 @@ class PaperBook:
             entry_px = float(op["price"]) if op and px_ok(op.get("price")) else None
             exit_px = float(cl["price"]) if cl and px_ok(cl.get("price")) else None
             fee = float((op or {}).get("fee_usdt") or 0) + float((cl or {}).get("fee_usdt") or 0)
+            fee += sum(float(a.get("fee_usdt") or 0) for a in adj)
+            adj_real = sum(float(a.get("realized_pnl_usdt") or 0) for a in adj)  # 调仓腿：减仓盈亏 − 手续费 / 加仓 − 手续费
             pnl = pct = mark = None
             mark_src = mark_time = ""
             if cl is not None:
-                pnl = float((op or {}).get("realized_pnl_usdt") or 0) + float(cl.get("realized_pnl_usdt") or 0)
+                pnl = float((op or {}).get("realized_pnl_usdt") or 0) + float(cl.get("realized_pnl_usdt") or 0) + adj_real
                 if entry_px and qty:
                     pct = pnl / (entry_px * qty)
             elif pos is not None and entry_px and px_ok(pos.mark_price):
                 mark = float(pos.mark_price)
                 mark_src = pos.mark_source or ""
                 mark_time = pos.mark_time or ""
-                pnl = pos.upnl(mark) - fee
+                pnl = pos.upnl(mark) + float((op or {}).get("realized_pnl_usdt") or 0) + adj_real
                 pct = pnl / (entry_px * qty) if qty else None
             return {
                 "trade_id": int(op["fill_id"]) if op else int(cl["fill_id"]),
@@ -301,21 +336,27 @@ class PaperBook:
                 "mode": (cl or op or {}).get("mode") or "paper",
                 "venue": (cl or op or {}).get("venue") or "",
                 "mark_price": mark, "mark_source": mark_src, "mark_time": mark_time,
+                "resizes": len(adj),
             }
 
         pending: dict[str, list] = {}
+        adjs: dict[int, list] = {}  # 开仓 fill_id → 该笔的调仓腿
         out: list[dict] = []
         for f in self.fills():
             if f["action"] == "open":
                 pending.setdefault(f["symbol"], []).append(f)
+            elif f["action"] in ("add", "reduce"):
+                stack = pending.get(f["symbol"]) or []
+                if stack:
+                    adjs.setdefault(int(stack[-1]["fill_id"]), []).append(f)
             elif f["action"] == "close":
                 stack = pending.setdefault(f["symbol"], [])
                 op = stack.pop(0) if stack else None
-                out.append(rec(op, f))
+                out.append(rec(op, f, adj=adjs.pop(int(op["fill_id"]), []) if op else ()))
         for sym, stack in pending.items():
             pos = self.positions.get(sym)
             for op in stack:
-                out.append(rec(op, None, pos=pos))
+                out.append(rec(op, None, pos=pos, adj=adjs.pop(int(op["fill_id"]), [])))
         return out
 
     def ledger(self) -> list[dict]:

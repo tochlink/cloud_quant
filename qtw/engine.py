@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import math
 import threading
 
 import pandas as pd
@@ -13,6 +14,7 @@ from .market import MarketDataError, get_client
 from .market import cache as mcache
 from .market.base import INTERVAL_MS
 from . import db
+from . import signal_log
 from .paper import ORDER_COLS, PaperBook
 from .paths import OUTPUT_DIR
 from .backtest import short_breaker
@@ -154,19 +156,57 @@ def _short_breaker_state(frames: dict, cfg: dict) -> dict:
         return {"blocked_now": False, "trailing_pnl": 0.0, "bars": int(st.get("short_breaker_bars") or 0), "error": str(e)}
 
 
+
+
+def _held_row_without_signal(pos, eq: float, error: str, *, in_universe: bool, halted: bool) -> dict:
+    """K 线不可用时仍展示持仓的真实止损与状态，避免持仓从信号列表消失。"""
+    notional = abs(pos.qty * pos.mark_price)
+    if halted:
+        state = "halted"
+    elif not in_universe:
+        state = "held_outside"
+    else:
+        state = "holding"
+    return {
+        "symbol": pos.symbol, "market": pos.market, "market_cn": MARKET_CN.get(pos.market, pos.market),
+        "side": pos.side, "signal": 0, "advice": ADVICE[pos.direction], "signal_market": pos.market,
+        "ref_price": pos.mark_price, "ref_price_kind": "mark" if pos.market == "perp" else "last",
+        "ref_price_time": pos.mark_time, "ref_price_source": pos.mark_source,
+        "stop_price": pos.stop_price, "stop_source": "position", "stop_side": pos.side,
+        "position_entry": pos.entry_price, "position_side": pos.side,
+        "target_notional_usdt": notional, "target_qty": pos.qty,
+        "target_weight": (notional / eq) if eq else 0,
+        "risk_usdt": abs(pos.qty * (pos.stop_price - pos.mark_price)) if pos.direction * (pos.mark_price - pos.stop_price) > 0 else 0.0,
+        "state": state, "in_universe": in_universe, "halted": halted,
+        "error": "", "warning": error, "entry_timing": f"持有中：{pos.entry_time} 以 {pos.entry_price:g} 入场",
+        "exit_timing": f"价格触及持仓止损 {pos.stop_price:g}（按入场价）时离场；信号因 K 线不可用暂无法判断",
+    }
+
+
+def listed_symbols(cfg: dict, bk=None) -> list[str]:
+    """标的池 ∪ 当前持仓：已移出池但仍持有的标的也要出现在信号列表里，并继续接受止损 / 信号离场。"""
+    out = []
+    for s in list(cfg.get("symbols") or []) + list((bk or book(cfg)).positions):
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
 def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     st, rk = cfg["strategy"], cfg["risk"]
     venue = cfg["venue"]
     need = max(st["lookback_bars"], st["slow_ma"] + st["atr_period"] + 5, int(st.get("trend_ma", 0) or 0) + 5)
     if st.get("short_breaker_bars"):
         need = max(need, 400)  # 影子账本需要足够历史
-    frames, errs = mcache.many(venue, cfg["symbols"], st["interval"], need)
-    sb = _short_breaker_state(frames, cfg)
     bk = book(cfg)
+    syms = listed_symbols(cfg, bk)
+    frames, errs = mcache.many(venue, syms, st["interval"], need)
+    sb = _short_breaker_state(frames, cfg)
     eq = bk.equity()
     step = pd.Timedelta(milliseconds=INTERVAL_MS[st["interval"]])
     rows = []
-    for sym in cfg["symbols"]:
+    universe = set(cfg.get("symbols") or [])
+    for sym in syms:
         ind = {}
         for m in ("spot", "perp"):
             df = frames.get(m, {}).get(sym)
@@ -174,7 +214,12 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
                 ind[m] = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1), st.get("trend_ma", 0))
                 ind[m].attrs.update(df.attrs)
         if not ind:
-            rows.append({"symbol": sym, "error": "；".join(v for k, v in errs.items() if k.startswith(sym + ":")) or "K 线不足"})
+            pos = bk.positions.get(sym)
+            err = "；".join(v for k, v in errs.items() if k.startswith(sym + ":")) or "K 线不足"
+            if pos:
+                rows.append(_held_row_without_signal(pos, eq, err, in_universe=sym in universe, halted=sym in bk.halts))
+            else:
+                rows.append({"symbol": sym, "error": err, "in_universe": sym in universe})
             continue
         ssig = int(ind["spot"]["signal"].iloc[-1]) if "spot" in ind else 0
         psig = int(ind["perp"]["signal"].iloc[-1]) if "perp" in ind else 0
@@ -195,6 +240,12 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             else:
                 j["signal"] = combine([0] * len(j), j["signal"])
         cross = last_cross(j)
+        prev_sig = None  # 上一段信号（当前信号段开始前的方向），供信号变化日志使用
+        if cross is not None:
+            hit = j.index[j["close_time"].eq(cross)]
+            if len(hit):
+                at = j.index.get_loc(hit[-1])
+                prev_sig = int(j["signal"].iloc[at - 1]) if at > 0 else None
         as_of = last["close_time"]
         warn = [f"{m} 数据不可用：{errs.get(f'{sym}:{m}', 'K 线不足')}" for m in ("spot", "perp") if m not in ind]
         if "spot" in ind and "perp" in ind and ind["spot"]["close_time"].iloc[-1] != ind["perp"]["close_time"].iloc[-1]:
@@ -215,7 +266,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             "next_check_sh": sh((as_of + step).to_pydatetime()),
             "venue": venue, "data_source": src.attrs.get("data_source", ""), "source_host": src.attrs.get("source_host", ""),
             "fetched_at": src.attrs.get("fetched_at", ""), "candle_cache": src.attrs.get("cache", ""),
-            "error": "", "warning": "；".join(warn),
+            "error": "", "warning": "；".join(warn), "prev_signal": prev_sig,
         }
         px, kind = float(last["close"]), "bar_close"
         if with_quotes and mkt != "-":
@@ -235,27 +286,52 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         tma = float(last["trend_ma"]) if tl else float("nan")
         tok = trend_ok(sig, float(last["close"]), tma, tl)
         row.update({"trend_ma": tma if tl else None, "trend_ok": bool(tok)})
-        if pos and pos.side == side:
+        row["suggested_stop_price"] = z.stop_price
+        row["in_universe"] = sym in universe
+        row["halted"] = sym in bk.halts
+        if pos:
+            # 已有持仓：始终展示账本里按入场价计算的真实止损（不是按现价重算的建议止损）
             entry = f"持有中：{pos.entry_time} 以 {pos.entry_price:g} 入场"
             exit_ = f"出现反向/归零信号（下次收盘检查 {row['next_check_sh']}）或价格触及止损 {pos.stop_price:g} 时离场"
             row["stop_price"] = pos.stop_price
-            state = "holding"
+            row["stop_source"] = "position"
+            row["position_entry"] = pos.entry_price
+            row["stop_side"] = pos.side
+            if pos.side != side:
+                state = "exit_pending"
+                exit_ = f"信号已转为{ADVICE[sig]}，等待离场；持仓止损仍为 {pos.stop_price:g}（按入场价）"
+            elif row["halted"]:
+                state = "halted"
+            elif not row["in_universe"]:
+                state = "held_outside"
+            else:
+                state = "holding"
         elif sig == 0:
             entry, exit_, state = "无信号，保持空仓", "—", "flat"
+            row["stop_source"] = "suggested"
+            row["stop_side"] = side
         elif blocked:
             entry = "已止损，观望中：等待信号方向改变后再入场"
             exit_, state = "—", "blocked"
+            row["stop_source"] = "suggested"
+            row["stop_side"] = side
         elif sig < 0 and sb["blocked_now"]:
             entry = f"空头熔断中：最近 {sb['bars']} 根 K 线影子空单合计 {sb['trailing_pnl']:+.2f} USDT，暂不新开空单（转正后恢复）"
             exit_, state = "—", "short_paused"
+            row["stop_source"] = "suggested"
+            row["stop_side"] = side
         elif not tok:
             where = "下方" if sig > 0 else "上方"
             entry = f"信号有效，但收盘价在 SMA{tl} 趋势线{where}（趋势线 {tma:.6g}）：暂不开新仓"
             exit_, state = "—", "trend_wait"
+            row["stop_source"] = "suggested"
+            row["stop_side"] = side
         else:
             entry = f"信号自 {row['signal_since'] or '数据起点'} 生效 → 下一个执行周期按最新{('现货价' if mkt == 'spot' else '标记价')}入场"
             exit_ = f"止损 {z.stop_price:.6g}（{st['atr_stop_mult']}×ATR）；或收盘出现反向交叉时离场"
             state = "entry_pending"
+            row["stop_source"] = "suggested"
+            row["stop_side"] = side
         row.update({"entry_timing": entry, "exit_timing": exit_, "state": state,
                     "position_side": pos.side if pos else "flat"})
         rows.append(row)
@@ -273,7 +349,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     led = bk.ledger()
     for r in rows:  # 已持仓的显示实际仓位，并用开仓数据回填真正收紧仓位的约束
         p = bk.positions.get(r["symbol"])
-        if p and r.get("state") == "holding":
+        if p and r.get("state") in ("holding", "exit_pending", "held_outside", "halted"):
             r["target_notional_usdt"] = abs(p.qty * p.mark_price)
             r["target_qty"] = p.qty
             r["target_weight"] = r["target_notional_usdt"] / eq if eq else 0
@@ -337,21 +413,23 @@ def _route(cfg, sym, market, action, qty, price):
     if mode == "paper":
         _log_order(mode="paper", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,
                    ref_price=price, status="paper_filled", detail="纸面成交")
-        return
+        return "paper_filled"
     ok, reasons = guard.check(cfg, cfg["venue"])
     if not ok:
         _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,
                    ref_price=price, status="blocked", detail="；".join(reasons))
-        return
+        return "blocked"
     try:
         tr = _trader(cfg)
         spec = get_client(cfg["venue"]).perp_spec(sym) if market == "perp" else None
         res = tr.place_order(cfg, sym, market, action, qty, price, spec)
         _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,
                    ref_price=price, status="sent", detail=str(res)[:300])
+        return "sent"
     except Exception as e:  # noqa: BLE001
         _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,
                    ref_price=price, status="error", detail=str(e)[:300])
+        return "error"
 
 
 def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
@@ -373,13 +451,13 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
                 errors[s] = f"报价失败：{e}"
         # 2) 离场：信号改变 / 触及止损
         for s, p in list(bk.positions.items()):
-            if s not in prices or s not in rows:
+            if s not in prices:
                 continue
             px, kind, q = prices[s]
-            want = rows[s]["side"]
             reason = None
-            if want != p.side:
-                reason = "信号反转" if want != "flat" else "信号转空仓"
+            row = rows.get(s)
+            if row and row.get("side") != p.side and s not in bk.halts:
+                reason = "信号反转" if row.get("side") != "flat" else "信号转空仓"
             elif (p.side == "long" and px <= p.stop_price) or (p.side == "short" and px >= p.stop_price):
                 reason = "ATR止损"
                 bk.blocks[s] = p.direction
@@ -401,7 +479,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         want = {}
         for s in cfg["symbols"]:
             r = rows.get(s)
-            if not r or s in bk.positions or r["signal"] == 0 or block_active(bk, s, r) or r.get("trend_ok") is False or r.get("state") == "short_paused":
+            if not r or s in bk.positions or s in bk.halts or r["signal"] == 0 or block_active(bk, s, r) or r.get("trend_ok") is False or r.get("state") == "short_paused":
                 continue
             if r["side"] == "long" and not rk["allow_spot_long"] or r["side"] == "short" and not rk["allow_perp_short"]:
                 continue
@@ -429,10 +507,164 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
                     data_source=q.data_source, price_time=iso(q.ts))
             _route(cfg, s, r["market"], "open_long" if r["side"] == "long" else "open_short", qty, px)
             events.append(f"{s} 开{('多·现货' if r['side'] == 'long' else '空·永续')} {qty:.6g} @ {px:g}，止损 {z.stop_price:.6g}")
+        opened = {s for s in want if s in bk.positions and alloc.get(s, 0) >= 1.0}
+        # 4) 每根新收盘 K 线调仓一次（rebalance_band；公式与回测第 2c 步相同，见 qtw/rebalance.py）
+        events += _rebalance(cfg, bk, rows, opened, errors)
+        # 5) 信号变化日志（旧 → 新 + 本周期对该标的的动作）
+        try:
+            acts = {}
+            for e in events:
+                sym_ = e.split(" ", 1)[0]
+                acts[sym_] = (acts.get(sym_, "") + "；" if sym_ in acts else "") + e.split(" ", 1)[-1]
+            signal_log.record([r for r in sig["rows"] if not r.get("error")], acts, venue, bk.conn)
+        except Exception as e:  # noqa: BLE001 — 日志失败不影响交易
+            log.warning("信号日志写入失败：%s", e)
         snap = bk.snapshot(note or ("; ".join(events)[:240] if events else "无变化"))
         export_paper_csv(cfg)
         return {"time": snap["time"], "time_la": la(utcnow()), "time_sh": sh(utcnow()), "events": events, "errors": errors, "snapshot": snap}
 
+
+
+def _rebalance(cfg, bk, rows: dict, opened: set, errors: dict) -> list[str]:
+    """CYCLE_LOCK 已持有。新收盘 K 线后第一次周期：把已有持仓调向目标名义（见 qtw/rebalance.py）。"""
+    from . import rebalance as RB
+    st = cfg["strategy"]
+    if float(st.get("rebalance_band", 0) or 0) <= 0 or not bk.positions:
+        return []
+    bars = [r["as_of"] for r in rows.values() if r.get("as_of")]
+    if not bars:
+        return []
+    bar = max(bars)
+    if RB.last_bar(bk.conn) == bar:
+        return []  # 这根 K 线已评估过
+    held, prices, kinds, atrs = {}, {}, {}, {}
+    for s, p in bk.positions.items():
+        r = rows.get(s)
+        if s in opened or s in bk.halts or not r or r.get("side") != p.side:
+            continue
+        try:
+            px, kind, q = _quote(cfg["venue"], s, p.market)
+        except MarketDataError as e:
+            errors[s] = f"报价失败，跳过调仓：{e}"
+            continue
+        if not _px_ok(px):
+            continue
+        held[s], prices[s], kinds[s], atrs[s] = p, px, (kind, q), r.get("atr")
+    new_n = sum(abs(bk.positions[s].qty * bk.positions[s].mark_price) for s in opened if s in bk.positions)
+    plan = RB.plan(held, prices, atrs, equity=bk.equity(), new_notional=new_n, cfg=cfg, gross_now=bk.gross(), fee=bk.fee)
+    events = []
+    for it in plan:
+        s, px = it["symbol"], it["price"]
+        p = bk.positions[s]
+        kind, q = kinds[s]
+        new_qty = max(0.0, p.qty + it["delta_usdt"] / px)
+        side, mkt = p.side, p.market
+        res = bk.resize(s, new_qty, px, kind, f"调仓（目标 {it['target_usdt']:.2f} USDT，偏离>{float(st['rebalance_band']):.0%}）",
+                        cfg["venue"], data_source=q.data_source, price_time=iso(q.ts))
+        if res["action"] == "reduce":
+            _route(cfg, s, mkt, "close_long" if side == "long" else "close_short", res["qty"], px)
+            events.append(f"{s} 减仓{('多' if side == 'long' else '空')} {res['qty']:.6g} @ {px:g}（调仓，已实现 {res['pnl']:+.2f}）")
+        elif res["action"] == "add":
+            _route(cfg, s, mkt, "open_long" if side == "long" else "open_short", res["qty"], px)
+            events.append(f"{s} 加仓{('多' if side == 'long' else '空')} {res['qty']:.6g} @ {px:g}（调仓，止损不变 {p.stop_price:.6g}）")
+    RB.set_last_bar(bk.conn, bar)
+    return events
+
+
+def _px_ok(x) -> bool:
+    try:
+        v = float(x)
+        return math.isfinite(v) and v > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _official_fill_px(cfg, p):
+    """官方公共价（优先新报价，否则该持仓最后一次真实标记价）。永不编造价格。"""
+    try:
+        px, kind, q = _quote(cfg["venue"], p.symbol, p.market)
+        if not _px_ok(px):
+            raise MarketDataError("报价无效")
+        return px, kind, q.data_source, iso(q.ts)
+    except MarketDataError:
+        if _px_ok(getattr(p, "mark_price", None)) and p.mark_time:
+            return p.mark_price, f"last_real_mark@{p.mark_time}", p.mark_source or "", p.mark_time
+        raise
+
+
+def _close_one(cfg, bk, symbol: str, reason: str) -> dict:
+    """CYCLE_LOCK 已持有。按市价（taker、分市场）平掉一只纸面持仓；实盘仅在闸门全开时由 _route 发单。"""
+    p = bk.positions.get(symbol)
+    if not p:
+        return {"ok": False, "error": f"当前无 {symbol} 持仓", "symbol": symbol}
+    try:
+        px, kind, src, pt = _official_fill_px(cfg, p)
+    except MarketDataError as e:
+        return {"ok": False, "error": f"无官方报价，未平仓：{e}", "symbol": symbol}
+    if not _px_ok(px):
+        return {"ok": False, "error": "无官方报价，未平仓（不会编造价格）", "symbol": symbol}
+    side, mkt, qty = p.side, p.market, p.qty
+    fee_rate = bk.fee_for(mkt)
+    pnl = bk.close(symbol, px, kind, reason, cfg["venue"], data_source=src, price_time=pt)
+    route_status = _route(cfg, symbol, mkt, "close_long" if side == "long" else "close_short", qty, px)
+    return {
+        "ok": True, "symbol": symbol, "market": mkt, "side": side, "qty": qty,
+        "price": px, "price_kind": kind, "pnl": pnl, "fee_rate": fee_rate,
+        "fee_bps": fee_rate * 10_000, "reason": reason,
+        "live_armed": S.live_armed(cfg), "route_status": route_status,
+        "events": [f"{symbol} 已平仓 @ {px:g}（{kind}），盈亏 {pnl:+.2f}"],
+    }
+
+
+def close_position(symbol: str, cfg: dict | None = None, reason: str = "手动平仓") -> dict:
+    """按最新官方价手动平掉一只持仓。市价腿按该市场 taker 费率记账。实盘默认关闭。"""
+    cfg = cfg or S.load()
+    symbol = str(symbol or "").strip().upper()
+    with CYCLE_LOCK:
+        bk = book(cfg)
+        out = _close_one(cfg, bk, symbol, reason)
+        if out.get("ok"):
+            bk.snapshot(f"{reason} {symbol}")
+            export_paper_csv(cfg)
+        return out
+
+
+def flatten_all(cfg: dict | None = None, reason: str = "一键清仓") -> dict:
+    """按最新官方价平掉全部纸面持仓。不关闭自动交易、不改变实盘开关（与紧急停止不同）。"""
+    cfg = cfg or S.load()
+    with CYCLE_LOCK:
+        bk = book(cfg)
+        events, errors, closed = [], {}, []
+        for s in list(bk.positions):
+            out = _close_one(cfg, bk, s, reason)
+            if out.get("ok"):
+                events.extend(out["events"])
+                closed.append(out)
+            else:
+                errors[s] = out.get("error") or "平仓失败"
+        if closed:
+            bk.snapshot(f"{reason}：平掉 {len(closed)} 个持仓")
+            export_paper_csv(cfg)
+        return {
+            "ok": not errors, "events": events, "errors": errors, "closed": closed,
+            "live_armed": S.live_armed(cfg), "remaining": list(bk.positions),
+        }
+
+
+def set_halt(symbol: str, halted: bool, cfg: dict | None = None) -> dict:
+    """停止/恢复该标的的信号自动开平。ATR 止损仍然生效。停止在平仓后仍阻止重新开仓，直到恢复。"""
+    cfg = cfg or S.load()
+    symbol = str(symbol or "").strip().upper()
+    if not symbol:
+        return {"ok": False, "error": "缺少标的", "halted": False}
+    with CYCLE_LOCK:
+        bk = book(cfg)
+        if halted:
+            bk.halts.add(symbol)
+        else:
+            bk.halts.discard(symbol)
+        bk.save()
+        return {"ok": True, "symbol": symbol, "halted": symbol in bk.halts}
 
 def kill_switch(cfg: dict | None = None) -> dict:
     """紧急停止：关闭自动交易与实盘开关，并按最新公共价平掉全部纸面持仓。"""
