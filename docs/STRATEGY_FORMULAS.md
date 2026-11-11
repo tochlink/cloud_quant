@@ -1828,3 +1828,16 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 结论：否决，不进观察名单（无一组在后段两所同时高于基线且全长不劣化），不改默认，不加可选策略。BTC 同向确认已由 btc_regime_ma 1200（仅拦新多）覆盖；滚动 beta 门控 / beta 族视为已覆盖。
 - 研究表：`output/research_btc_beta_gate_long_history.csv`（脚本 scratch/beta_long.py，未推送）。
 - 下一轮轮换：其他未测族。候选：季度交割 / 月末日历窗口闸门（与已测的时段、星期闸门不同）；或其他未测族。
+
+## 新族：月末 / 季度交割日历窗口入场闸门（2026-11-10 23:55，研究，不改默认）
+- 公式：以信号 4h K 线 close_time（UTC）为决策时刻 t，只拦新开 / 反手开仓（被拦的信号在窗口结束后的下一根仍可入场，等价于推迟入场）。月初 `MS = 本月 1 日 00:00`，下月初 `NM`；月度交割 = 每月最后一个周五 08:00 UTC，季度交割 = 3/6/9/12 月最后一个周五 08:00 UTC。
+  - vetoME K：`NM − t < K 天` 拦截（月末）；vetoMS K：`t − MS < K 天` 拦截（月初）；vetoTurn K：二者之一；
+  - vetoQExp K：距最近季度交割 `< K 天`（前后）拦截；vetoQPre K：交割前 K 天内拦截；vetoMExp K：距最近月度交割 `< K 天`；vetoQTurn K：季末月最后 K 天或季初月前 K 天拦截。
+- 网格：vetoME K{1,2,3}；vetoMS K{1..6,8}；vetoTurn K{1,2}；vetoQExp K{1,2,3,5}；vetoQPre K{2,5}；vetoMExp K{1,2}；vetoQTurn K{3,7}；安慰剂：任意 5 天窗口（每月第 5–10 / 10–15 / 15–20 / 20–25 / 25–30 天）不开仓。两所，4500 根 4h 长历史，真实费率 + 压力费率。
+- 结果（基线 Gate +146.8% / OKX +149.2%，回撤 −18.8% / −18.9%，后段 +54.9% / +54.8%）：
+  - 月末 vetoME、季度交割 vetoQExp / vetoQPre、月度交割 vetoMExp、季末季初 vetoQTurn、vetoTurn：全部 ≤ 基线（vetoMExp K2 降到 +113% / +116%，回撤 −22%；季度交割窗口后段 +48% ~ +54%）。
+  - 月初 vetoMS K1–5：全长 Gate +148% → +164%、OKX +151% → +164%，后段 +55.0% ~ +56.8%，压力费率 K5 +146%（vs 基线 +131% / +133%）；但 K6 立即翻到 Gate +108% / OKX +117%，K8 +141%。
+  - 安慰剂 5 天窗口：同样形状的"推迟入场"在其他日期造成 −76 ~ +33 个百分点的波动（第 10–15 天 Gate +180% / OKX +169%，但后段 +48%；第 20–25 天 +71% / +78%）。说明 vetoMS 的增益与月初效应无关，只是少数大趋势单的入场时点被平移带来的随机差异。
+- 结论：否决，不进观察名单，不改默认，不加可选策略。日历族（时段、星期、月初 / 月末、月度 / 季度交割窗口）视为全部覆盖。
+- 研究表：`output/research_month_end_expiry_calendar_gate_long_history.csv`、`output/research_month_end_expiry_calendar_gate_long_history_ext.csv`（脚本 scratch/cal2_long.py、cal2_ext.py，未推送）。
+- 下一轮轮换：其他未测族（例如与趋势年龄无关的状态条件止损距离，或其他新族）。
