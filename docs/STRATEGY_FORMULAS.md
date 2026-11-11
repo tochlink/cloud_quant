@@ -1405,3 +1405,21 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 结论：否决，不改默认，不加可选参数。against 的整段增益只来自 2026-03 前 1~3 笔交易的路径差异（交易数不变），K 方向非单调（K5 / K8 归零、K10 随 T 翻号），2026-03 后两家都没有增益；any / with 明确有害，说明对 SMA 交叉入场而言极端单根 K 线带来的是延续而非需要回避的噪声。
 - 研究表：`output/research_event_cooldown_gate_long_history.csv`、`output/research_event_cooldown_gate_nbhd.csv`（脚本 scratch/shock_long.py、scratch/shock_nb.py，未推送）。
 - 下一轮轮换：其他未测族，例如 K 线形态入场确认（吞没 / 长影线 / 内包线）、成交额（quote volume）冲击后的方向延续，或从官方 K 线可得的其他新信息源。
+
+## 新族：K 线形态入场确认 / 否决闸门（吞没 / 长影线 / 内包线突破 / 强实体）（2026-11-10 19:25，研究，不改默认）
+
+- 公式（4h，只用当根及之前数据，`rg = H − L`）：
+  - engulf：阳包阴 `C>O ∧ C₋₁<O₋₁ ∧ C≥O₋₁ ∧ O≤C₋₁`（阴包阳对称）。
+  - wick：锤子 `(min(O,C) − L)/rg ≥ x ∧ (C − L)/rg ≥ 0.5`（多）；流星 `(H − max(O,C))/rg ≥ x ∧ (C − L)/rg ≤ 0.5`（空）。
+  - inside：前一根为内包线 `H₋₁≤H₋₂ ∧ L₋₁≥L₋₂`，当根收盘突破其高（多）/ 低（空）。
+  - body：强实体 `|C − O|/rg ≥ x` 且同向。
+  - need：新多需近 W 根（含当根）内出现多头形态（空对称）；veto：近 W 根有反向形态则拦新开；contra：反向对照（需反向形态）。只拦新开 / 反手开仓，离场与止损不变。
+- 网格：4 种形态 × need / veto × W 1 / 3 / 6（wick x0.5、body x0.6）；wick x 0.4 / 0.6、body x 0.5 / 0.7、engulf contra；wick·need 邻域 x 0 / 0.1 / 0.2 / 0.25 / 0.3 / 0.35 / 0.4 / 0.45 × W 2 / 3 / 4；严格月度 walk-forward（候选 无闸门 / wick·need W3 x0.3 / 0.35 / 0.4，训练 3 / 6 / 12 月，Calmar / Sharpe 选优）；默认基线，Gate / OKX 4500 根 4h 长历史，真实 + 压力费率。
+- 结果（整段 / 回撤 / 2026-03 前 / 后）：
+  - 基线：Gate +149.2% / −18.8% / +60.5% / +55.3%；OKX +151.8% / −18.9% / +62.3% / +55.1%。
+  - engulf·need W3：Gate +165.7% / −14.4%，但后段 +28.4%；OKX +140.3%，后段 +37.6%——增益全在 2026-03 前。engulf·veto、inside·veto、body·veto：+112~159%，后段 ≤ 基线。inside·need +77~113%，body·need +56~113%，engulf contra +62~94%：全部更差。
+  - wick·need（锤子 / 流星确认）是唯一的平台：x 0.25~0.4 × W 2~4 两家整段 +164~186%、回撤 −14.6~−16.3%、日 Sharpe 1.74~1.85（基线 1.63 / 1.64）；压力费率 x0.3 Gate +159.0% / OKX +152.2%（基线 +132.9% / +135.1%）。但 2026-03 后两家都是 +48~54.5%，低于基线 +55%；x 0.45 断崖（后段 +30~38%），x 0~0.2 回到基线附近——不是单调关系。
+  - walk-forward 样本外（与同窗口固定无闸门比）：训练 3 月 Gate +125~127% vs +135.5%、OKX +129% vs +137.4%；训练 6 月 Gate +77~84% vs +72.0%、OKX +81~84% vs +73.9%（回撤 −10% vs −13.7%）；训练 12 月 +48~50% vs +52~54%。固定 x0.3 在 OOS 窗口 Gate +151.7% vs +135.5%、OKX +143.7% vs +137.4%，但后段 +44.8 / +43.2% vs +45.6 / +45.0%；月度胜率后段只有 2~4 / 8 个月（前段 11~13 / 17）。
+- 结论：否决，不改默认，不加可选参数。锤子 / 流星确认确实在整段与压力费率下给出 +15~35 点与更浅回撤，且 x0.25~0.4、W2~4 邻域稳定，但增益几乎全部来自 2026-03 前；2026-03 后两家都略低于基线，walk-forward 只在训练 6 月时胜出，x0.45 断崖说明对阈值敏感。列入观察：若后续 2026-03 后数据继续累积并转正再复测。
+- 研究表：`output/research_candlestick_pattern_gate_long_history.csv`、`_long_history_nbhd.csv`、`_long_history_nbhd_low.csv`、`output/research_candlestick_pattern_gate_monthly_walkforward.csv`（+ `_monthly_vs_off.csv`）（脚本 scratch/candle_long.py、candle_nb.py、candle_nb2.py、candle_wf.py，未推送）。
+- 下一轮轮换：其他未测族，例如成交额（quote volume）冲击后的方向延续、缺口（开盘相对前收的跳空）回补 / 延续、或高低点结构（更高高点 / 更高低点计数）趋势确认。
