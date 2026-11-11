@@ -178,9 +178,11 @@ def wal_file_bytes() -> int:
         return 0
 
 
-# Live chart max is 1000 bars; strategy lookback is ~200. Keep a cushion so
-# dual-MA / ATR and the signals chart stay cache-hot without unbounded growth.
-CANDLE_KEEP_BARS = 1200
+# Live chart max is 1000 bars; the BTC regime filter reads btc_regime_ma + 5 bars
+# (default 1200 → 1205, validated up to 2000 → 2005). Keeping only 1200 made every prune
+# evict BTC history the filter needs, forcing a ~12-page REST refetch and, if that fetch
+# failed, leaving the long-entry filter open. 2100 covers the validated maximum.
+CANDLE_KEEP_BARS = 2100
 # Worker snapshots ~1/min; keep ~7 days of equity history for the dashboard sparkline.
 LEDGER_KEEP_ROWS = 10_080
 
