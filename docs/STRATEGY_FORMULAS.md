@@ -1525,3 +1525,23 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 结论：否决，不改默认，不加可选参数，不进观察名单；没有跨两家所的稳定区域，所以不做 walk-forward。
 - 研究表：`output/research_permutation_entropy_gate_long_history.csv`（脚本 scratch/pent_long.py，未推送）。
 - 下一轮轮换：Ehlers 主导周期 / 正弦波指标（周期模式 vs 趋势模式）作为入场闸门，或样本熵以外的其他未测族。
+
+## 新族：Ehlers 主导周期 / 正弦波指标（周期模式 vs 趋势模式）入场闸门（2026-11-10 20:25，研究，不改默认）
+
+- 动机：MESA 正弦波指标把行情分成“周期模式”（价格围绕趋势线振荡、Sine 与 LeadSine 频繁交叉）和“趋势模式”。检验 MA 新开仓只在趋势模式下放行（need），或反过来只在周期模式下放行（contra），能否过滤震荡期假突破。它和已测的 Hurst、分形维数、排列熵、Choppiness 不同，依据的是 Hilbert 变换测出的主导周期和周期相位。
+- 公式（4h，只用已收盘 K 线；只拦新开 / 反手开仓，不动已有持仓与止损）：
+  - P = (H+L)/2；Smooth = (4P+3P₁+2P₂+P₃)/10。
+  - Hilbert 去趋势：Detrender = (0.0962·S + 0.5769·S₂ − 0.5769·S₄ − 0.0962·S₆)·(0.075·Period₁+0.54)；同法得 Q1、jI、jQ，I1 = Detrender₃。
+  - 同差分鉴别器：I2 = I1−jQ，Q2 = Q1+jI（0.2/0.8 平滑）；Re = I2·I2₁+Q2·Q2₁，Im = I2·Q2₁−Q2·I2₁（0.2/0.8 平滑）；Period = 360/atan(Im/Re)，限幅 [0.67,1.5]×上一值且 6~50，再 0.2/0.8 平滑；SmoothPeriod = 0.33·Period + 0.67·SmoothPeriod₁；DC = round(SmoothPeriod)。
+  - DFT 相位：Real = Σ_{c<DC} sin(360c/DC)·Smooth_c，Imag = Σ cos(360c/DC)·Smooth_c；Phase = atan(Real/Imag) + 90 + 360/SmoothPeriod（Imag<0 加 180，>315 减 360）；Sine = sin(Phase)，LeadSine = sin(Phase+45°)。
+  - Trendline = 近 DC 根 P 均值再做 4-3-2-1 加权平滑。
+  - 模式：默认趋势；Sine/LeadSine 交叉→周期并把计数清零；计数 < 0.5·SmoothPeriod→周期；相位每根推进量在 (0.67, 1.5)×360/SmoothPeriod 内→周期；|Smooth−Trendline|/Trendline ≥ thr→趋势。
+  - 闸门：need = 新开仓需近 W 根处于趋势模式；contra = 趋势模式时拦截；align = 多需 LeadSine > Sine（相位上行），空对称；longdc = 需 DC ≥ P。
+  - 网格：thr{1.5%,3%,5%} × need W{1,3,6} 与 contra W1；align；longdc P{15,20,25,30}。指标自检：BTC/ETH/BNB 的 DC 中位约 21 根（p10~p90 约 16~31 根），thr1.5% 时约 57~65% 的 K 线处于趋势模式，thr5% 时约 37~40%。
+- 结果（整段 / 回撤 / 2026-03 前 / 后；本轮基线 Gate +146.8% / −18.8% / +59.3% / +54.9%，OKX +149.2% / −18.9% / +61.0% / +54.8%；压力费率基线 +130.5% / +132.8%）：
+  - need（趋势模式才开仓）全部低于基线：最好是 thr1.5% W6，Gate +140.3% / OKX +140.8%，后段 +53.9% / +54.0%；W1/W3 只有 +95~111%。thr 越高越差。
+  - contra（只在周期模式开仓）和 align 把 2026-03 前抬到 +64~74%（OKX），但后段跌到 +29~37%，属于前段拟合。
+  - longdc P15 几乎不拦（OKX +153.4%，后段 +54.9%，与基线持平；Gate +145.3%，后段 +51.8%）；P20/P25 回撤降到 −14.5~−16.3%，但后段只有 +41%；P30 拦掉大半交易，整段约 +24%，后段为负。
+- 结论：否决，不改默认，不加可选参数，不进观察名单；两家所都没有后段超过基线的变体，所以不做邻域和 walk-forward。
+- 研究表：`output/research_ehlers_sinewave_cycle_gate_long_history.csv`（脚本 scratch/ehsine_long.py，未推送）。
+- 下一轮轮换：其他未测族（例如：自适应 Laguerre RSI / Ehlers Roofing 滤波器作为信号替换，或成交量加权趋势强度以外的新维度）。
