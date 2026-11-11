@@ -7,6 +7,8 @@
 信号确认：原始方向需在最近 confirm_bars 根已收盘 K 线上保持一致才生效，否则视为 0（空仓），过滤刚交叉就回头的假信号。
 趋势过滤（trend_ma>0，仅作用于入场）：做多需上一根收盘 > 该市场 SMA(trend_ma)，做空需 < SMA(trend_ma)；
   已有持仓不因趋势过滤平仓，离场仍只看信号反转/归零与 ATR 止损。
+震荡指数闸门（chop_n>0，可选，默认关闭，仅作用于入场）：CHOP_n = 100·log10(ΣTR_n / (maxH_n − minL_n)) / log10(n)，
+  上一根 CHOP > chop_max（震荡市）时不新开 / 反手开仓；已有持仓离场、止损、调仓不受影响。
 止损：入场价 ∓ atr_stop_mult × ATR(入场前一根收盘)。止损后保持空仓，直到信号方向改变。
 """
 from __future__ import annotations
@@ -15,9 +17,30 @@ import numpy as np
 import pandas as pd
 
 
-def indicators(df: pd.DataFrame, fast: int, slow: int, atr_period: int, confirm_bars: int = 1, trend_ma: int = 0) -> pd.DataFrame:
+def chop_index(df: pd.DataFrame, n: int) -> pd.Series:
+    """Choppiness Index（只用已收盘 K 线）：100·log10(ΣTR_n / (max(H,n) − min(L,n))) / log10(n)。
+    取值约 0–100，越高越震荡；历史不足 n 根或区间为 0 时为 NaN。"""
+    h, l, c = df["high"].astype(float), df["low"].astype(float), df["close"].astype(float)
+    prev = c.shift(1)
+    tr = pd.concat([h - l, (h - prev).abs(), (l - prev).abs()], axis=1).max(axis=1)
+    rng = (h.rolling(n).max() - l.rolling(n).min()).replace(0, np.nan)
+    return 100 * np.log10(tr.rolling(n).sum() / rng) / np.log10(n)
+
+
+def chop_ok(chop: float, chop_n: int, chop_max: float) -> bool:
+    """震荡指数入场闸门：关闭（chop_n=0）时恒为 True；CHOP 未形成（NaN）时不允许新开仓；CHOP > chop_max 时不新开。"""
+    if not chop_n:
+        return True
+    if not (chop == chop):
+        return False
+    return chop <= chop_max
+
+
+def indicators(df: pd.DataFrame, fast: int, slow: int, atr_period: int, confirm_bars: int = 1, trend_ma: int = 0,
+               chop_n: int = 0) -> pd.DataFrame:
     out = df.copy()
     c = out["close"]
+    out["chop"] = chop_index(out, int(chop_n)) if chop_n else np.nan
     out["trend_ma"] = c.rolling(int(trend_ma), min_periods=int(trend_ma)).mean() if trend_ma else np.nan
     out["sma_fast"] = c.rolling(fast, min_periods=fast).mean()
     out["sma_slow"] = c.rolling(slow, min_periods=slow).mean()

@@ -45,6 +45,12 @@ DEFAULTS: dict[str, Any] = {
         # （output/research_long_history_regime_filter_and_knobs_50_150.csv、research_long_history_btc_regime_fee_stress.csv、
         #   research_long_history_btc_regime_walkforward.csv）
         "btc_regime_ma": 1200,
+        # 2026-11-11：可选震荡指数入场闸门（默认关闭）。上一根 CHOP_n > chop_max 时不新开 / 反手开仓，离场、止损、调仓不变。
+        # 严格月度 walk-forward（候选 off + n{42,56,70}×T{48,50,52}，回看 3/6/12 个月按 Calmar/Sharpe 选）：Gate/OKX、真实与压力费率
+        # 24 组全部 ≥ 固定关闭、回撤低 0.5–5 个百分点，但收益主要来自 2026-03 之前，n42 固定参数整段明显差于关闭（参数敏感），
+        # 未达到改默认的标准（output/research_choppiness_entry_gate_monthly_walkforward.csv）。0=关闭；建议试用 chop_n 56 / chop_max 50
+        "chop_n": 0,
+        "chop_max": 50.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -175,6 +181,12 @@ def validate(s: dict) -> dict:
     st["btc_regime_ma"] = int(st.get("btc_regime_ma", 0) or 0)
     if st["btc_regime_ma"] and not 50 <= st["btc_regime_ma"] <= 2000:
         raise ValueError("BTC 熊市过滤 SMA 需为 0（关闭）或 50–2000")
+    st["chop_n"] = int(st.get("chop_n", 0) or 0)
+    if st["chop_n"] and not 5 <= st["chop_n"] <= 300:
+        raise ValueError("震荡指数周期需为 0（关闭）或 5–300")
+    st["chop_max"] = float(st.get("chop_max", 50) or 50)
+    if not 20 <= st["chop_max"] <= 100:
+        raise ValueError("震荡指数阈值需在 20–100 之间")
     st["pyramid_r"] = float(st.get("pyramid_r", 0) or 0)
     st["pyramid_frac"] = float(st.get("pyramid_frac", 0.5) or 0)
     if st["pyramid_r"] and not 0.5 <= st["pyramid_r"] <= 5:
