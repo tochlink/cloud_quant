@@ -1626,3 +1626,18 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 结论：否决，不改默认，不加可选策略。need thr0 的整段提升是参数噪声（N120 处塌陷），后段未在两家所稳定超过基线。观察名单仅加 “need thr0 N210–300（降回撤）”，等 2026-03 后数据累积再复测。
 - 研究表：`output/research_quantile_tail_asymmetry_gate_long_history.csv`、`output/research_quantile_tail_asymmetry_gate_neighborhood.csv`（脚本 scratch/qtail_long.py、scratch/qtail_nb.py，未推送）。
 - 下一轮轮换：其他未测族（候选：成交额加权趋势强度 VWMA−SMA 偏离作为仓位缩放——先核对 output/research_signal_strength_sizing.csv 避免与 MA-spread 置信度缩放重复；或其他未测族）。
+
+## 新族：成交量加权趋势强度 VWMA−SMA 偏离仓位缩放（2026-11-10 21:15，研究，不改默认）
+- 思路：此前的“信号强度仓位”（`|fast−slow|/ATR` 小则半仓，`research_signal_strength_sizing.csv`）只看价格均线间距；这里改看成交量是否确认趋势——放量集中在高价区（VWMA > SMA）视为买盘确认，反之视为分歧。只改单币风险 / 权重上限乘子，信号、入场、止损、组合 / 单名波动率目标链路不变。
+- 公式（逐品种、逐腿：多头用官方现货 K 线、空头用官方永续 K 线；只用已收盘数据，第 t 根算出的乘子在第 t+1 根使用）：
+  - VWMA_N = Σ(C·V) / ΣV（最近 N 根），SMA_N = 最近 N 根收盘均值，D = (VWMA_N − SMA_N) / SMA_N；归一化 z = D / (ATR14 / C)。方向 s = +1（多）/ −1（空），x = s·z（x > 0 = 成交量与持仓方向一致）。
+  - 乘子 k(x) 乘到 name_vol_mult 的 m 上（新开仓与 rebalance 调仓都生效）：counter_cut：x < −thr 时 ×k；aligned_boost：x > thr 时 ×1.25；boost+cut：两者兼有；linear：clip(1 + g·x, 0.5, 1.5)；contra：x > thr 时 ×0.5（逆向对照）。
+  - 网格：N{20, 50, 100, 150} × counter_cut (thr0·k0.5, thr0.1·k0.5, thr0·k0.75)；N{50, 150} × aligned_boost1.25·thr0.1、boost1.25+cut0.5·thr0.1、linear g1 / g3、contra cut0.5·thr0.1。
+- 结果（整段 / 回撤 / 2026-03 前 / 后；本轮基线 Gate +146.8% / −18.8% / +59.3% / +54.9%，OKX +149.2% / −18.9% / +61.0% / +54.8%；压力费率基线 +130.5% / +132.8%）：
+  - 没有任何变体在两家所的整段超过基线。最接近的是 aligned_boost1.25 N150：Gate +144.7% / −18.7% / +59.5% / +53.4%，OKX +147.1% / −20.3% / +57.9% / +56.6%——等于基线加噪声，回撤在 OKX 变深。
+  - counter_cut（成交量不确认就缩仓）全面变差：Gate +91% ~ +137%、OKX +97% ~ +133%，后段 +36% ~ +55%；N 越短越差，k0.75 / N150 最接近基线（Gate +137.4% / OKX +133.3%）。
+  - linear g1 N150 后段 Gate +61.7% / OKX +54.6%，但整段 +144% / +143%、回撤 −21% 更深；g3 更差。
+  - contra（成交量一致时反而缩仓）回撤最浅（Gate N50 −13.7%，OKX N150 −14.9%）、Sharpe 1.65 ~ 1.71 略高于基线 1.63 / 1.64，但整段只有 +106% ~ +118%、后段 +37% ~ +40%，属单纯降杠杆效应。
+- 结论：否决，不改默认，不加可选策略，不进观察名单。成交量对 4h 趋势方向的确认信息已被双均线 + 波动率目标吸收，额外按 VWMA 偏离缩仓只是在趋势早期 / 放量分歧阶段砍掉了盈利的仓位。
+- 研究表：`output/research_vwma_sma_deviation_sizing_long_history.csv`（脚本 scratch/vwma_size.py，未推送）。
+- 下一轮轮换：其他未测族（候选：基于官方永续资金费率变化率 / 资金费率极值反转作为空头开仓闸门——注意“资金费套利 / funding carry”已测，须换成费率动量或极值作为方向闸门；或价格加速度（二阶差分 / 收益率曲率）作为入场时机闸门）。
