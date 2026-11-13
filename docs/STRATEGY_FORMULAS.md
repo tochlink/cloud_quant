@@ -2852,3 +2852,18 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
   - 安慰剂 invP 最高 Gate +179.0%、OKX +183.9%，超过真实最好格。
 - 结论：拒绝，不改默认、不进观察名单。黄金 / BTC 相对强弱对这套 4h 趋势组合没有增量信息。
 - CSV：`output/research_gold_btc_relative_gate_long_history.csv`、`output/research_gold_btc_relative_gate_monthly.csv`（不入库）。脚本 `scratch/gold_long.py`、`scratch/gold_month.py`。
+
+## 轮换：KST（Know Sure Thing）与 Klinger 成交量振荡器门控（2026-11-12 22:20 PST，研究，不改默认；KST fadeS 进观察名单）
+
+- 查重：轮换日志里有 MACD / Aroon / Vortex、Coppock / TRIX、OBV / VWAP、CMF / MFI、Elder Force，但没有 Pring 的多周期 ROC 加权动量 KST，也没有 Klinger 成交量力度振荡器。数据：Gate / OKX 官方现货 + USDT 永续 4h K 线，4500 根长历史，默认基线，真实费率（现货 10 / 永续 5.1 bps）+ 压力档（20 / 15.1 bps）。
+- 公式（同一根 4h 收盘，因果；只拦新开 / 反手，已有持仓和止损不变）：
+  - KST：`ROC_r = C/C_{−r·s} − 1`，`KST = SMA_{10s}(ROC_10) + 2·SMA_{10s}(ROC_15) + 3·SMA_{10s}(ROC_20) + 4·SMA_{15s}(ROC_30)`，`x = KST / std_360(KST)`，s = 1 / 2。
+  - KVO：`trend = sign(Δ hlc3)`，`dm = H − L`，`cm` 同向累加、换向重置为 `dm_{−1} + dm`，`VF = V_spot · |2(dm/cm − 1)| · trend`，`KVO = EMA_{34s}(VF) − EMA_{55s}(VF)`，`x = KVO / std_360(KVO)`（成交量用官方现货基础币数量，两个交易所各自归一）。
+  - need X：多需 x > X、空需 x < −X；fadeS X：x < −X 时不开新空；fadeL X：x > X 时不开新多。安慰剂：x 序列按币种确定性循环时移（KST fadeS 共 8 个种子）。
+- 结果（基线 Gate +162.2% / −18.8% / 夏普 1.69，OKX +164.9% / −18.9% / 1.70；压力 +145.2% / +147.6%）：
+  - KST fadeS s1 X2.0（KST 已深度超卖时不追空）：Gate +184.3% / −15.7% / 1.81，OKX +185.4% / −15.6% / 1.81；压力费率 +165.8% / +166.7%。邻域平滑：X1.5–2.0 都在 +181…+185%，X2.25–2.5 +167…+175%，X3 回到基线。8 个安慰剂 Gate +150…+169%、OKX +138…+169%，真实格高于全部安慰剂。
+  - 但收益几乎全在 2026-03-05 之前（前段 +76% vs +63%）；2026-03 后 9 个月逐月差异都在 ±0.2 个点内（Gate 合计 +0.26、OKX −0.04），后半段基本不触发——与此前几类「空头投降」门控同一模式。
+  - KVO fadeS s2 X1.0–1.25：Gate +188…+192%，但 OKX 2026-03 后 9 个月只 1 个更好、合计 −3.7 个点，X0.75 两边 2026-03 后都约 −2.3…−2.9；KVO 安慰剂最高 +176%。拒绝。
+  - need（方向确认）与 fadeL 全部低于基线（KVO need 最差 +54%）。
+- 结论：不改默认。KST fadeS s1 X1.5–2.0 进观察名单（回撤明显更浅、高于全部安慰剂、压力费率成立，但 2026-03 后无增量），等 2026-03 后出现更多深度超卖段再复测；KVO 与 need / fadeL 拒绝。
+- CSV：`output/research_kst_klinger_gate_long_history.csv`、`output/research_kst_klinger_gate_neighborhood.csv`、`output/research_kst_klinger_gate_post_months.csv`（不入库）。脚本 `scratch/kk_long.py`、`scratch/kk_nb.py`。
