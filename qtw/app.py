@@ -146,6 +146,11 @@ async def lifespan(_app: FastAPI):
     if realtime.on_tick not in stream._on_quote:
         stream.on_quote(realtime.on_tick)
     stream.on_bar_close(realtime.on_bar_close)
+    from . import shadow as _shadow  # 多策略影子子账本（只记录，不碰默认账本 / 实盘）
+    _shadow.load_all()
+    if _shadow.on_tick not in stream._on_quote:
+        stream.on_quote(_shadow.on_tick)
+    stream.on_bar_close(_shadow.on_bar_close)
     if _kick_after_freeze not in stream._on_host_freeze:
         stream._on_host_freeze.append(_kick_after_freeze)
     stream.start()
@@ -183,6 +188,8 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="QTW 量化交易控制台", version=__version__, lifespan=lifespan)
+from .strategies_api import router as _strategies_router  # noqa: E402  多策略页（v7）
+app.include_router(_strategies_router)
 
 
 # ---------------- 状态 / 总览 ----------------
