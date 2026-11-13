@@ -262,12 +262,64 @@ async function api(path, opt = {}) {
   if (!r.ok) throw new Error((j && (j.detail || j.message)) || `HTTP ${r.status}`);
   return j;
 }
-function modal(html, onMount) { const card = $("#modalCard"); card.classList.remove("sig-detail"); S.sigModalSym = null; card.innerHTML = html; $("#modal").classList.remove("hidden"); onMount && onMount(card); const f = card.querySelector("[data-ok], .btn"); f && f.focus(); }
-function closeModal() { $("#modal").classList.add("hidden"); $("#modalCard").classList.remove("sig-detail"); S.sigModalSym = null; }
+function modal(html, onMount) { const card = $("#modalCard"); card.classList.remove("sig-detail", "coin-modal"); S.sigModalSym = null; card.innerHTML = html; $("#modal").classList.remove("hidden"); onMount && onMount(card); const f = card.querySelector("[data-ok], .btn"); f && f.focus(); }
+function closeModal() { $("#modal").classList.add("hidden"); $("#modalCard").classList.remove("sig-detail", "coin-modal"); S.sigModalSym = null; }
 $("#modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
 function confirmBox(title, body, okText, danger) {
   return new Promise((res) => modal(`<h3>${title}</h3><div class="note" style="font-size:13px">${body}</div><div class="acts"><button class="btn ghost" data-x>取消</button><button class="btn ${danger ? "danger" : ""}" data-ok>${okText}</button></div>`,
     (m) => { m.querySelector("[data-x]").onclick = () => { closeModal(); res(false); }; m.querySelector("[data-ok]").onclick = () => { closeModal(); res(true); }; }));
+}
+function trigCn(t) {
+  if (!t) return "—";
+  const k = t.kind === "ws_bar_close" ? `${t.tf || ""} K 线收盘（WS）` : t.kind === "start" ? "启动" : "REST 兜底 / 恢复";
+  return k + (t.event_to_decision_ms != null ? ` · 事件→决策 ${Math.round(t.event_to_decision_ms)} ms` : "");
+}
+async function loadRt() {
+  const el = $("#rtLat"); if (!el) return;
+  try {
+    const r = await api("/api/realtime"); const tk = r.tick || {};
+    el.textContent = tk.n ? `tick p50 ${tk.p50_ms} ms · p95 ${tk.p95_ms} ms` : "等待 tick";
+    el.title = `tick 判定 ${tk.n || 0} 次；K 线收盘事件 ${r.bar ? r.bar.n : 0} 次（p50 ${r.bar && r.bar.p50_ms != null ? r.bar.p50_ms : "—"} ms）；最近一轮决策：${trigCn(r.cycle)}`;
+  } catch (_) { el.textContent = "—"; }
+}
+/* 开始交易：选择币种（记住上次选择；取消勾选但仍有持仓的币按所选方式处理） */
+async function pickCoins() {
+  let u; try { u = await api("/api/universe"); } catch (e) { toast("读取币种失败：" + e.message, true); return false; }
+  return new Promise((res) => modal(`<h3>开始自动交易 · 选择币种</h3>
+    <div class="note">只有勾选的币会产生信号并下单（纸面；实盘同样只对勾选币生效）。回测也按这里的选择。上次选择已记住。</div>
+    <div class="coin-pick-bar"><label class="toggle"><input type="checkbox" id="cpAll"/><span class="tr"></span>全选</label><span class="muted" id="cpN"></span></div>
+    <div class="coin-pick" id="cpGrid">${u.supported.map((x) => `<label class="cp-item ${u.held[x] ? "held" : ""}"><input type="checkbox" value="${x}" ${u.selected.includes(x) ? "checked" : ""}/>${coin(x)}<b>${base(x)}</b>${u.held[x] ? `<small class="side-tag ${u.held[x].side}">${u.held[x].side === "short" ? "持空" : "持多"}</small>` : ""}</label>`).join("")}</div>
+    <div class="cp-policy" id="cpPol"><div class="note"><b>取消勾选、但仍有持仓的币：</b><span id="cpHeld"></span></div>
+      <label class="radio"><input type="radio" name="cpp" value="keep" ${u.deselect_policy !== "flatten" ? "checked" : ""}/> 继续管理到离场（按止损 / 信号平仓，不再新开、不反手）</label>
+      <label class="radio"><input type="radio" name="cpp" value="flatten" ${u.deselect_policy === "flatten" ? "checked" : ""}/> 确认时按官方价立即平仓（纸面，吃单费率）</label></div>
+    <div class="acts"><button class="btn ghost" data-x>取消</button><button class="btn go" data-ok>${ic("play")}确认并开始</button></div>`, (m) => {
+      m.classList.add("coin-modal");
+      const boxes = () => [...m.querySelectorAll("#cpGrid input")];
+      const sync = () => {
+        const sel = boxes().filter((b) => b.checked).map((b) => b.value);
+        m.querySelector("#cpAll").checked = sel.length === boxes().length;
+        m.querySelector("#cpN").textContent = `已选 ${sel.length} / ${boxes().length}`;
+        const off = Object.keys(u.held).filter((x) => !sel.includes(x));
+        m.querySelector("#cpPol").classList.toggle("hidden", !off.length);
+        m.querySelector("#cpHeld").textContent = off.map(base).join("、");
+        m.querySelector("[data-ok]").disabled = !sel.length;
+      };
+      boxes().forEach((b) => (b.onchange = sync));
+      m.querySelector("#cpAll").onchange = (e) => { boxes().forEach((b) => (b.checked = e.target.checked)); sync(); };
+      sync();
+      m.querySelector("[data-x]").onclick = () => { closeModal(); res(false); };
+      m.querySelector("[data-ok]").onclick = async (e) => {
+        const sel = boxes().filter((b) => b.checked).map((b) => b.value);
+        const pol = (m.querySelector('input[name="cpp"]:checked') || {}).value || "keep";
+        e.currentTarget.disabled = true;
+        try {
+          const r = await api("/api/worker/start", { method: "POST", body: { symbols: sel, deselect_policy: pol } });
+          closeModal(); const s2 = r.selection || {};
+          toast(`自动交易已开启（纸面）· ${sel.length} 个币${s2.flattened && s2.flattened.length ? " · 已平 " + s2.flattened.map(base).join("、") : ""}${s2.kept && s2.kept.length ? " · 继续管理 " + s2.kept.map(base).join("、") : ""}`);
+          S.signals = null; res(true);
+        } catch (er) { toast(er.message, true); e.currentTarget.disabled = false; }
+      };
+    }));
 }
 function bpsHint(bps) {
   const v = Number(bps);
@@ -491,7 +543,7 @@ function showStatusModal() {
   modal(`<h3>运行状态</h3><dl class="kvlist">
     <dt>交易模式</dt><dd><b class="${st.mode === "live" ? "neg" : "pos"}">${st.mode === "live" ? "实盘（会真实下单）" : "纸面（只记账，不下单）"}</b></dd>
     <dt>行情源</dt><dd>${VN[st.settings.venue]} 官方公共行情</dd>
-    <dt>自动交易</dt><dd><b>${w.running ? "运行中" : "已停止"}</b>${w.running ? ` · 每 ${st.settings.worker.interval_sec} 秒 · 下次约 ${w.next_run_in_sec ?? "—"} 秒后` : ""}</dd>
+    <dt>自动交易</dt><dd><b>${w.running ? "运行中" : "已停止"}</b>${w.running ? ` · 事件驱动（WS tick / K 线收盘）· 上次触发 ${esc(trigCn(w.last_trigger))}` : ""}</dd>
     <dt>上次执行</dt><dd>${tFull(w.last_run, true)}${w.last_error ? `<br><span class="neg">上次错误：${esc(w.last_error)}</span>` : ""}</dd>
     <dt>实盘闸门</dt><dd>${st.live_gate_open ? '<b class="neg">已打开</b>' : "关闭"}${st.live_block_reasons.length ? `<div class="muted" style="margin-top:4px">未满足：${st.live_block_reasons.map(esc).join("；")}</div>` : ""}</dd>
   </dl><div class="acts"><button class="btn ghost" data-close>关闭</button><button class="btn" data-risk>去风控页</button></div>`,
@@ -522,7 +574,7 @@ function renderRight() {
       const tp = pxOk(p.tp_price) ? fp(p.tp_price) : "—";
       const tpTitle = p.tp_done ? (p.be_moved ? "已分批止盈，余仓止损在保本价" : "已分批止盈") : (p.tp_enabled ? `${fp(p.tp_r, 3)}R 分批止盈（平 ${Math.round((p.tp_frac || 0.5) * 100)}%）` : `参考 ${fp(p.tp_r, 3)}R（未启用分批止盈）`);
       return `<div class="r-row r-pos"><button type="button" class="r-row-main" data-sym="${p.symbol}" data-mkt="${p.market}" title="查看 ${base(p.symbol)} 的信号与 K 线">${coin(p.symbol)}
-        <span class="rp-l1"><b>${base(p.symbol)}</b><span class="side-tag ${p.side}">${p.side === "short" ? "空" : "多"}·${p.market === "perp" ? "永续" : "现货"}</span>${p.halted ? '<span class="pill flat rp-halt">已停止</span>' : ""}
+        <span class="rp-l1"><b>${base(p.symbol)}</b><span class="side-tag ${p.side}">${p.side === "short" ? "空" : "多"}·${p.market === "perp" ? "永续" : "现货"}</span>${bookTag(p)}${p.halted ? '<span class="pill flat rp-halt">已停止</span>' : ""}
           <span class="rp-pnl num ${cls(pnl.usdt)}" data-live="pnl" ${live}><span data-live-pnl-txt>${fmtPnl(pnl)}</span></span></span>
         <span class="rp-l2"><span class="num rp-qty" title="数量 ${fp(p.qty, 10)} ${base(p.symbol)}">${fp(p.qty, 5)} ${base(p.symbol)}</span><span class="num rp-w" data-live="weight" ${live} title="权重">${pct(p.weight, 1)}</span><span class="rp-px rp-now num" title="当前价（${p.market === "perp" ? "永续标记价" : "现货最新价"}）"><b data-live="px" ${live}>${fpPx(mark)}</b></span></span>
         <span class="rp-l3" title="止损 ${fpPx(p.stop_price)} · 止盈 ${tp}（${esc(tpTitle)}）· ${esc(p.exit_rule_cn || "")}"><span class="neg">损 ${fpPx(p.stop_price)}${p.be_moved ? "·保本" : ""}</span><span class="pos">盈 ${tp}${p.tp_done ? "·已" : ""}</span><span class="rp-px num" title="入仓价">入 ${fpPx(p.entry_price)}</span></span>
@@ -638,7 +690,7 @@ function pageDashboard() {
         <div class="tc">${MiniCharts.donut([{ v: longN, c: "#5ee0d6" }, { v: shortN, c: "#4b3aa6" }, { v: Math.max(0, cash), c: "#ece8fd" }])}</div>
         <div class="legend"><div><i style="background:#5ee0d6"></i>现货多 ${f2(longN, 0)}</div><div><i style="background:#4b3aa6"></i>永续空 ${f2(shortN, 0)}</div><div><i style="background:#ece8fd"></i>现金 ${f2(Math.max(0, cash), 0)}</div></div></div>
       <div class="tile"><div class="tt">自动交易</div><div class="tv"><span class="pill ${w.running ? "long" : "flat"}">${w.running ? "运行中" : "已停止"}</span></div>
-        <div class="tu" style="margin-top:8px">${w.running ? `每 ${st.settings.worker.interval_sec} 秒一轮 · 下次约 ${w.next_run_in_sec ?? "—"} 秒后` : "可在风控页开启"}<br>上次 ${t(w.last_run)}</div>
+        <div class="tu" style="margin-top:8px">${w.running ? `事件驱动 · ${esc(trigCn(w.last_trigger))}` : "可在风控页开启"}<br>上次 ${t(w.last_run)}</div>
         <button class="btn ghost sm tile-act" data-go="risk">风控与自动交易 →</button></div>
     </section>
     <div class="note foot">系统化纸面 / 研究工具，不构成投资建议；实盘交易可能亏损全部本金。数据来自 ${VN[v]} 官方公共行情 · 更新于 ${tFull(d.time)}。</div>
@@ -652,7 +704,8 @@ function bindGo() { document.querySelectorAll("#page [data-go]").forEach((el) =>
 
 /* ---------- 信号 / 进出场 ---------- */
 const IV_SEC = { "1m": 60, "5m": 300, "10m": 600, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400, "1w": 604800, "1M": 2629800, "1y": 31557600 };
-const CHART_IVS = [["1m", "1m"], ["5m", "5m"], ["10m", "10m"], ["15m", "15m"], ["1h", "1h"], ["4h", "4h"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"], ["1y", "1Y"]];
+const CHART_IVS = [["1m", "1分"], ["5m", "5分"], ["10m", "10分"], ["15m", "15分"], ["1h", "1时"], ["4h", "4时"], ["1d", "日线"], ["1w", "周线"], ["1M", "月线"], ["1y", "年线"]];
+const ivCnOf = (iv) => (CHART_IVS.find((x) => x[0] === iv) || [iv, iv])[1];
 /* 同比年份颜色：按“新 → 旧”取色（最新年份 = 紫，上一年 = 琥珀…），避开 K 线涨跌的红 / 绿 */
 const YOY_PAL = ["#6c5ce7", "#f0a030", "#2cc4c9", "#8a8aa8", "#e58fb0", "#5b9bf0"];
 const yoyColor = (i, n) => YOY_PAL[(n - 1 - i) % YOY_PAL.length];
@@ -671,7 +724,7 @@ async function pageSignals() {
         </div>
       </div>
       <div class="chart-box" id="candleChart"><div class="empty">加载中…</div></div>
-      <div class="chart-legend" id="chartLegend"><span><i style="background:#2cc4c9"></i>快线 SMA${s.fast_ma}</span><span><i style="background:#6c5ce7"></i>慢线 SMA${s.slow_ma}</span><span>▲▼ 收盘确认的均线交叉</span><span class="muted">时间为北京时间 · 图表 TradingView Lightweight Charts™</span></div>
+      <div class="chart-legend" id="chartLegend"><span><i style="background:#2cc4c9"></i>快线 ${s.fast_ma} 均线</span><span><i style="background:#6c5ce7"></i>慢线 ${s.slow_ma} 均线</span><span>▲▼ 收盘确认的均线交叉</span><span class="muted">时间为北京时间 · 图表 TradingView Lightweight Charts™</span></div>
     </div>
     <div class="sec-title sig-title"><div><h3>当前信号与进出场建议（${(S.signals && S.signals.rows) ? S.signals.rows.length : (S.status.settings.symbols || []).length}）</h3><div class="note">策略 ${esc(s.rule_id)}：${s.interval} 已收盘 K 线上 SMA${s.fast_ma} / SMA${s.slow_ma} 判断方向。做多用现货，做空用 USDT 永续（1 倍）。点击一行在上方图表查看，并打开进出场详情。</div><div class="sig-cycle" id="sigCycle"></div></div></div>
     <div class="panel sig-panel"><div class="sig-list" id="sigList"><div class="empty">正在从 ${VN[S.status.settings.venue]} 公共行情计算信号…</div></div><div id="sigPager"></div></div>
@@ -715,7 +768,7 @@ function renderSigList() {
     const sideNow = pos ? pos.side : (r.stop_side || r.side);
     const smkt = pos ? pos.market : mkt;
     return `<button type="button" class="sig-row ${r.symbol === S.selSym ? "sel" : ""}" data-sym="${r.symbol}" aria-label="${base(r.symbol)} 信号，点击查看 K 线与详情">
-      <span class="sig-sym">${coin(r.symbol)}<span><b>${base(r.symbol)}</b><small class="muted">/USDT</small></span></span>
+      <span class="sig-sym">${coin(r.symbol)}<span><b>${base(r.symbol)}</b>${bookTag(r)}</span></span>
       <span class="sig-dir"><span class="side-tag ${r.side}">${sideCn(r.side)}</span></span>
       <span class="numcol"><b class="num" data-px="${r.symbol}:${mkt}">${px}</b><small>${sigPxKind(r)}</small></span>
       <span class="numcol" title="${esc((contractsTxt(r) || qMain) + (pos ? " · 持仓数量" : " · 按官方下单精度向下取整"))}"><b class="num">${qMain}</b><small>${qSub}</small></span>
@@ -834,7 +887,8 @@ async function loadCandles() {
   document.querySelectorAll("#mktSeg [data-m]").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
   syncChartCtl(); renderYoyCtl(false);
   const ivLab = (CHART_IVS.find((x) => x[0] === iv) || [iv, iv])[1];
-  $("#chartTitle").textContent = `${base(S.selSym)}/USDT · ${m === "perp" ? "USDT 永续" : "现货"} · ${ivLab} K 线${iv !== stIv ? "（仅看图，信号按 " + stIv + "）" : ""}`;
+  $("#chartTitle").textContent = `${base(S.selSym)} ${m === "perp" ? "永续" : "现货"} · ${ivLab}${["1m", "5m", "10m", "15m", "1h", "4h"].includes(iv) ? " K 线" : ""}`;
+  $("#chartTitle").title = `${base(S.selSym)}/USDT · ${m === "perp" ? "USDT 永续合约" : "现货"} · ${ivLab} K 线${iv !== stIv ? "（仅看图，信号按 " + ivCnOf(stIv) + "）" : ""}`;
   const leg = $("#chartLegend"); if (leg) leg.innerHTML = S._legendK || leg.innerHTML;
   const req = (S._candleReq = (S._candleReq || 0) + 1);
   try {
@@ -935,12 +989,15 @@ async function runBacktest() {
   finally { b.disabled = false; b.innerHTML = ic("play") + "运行回测"; }
 }
 function bindBtView(view) {
-  S.btView = view === "trades" ? "trades" : "chart";
+  S.btView = ["trades", "short"].includes(view) ? view : "chart";
   const chartOn = S.btView === "chart";
-  const chart = $("#btChartWrap"), trades = $("#btTradesWrap"), bar = $("#btView");
+  const chart = $("#btChartWrap"), trades = $("#btTradesWrap"), short = $("#btShortWrap"), bar = $("#btView");
   if (chart) chart.classList.toggle("hidden", !chartOn);
-  if (trades) trades.classList.toggle("hidden", chartOn);
+  if (trades) trades.classList.toggle("hidden", S.btView !== "trades");
+  if (short) short.classList.toggle("hidden", S.btView !== "short");
   if (bar) bar.querySelectorAll("[data-bt-view]").forEach((b) => b.classList.toggle("on", b.dataset.btView === S.btView));
+  const out = $("#btOut"); if (out) out.classList.toggle("bt-short-on", S.btView === "short");
+  if (S.btView === "short") { renderShortLayer(); return; }
   if (chartOn && S.bt) {
     const el = $("#eqChart");
     if (el) requestAnimationFrame(() => BigCharts.equity(el, S.bt.equity, { trades: S.bt.trades, starting: (S.bt.summary && S.bt.summary.starting_equity_usdt) }));
@@ -958,12 +1015,16 @@ function renderBt() {
   $("#btOut").innerHTML = `
   <div class="metrics">
     ${M("总收益", pct(m.total_return), "", true)}${M("期末权益 (USDT)", f2(m.ending_equity_usdt))}${M("最大回撤", pct(m.max_drawdown), "neg")}${M("夏普比率（年化）", m.sharpe == null ? "—" : m.sharpe.toFixed(2))}
-    ${M("胜率", pct(m.win_rate, 1))}${M("盈亏比", m.profit_factor == null ? "—" : m.profit_factor.toFixed(2))}${M("已平 / 持仓中", `${m.closed_trades} / ${m.open_trades}`)}${M(esc(m.benchmark), pct(m.benchmark_return), cls(m.benchmark_return))}
+    ${M("胜率", pct(m.win_rate, 1))}${M("盈亏比（均盈 / 均亏）", m.payoff_ratio == null ? "—" : m.payoff_ratio.toFixed(2))}${M("利润因子", m.profit_factor == null ? "—" : m.profit_factor.toFixed(2))}${M("每笔期望 (U)", m.expectancy_usdt == null ? "—" : (m.expectancy_usdt >= 0 ? "+" : "") + m.expectancy_usdt.toFixed(2), cls(m.expectancy_usdt))}
+    ${M("已平 / 持仓中", `${m.closed_trades} / ${m.open_trades}`)}${M(esc(m.benchmark), pct(m.benchmark_return), cls(m.benchmark_return))}
   </div>
+  <div class="note bt-wr-note">${m.win_rate == null ? "" : `趋势系统：胜率 ${pct(m.win_rate, 1)}，但平均盈利 ${m.avg_win_usdt == null ? "—" : f2(m.avg_win_usdt)} U 是平均亏损 ${m.avg_loss_usdt == null ? "—" : f2(-m.avg_loss_usdt)} U 的 ${m.payoff_ratio == null ? "—" : m.payoff_ratio.toFixed(1)} 倍；前 10% 的盈利单贡献净利 ${m.top10_pnl_share == null ? "—" : pct(m.top10_pnl_share, 0)}${m.top10_pnl_share > 1 ? "（超过 100%：其余交易合计为亏）" : ""}。低胜率靠少数大赢单覆盖多次小止损。`} · <span class="book-tag bk-long">长线</span> 4h 核心回测</div>
   <div class="seg bt-view" id="btView" role="tablist" aria-label="回测结果">
     <button type="button" role="tab" data-bt-view="chart">权益曲线</button>
     <button type="button" role="tab" data-bt-view="trades">成交明细（${r.trades.length}）</button>
+    <button type="button" role="tab" data-bt-view="short">短线层研究</button>
   </div>
+  <div class="panel bt-short-panel hidden" id="btShortWrap"><div class="empty">加载中…</div></div>
   <div class="panel bt-chart-panel" id="btChartWrap">
     <div class="sec-title"><h3>权益曲线与回撤</h3><span class="note">#${m.run_id ?? ""} ${esc((m.venue || "").toUpperCase())} · ${esc(m.interval)} · ${tFull(m.start_time)} → ${tFull(m.end_time)} · ${m.bars} 根 · 手续费 ${m.fee_bps} bps · 止损离场 ${m.stop_exits} 次</span></div>
     <div class="chart-box" id="eqChart"></div>
@@ -975,6 +1036,22 @@ function renderBt() {
   </div>`;
   $("#btView").querySelectorAll("[data-bt-view]").forEach((b) => (b.onclick = () => bindBtView(b.dataset.btView)));
   bindBtView(S.btView || "chart");
+}
+
+function bookTag(x) { const sh = x && x.book === "短线"; return `<span class="book-tag ${sh ? "bk-short" : "bk-long"}" title="${sh ? "短线：1m/5m/10m/1h 顺 4h/1D 方向的独立系统" : "长线：4h SMA50/150 核心（日线为上下文）"}">${sh ? "短线" : "长线"}</span>`; }
+async function renderShortLayer() {
+  const host = $("#btShortWrap"); if (!host) return;
+  try { if (!S.shortLayer) S.shortLayer = await api("/api/short_layer"); } catch (e) { host.innerHTML = `<div class="empty">短线层研究读取失败：${esc(e.message)}</div>`; return; }
+  const d = S.shortLayer, R = d.research || {}, rows = R.rows || [];
+  const n = (v, k = 2, sg = false) => v == null ? "—" : (sg && v > 0 ? "+" : "") + (+v).toFixed(k);
+  const st = pgState("btShort", rows.length, fitRows(host, 30, 170, 3));
+  host.innerHTML = `<div class="sec-title"><h3><span class="book-tag bk-short">短线</span> 短线层回测（${esc(R.as_of || "")}）</h3>
+    <label class="sw-line" title="${esc(d.locked_reason || "")}"><input type="checkbox" disabled ${d.enabled ? "checked" : ""}/> <span>${d.enabled ? "已开启" : "关闭"}</span> <small class="muted">${d.validated ? "" : "未通过验证 · 不可开启"}</small></label></div>
+  <div class="note sl-rule">${esc(R.conclusion || "")} 规则：${esc(R.rule || "")}。参数（训练段挑选）：突破 ${R.params ? R.params.breakout_n : "—"} 根 · 止损 ${R.params ? R.params.stop_atr : "—"}×ATR · 逆破 EMA${R.params ? R.params.exit_ema : "—"} · 最长 ${R.params ? R.params.max_bars : "—"} 根 · 单笔风险 0.5% · 单币 ≤10% · 独立预算 ${R.params ? R.params.budget_u : "—"} U。</div>
+  <div class="tbl-wrap"><table class="tbl sl-tbl"><thead><tr><th>数据段</th><th>费率</th><th>笔数</th><th>胜率</th><th>盈亏比</th><th>利润因子</th><th>每笔期望 U</th><th>毛利 / 手续费 U</th><th>费 / |毛利|</th><th>净收益</th></tr></thead><tbody>
+  ${rows.slice(st.start, st.end).map((x) => `<tr><td title="${esc(x.label)}">${esc(x.label)}</td><td>${x.stress ? "压力" : "真实"}</td><td class="num">${x.trades ?? "—"}</td><td class="num">${n(x.win_rate, 1)}%</td><td class="num">${n(x.payoff)}</td><td class="num">${n(x.profit_factor)}</td><td class="num ${cls(x.expectancy_u)}">${n(x.expectancy_u, 3, true)}</td><td class="num"><span class="${cls(x.gross_u)}">${n(x.gross_u, 0, true)}</span> / ${n(x.fees_u, 0)}</td><td class="num">${x.fee_drag_pct == null ? "—" : Math.round(x.fee_drag_pct) + "%"}</td><td class="num ${cls(x.ret_pct)}">${n(x.ret_pct, 1, true)}%</td></tr>`).join("")}
+  </tbody></table></div><div id="slPager"></div>`;
+  const pg = $("#slPager"); if (pg) { pg.innerHTML = pagerHtml("btShort", st); bindPager("btShort", renderShortLayer); }
 }
 
 /* ---------- 持仓 ---------- */
@@ -999,7 +1076,7 @@ function renderPosTable() {
     const mark = posMark(p), pnl = posUpnl(p, mark);
     const live = `data-sym="${p.symbol}" data-mkt="${p.market}" data-entry="${p.entry_price}" data-qty="${p.qty}" data-side="${p.side}" data-mark="${p.mark_price ?? ""}" data-mark-time="${esc(p.mark_time || "")}"`;
     const ti = tpInfo({ symbol: p.symbol, side: p.side });
-    return `<tr><td><div class="pt-sym">${coin(p.symbol)}<div><b>${base(p.symbol)}</b><div class="pt-tags"><span class="side-tag ${p.side}">${p.side === "short" ? "空" : "多"}·${p.market === "perp" ? "永续" : "现货"}</span>${p.halted ? '<span class="pill flat rp-halt">已停止</span>' : ""}</div></div></div></td>
+    return `<tr><td><div class="pt-sym">${coin(p.symbol)}<div><b>${base(p.symbol)}</b><div class="pt-tags"><span class="side-tag ${p.side}">${p.side === "short" ? "空" : "多"}·${p.market === "perp" ? "永续" : "现货"}</span>${bookTag(p)}${p.halted ? '<span class="pill flat rp-halt">已停止</span>' : ""}</div></div></div></td>
       <td class="num" title="${fp(p.qty, 10)} ${base(p.symbol)}">${fp(p.qty, 6)} <small class="muted">${base(p.symbol)}</small><br><small class="muted">≈${mark != null ? f2(p.qty * mark, 0) : "—"} U</small></td>
       <td class="num" title="入场 ${tFull(p.entry_time)} · ${esc((p.venue || S.status.settings.venue || "").toUpperCase())}">${fpPx(p.entry_price)}<br><small class="muted">${tCompact(p.entry_time)}</small></td>
       <td class="num"><span data-live="px" ${live}>${fpPx(mark)}</span><br><small class="muted">${esc(p.mark_source || "—")}</small></td>
@@ -1063,14 +1140,16 @@ function tradeRowHtml(tr) {
   const exitReason = tr.exit_reason ? ptText(tr.exit_reason) : "";
   const exitPill = (tr.partial_tp ? `<span class="pill long reason-pill" title="分批止盈 ${fp(tr.partial_tp_qty || 0)}，已实现 ${f2(tr.partial_tp_pnl_usdt || 0)} U">止盈·分批</span> ` : "") + (exitReason ? `<span class="pill ${exitReason === "止盈" ? "long" : (exitReason.indexOf("止损") >= 0 ? "short" : "flat")} reason-pill">${esc(exitReason)}</span>` : "");
   const reason = [tr.entry_reason ? "入场：" + ptText(tr.entry_reason) : "", exitReason ? "离场：" + exitReason : ""].filter(Boolean).join("  ");
-  const reasonHtml = [tr.entry_reason ? "入场：" + esc(ptText(tr.entry_reason)) : "", exitReason ? "离场：" + exitPill : ""].filter(Boolean).join("  ");
+  const actCls = (a) => (/止损/.test(a) ? "short" : /止盈/.test(a) ? "long" : /反手/.test(a) ? "info" : /开多/.test(a) ? "long" : /开空/.test(a) ? "short" : "flat");
+  const actPill = (a, t) => (a ? `<span class="pill act-pill ${actCls(a)}"${t ? ` title="${esc(t)}"` : ""}>${esc(a)}</span> ` : "");
+  const reasonHtml = [tr.entry_reason ? "入场：" + actPill(tr.entry_action) + esc(ptText(tr.entry_reason)) : "", exitReason ? "离场：" + actPill(tr.exit_action, tr.exit_note) + exitPill + (tr.exit_note ? ` <small class="muted" title="${esc(tr.exit_note)}">未反手</small>` : "") : ""].filter(Boolean).join("  ");
   const mode = (tr.mode === "live" ? "实盘" : "纸面") + (tr.venue ? " · " + String(tr.venue).toUpperCase() : "");
   const exitCell = open
     ? `<span class="exit-dash">—</span><span class="exit-live" data-live="px" data-px-prefix="现价 " ${live}>${pxOk(mark) ? "现价 " + fpPx(mark) : "—"}</span>`
     : fpPx(tr.exit_price);
   return `<tr class="${open ? "open-tr" : ""}">
     <td class="time-c"><div>${tr.entry_time ? tCompact(tr.entry_time) : "—"}</div><div class="ds">${open ? "持仓中" : (tr.exit_time ? tCompact(tr.exit_time) : "—")}</div></td>
-    <td class="sym-c"><div class="sym-line">${coin(tr.symbol)}<div><b>${base(tr.symbol)}</b><div class="ds"><span class="side-tag ${tr.side}">${sideCn(tr.side)}</span> ${mktCn(tr.market)} · ${esc(mode)}</div></div></div>
+    <td class="sym-c"><div class="sym-line">${coin(tr.symbol)}<div><b>${base(tr.symbol)}</b><div class="ds"><span class="side-tag ${tr.side}">${sideCn(tr.side)}</span>${bookTag(tr)} ${mktCn(tr.market)} · ${esc(mode)}</div></div></div>
       ${reasonHtml ? `<div class="reason" title="${esc(reason)}">${reasonHtml}</div>` : ""}</td>
     <td class="num">${fqty(tr.qty)}</td>
     <td class="num">${fpPx(tr.entry_price)}</td>
@@ -1096,14 +1175,14 @@ function pageRisk() {
     <div class="set-main">
       <div class="set-panes">
         <section class="set-pane panel" data-pane="auto" role="tabpanel">
-          <div class="sec-title"><h3>自动交易 <span class="muted" style="font-weight:500;font-size:13px">纸面执行</span>${infoTip("<b>后台循环每隔设定秒数：</b><ol><li>拉取 OKX / Gate 官方公共行情</li><li>用已收盘 K 线计算信号</li><li>检查止损</li><li>在<b>纸面账本</b>按最新价调仓</li></ol>实盘只有在「设置」页通过全部闸门后才会发单。", "自动交易说明")}</h3>
+          <div class="sec-title"><h3>自动交易 <span class="muted" style="font-weight:500;font-size:13px">纸面执行</span>${infoTip("<b>事件驱动（不定时轮询）：</b><ol><li>每个官方 WS 报价 tick：判定持仓止损 / 止盈</li><li>每根 4h / 日线 K 线收盘确认：立即计算信号并开平 / 反手 / 调仓</li><li>1m / 5m / 10m / 1h 收盘：短线层评估（未通过验证，关闭）</li><li>WS 断线时才用 REST 补数据</li></ol>实盘只有在「设置」页通过全部闸门后才会发单。开启时先选择交易币种。", "自动交易说明")}</h3>
             <span class="pill ${w.running ? "long" : "flat"}">${w.running ? "运行中" : "已停止"}</span></div>
           <div class="worker-row">
-            <label class="field" style="width:150px">检查间隔（秒）<input id="wInt" type="number" min="60" value="${s.worker.interval_sec}"/></label>
+            <div class="rt-box" id="rtBox"><small>实时事件 → 决策</small><b class="num" id="rtLat">—</b></div>
             <button class="btn ${w.running ? "stop" : "go"}" id="wToggle" aria-pressed="${w.running}">${w.running ? ic("stop") + "停止自动交易" : ic("play") + "开启自动交易"}</button>
             <button class="btn ghost" id="cycleNow" title="手动跑一轮系统化周期（纸面）">${ic("play")}跑一轮</button>
           </div>
-          <div class="note" style="margin-top:12px">上次执行：${tFull(w.last_run, true)}${w.running ? ` · 下次约 ${w.next_run_in_sec ?? "—"} 秒后` : ""}${w.last_error ? `<br><span class="neg">错误：${esc(w.last_error)}</span>` : ""}</div>
+          <div class="note" style="margin-top:12px">交易币种：${s.symbols.map(base).join("、")}（${s.symbols.length}）· 上次决策：${tFull(w.last_run, true)}${w.running ? ` · 触发：${esc(trigCn(w.last_trigger))} · WS 断线兜底约 ${w.next_run_in_sec ?? "—"} 秒后` : ""}${w.last_error ? `<br><span class="neg">错误：${esc(w.last_error)}</span>` : ""}</div>
         </section>
         <section class="set-pane panel danger-panel" data-pane="kill" role="tabpanel">
           <div class="sec-title"><h3>紧急操作</h3></div>
@@ -1177,7 +1256,7 @@ function pageRisk() {
   $("#saveRisk").onclick = async () => {
     const b = $("#saveRisk"); b.disabled = true;
     try {
-      await api("/api/settings", { method: "PUT", body: { symbols: syms, worker: { interval_sec: +$("#wInt").value },
+      await api("/api/settings", { method: "PUT", body: { symbols: syms, worker: {},
         risk: { starting_equity_usdt: +$("#rEq").value, max_risk_per_trade: +$("#rRisk").value, max_weight_per_name: +$("#rW").value, allow_spot_long: $("#rSpot").checked, allow_perp_short: $("#rPerp").checked },
         fees: { spot_taker_bps: +$("#rFeeSpotTaker").value, spot_maker_bps: +$("#rFeeSpotMaker").value, perp_taker_bps: +$("#rFeePerpTaker").value, perp_maker_bps: +$("#rFeePerpMaker").value },
         strategy: { interval: $("#sInt").value, fast_ma: +$("#sFast").value, slow_ma: +$("#sSlow").value, atr_period: +$("#sAtrP").value, atr_stop_mult: +$("#sAtr").value, confirm_bars: +$("#sConf").value, trend_ma: +$("#sTrend").value, short_breaker_bars: +$("#sSB").value, pyramid_r: +$("#sPyrR").value, pyramid_frac: +$("#sPyrF").value, tp_r: +$("#sTpR").value, tp_reentry: $("#sTpRe").checked,
@@ -1190,12 +1269,13 @@ function pageRisk() {
     const b = e.currentTarget; b.disabled = true;
     try {
       if (S.status.worker.running) { await api("/api/worker/stop", { method: "POST" }); toast("自动交易已停止"); }
-      else { await api("/api/settings", { method: "PUT", body: { worker: { interval_sec: +$("#wInt").value } } }); await api("/api/worker/start", { method: "POST" }); toast("自动交易已开启（纸面执行）"); }
+      else { const ok = await pickCoins(); if (!ok) { b.disabled = false; return; } }
       await refreshAll(); pageRisk();
     } catch (er) { toast(er.message, true); b.disabled = false; }
   };
   $("#cycleNow").onclick = (e) => runCycle(e.currentTarget);
   $("#killBig").onclick = killSwitch;
+  loadRt();
   $("#resetPaper").onclick = async () => { if (!(await confirmBox("重置纸面账本", "将清空全部纸面持仓、成交与账本历史，并恢复起始资金。", "确认重置", true))) return; try { await api("/api/paper/reset", { method: "POST" }); toast("纸面账本已重置"); refreshAll(); } catch (e) { toast(e.message, true); } };
 }
 
@@ -1316,6 +1396,7 @@ function applyForming() {
     if (f1.time < lb.time) return;
     f = { time: lb.time, open: lb.open, high: Math.max(lb.high, f1.high), low: Math.min(lb.low, f1.low), close: f1.close, source: f1.source };
     try { c._candle.update(f); c._lastBar = { ...lb, high: f.high, low: f.low, close: f.close }; c._liveAt = Date.now(); c._liveKind = /_ws$/.test(f1.source || "") ? "WebSocket·1m" : "REST"; } catch (_) {}
+    if (c._ohlcIdle && !c._hover) c._ohlcIdle();
     renderChartSrc();
     return;
   }
@@ -1329,7 +1410,8 @@ function applyForming() {
     return;
   }
   if (f.time >= (c._last || 0)) {
-    try { c._candle.update({ time: f.time, open: f.open, high: f.high, low: f.low, close: f.close }); c._last = f.time; c._liveAt = Date.now(); c._liveKind = /_ws$/.test(f.source || "") ? "WebSocket" : "REST"; } catch (_) {}
+    try { c._candle.update({ time: f.time, open: f.open, high: f.high, low: f.low, close: f.close }); c._last = f.time; c._lastBar = { time: f.time, open: f.open, high: f.high, low: f.low, close: f.close }; c._liveAt = Date.now(); c._liveKind = /_ws$/.test(f.source || "") ? "WebSocket" : "REST"; } catch (_) {}
+    if (c._ohlcIdle && !c._hover) c._ohlcIdle();
   }
   renderChartSrc();
 }

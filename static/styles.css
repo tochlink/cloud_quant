@@ -725,3 +725,39 @@ i[data-icon]{display:inline-flex;align-items:center;justify-content:center;line-
 .yoy-tip .yoy-diff{margin-top:3px;padding-top:3px;border-top:1px dashed #ece8fd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .yoy-tip .pos{color:#1a9a68}.yoy-tip .neg{color:#d33f5a}
 .sig-page.yoy-on .chart-ctl{flex:1 1 100%;min-width:0;justify-content:flex-start}
+.act-pill{font-size:10.5px;padding:0 6px;line-height:16px;font-weight:700}
+
+/* 2026-11-13 v4：长线 / 短线标签、K 线悬停 OHLC 栏、开始交易选币弹窗、事件驱动延迟、短线层研究 */
+.book-tag{display:inline-flex;align-items:center;height:16px;padding:0 5px;margin-left:4px;border-radius:4px;font-size:10.5px;font-weight:600;line-height:16px;white-space:nowrap;vertical-align:middle}
+.book-tag.bk-long{background:#ece8fd;color:#4b3aa6}
+.book-tag.bk-short{background:#fff1d6;color:#a86400}
+.sig-dir{display:flex;align-items:center;gap:2px;flex-wrap:nowrap}
+.k-ohlc{position:absolute;left:8px;top:6px;z-index:3;display:flex;flex-wrap:wrap;gap:2px 10px;max-width:calc(100% - 90px);padding:3px 8px;border-radius:6px;background:rgba(255,255,255,.86);font-size:11.5px;line-height:17px;pointer-events:none;font-variant-numeric:tabular-nums;color:#2b2550}
+.k-ohlc:empty{display:none}
+.k-ohlc em{font-style:normal;color:#8a86a8;margin-right:3px}
+.k-ohlc .pos{color:#1f9a6b}.k-ohlc .neg{color:#d9445e}
+.coin-pick-bar{display:flex;align-items:center;justify-content:space-between;margin:10px 0 6px}
+.coin-pick{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;max-height:min(300px,40vh);overflow:auto}
+.cp-item{display:flex;align-items:center;gap:6px;padding:7px 8px;border:1px solid #ece8fd;border-radius:8px;cursor:pointer;font-size:13px;white-space:nowrap}
+.cp-item:has(input:checked){border-color:#6c5ce7;background:#f6f4ff}
+.cp-item .coin{width:18px;height:18px;flex:none}
+.cp-item small{margin-left:auto}
+.cp-policy{margin-top:10px;padding:8px 10px;border-radius:8px;background:#fff8ec;display:flex;flex-direction:column;gap:4px;font-size:12.5px}
+.cp-policy .radio{display:flex;align-items:center;gap:6px;cursor:pointer}
+.rt-box{display:flex;flex-direction:column;justify-content:center;padding:4px 10px;border:1px solid #ece8fd;border-radius:8px;min-width:200px}
+.rt-box small{color:#8a86a8;font-size:11.5px}.rt-box b{font-size:13px}
+.bt-out .metrics{grid-template-columns:repeat(5,minmax(0,1fr))}
+.bt-wr-note{flex:none;margin:-2px 0 0;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt-short-panel{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.bt-short-panel.hidden{display:none}
+.bt-short-panel .sl-rule{flex:none;margin:0 0 6px;font-size:12px}
+.bt-short-panel .tbl-wrap{flex:1 1 auto;min-height:0;overflow:hidden}
+.sl-tbl td,.sl-tbl th{padding:5px 8px;font-size:12px;white-space:nowrap}
+.sw-line{display:inline-flex;align-items:center;gap:6px;font-size:12.5px}
+#modalCard.coin-modal{width:min(660px,94vw);max-width:none}
+.coin-modal .cp-item{min-width:0}
+.coin-modal .cp-item b{overflow:hidden;text-overflow:ellipsis}
+.bt-out.bt-short-on .metrics,.bt-out.bt-short-on .bt-wr-note{display:none}
+.sl-tbl td:first-child{max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.sig-sym .book-tag{margin-left:6px}.side-tag{white-space:nowrap}
+.yoy-tip{width:568px;max-width:calc(100% - 76px)}.yoy-tip td,.yoy-tip th{padding:0 2px}.yoy-tip th:first-child,.yoy-tip td:first-child{width:40px}.yoy-tip th:nth-child(2),.yoy-tip td:nth-child(2){width:38px}

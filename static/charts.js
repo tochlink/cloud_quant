@@ -293,6 +293,31 @@
       c._last = d.candles.length ? d.candles[d.candles.length - 1].time : 0;
       c._lastClosed = c._last; // 已收盘最后一根；未收盘跳动只更新 c._last
       c._lastBar = d.candles.length ? { ...d.candles[d.candles.length - 1] } : null;
+      // 悬停 OHLC 栏（固定在图内左上）：时间 / 开盘 / 最高 / 最低 / 收盘 / 涨跌额（收−前收）/ 涨跌幅 / 振幅（(高−低)/前收）
+      const prevOf = new Map();
+      d.candles.forEach((k, i) => { if (i > 0) prevOf.set(k.time, d.candles[i - 1].close); });
+      let bar = el.querySelector(".k-ohlc");
+      if (!bar) { bar = document.createElement("div"); bar.className = "k-ohlc"; el.appendChild(bar); }
+      const fpx = (v) => { v = +v; const a = Math.abs(v); return a >= 1000 ? v.toFixed(2) : a >= 1 ? v.toFixed(4) : v.toPrecision(5); };
+      const show = (k) => {
+        if (!k) { bar.innerHTML = ""; return; }
+        let pc = prevOf.get(k.time);
+        if (pc == null && c._lastBar && k.time > c._lastClosed) pc = c._lastClosedClose;
+        const chg = pc ? k.close - pc : null, pct = pc ? (k.close / pc - 1) * 100 : null, amp = pc ? (k.high - k.low) / pc * 100 : null;
+        const cl = (v) => (v == null ? "" : v >= 0 ? "pos" : "neg");
+        const sg = (v, f) => (v == null ? "—" : (v >= 0 ? "+" : "\u2212") + f(Math.abs(v)));
+        bar.innerHTML = `<span><em>时间</em>${window.PT.full(k.time)}</span><span><em>开盘</em>${fpx(k.open)}</span><span><em>最高</em>${fpx(k.high)}</span><span><em>最低</em>${fpx(k.low)}</span><span><em>收盘</em><b>${fpx(k.close)}</b></span>`
+          + `<span class="${cl(chg)}"><em>涨跌额</em>${sg(chg, fpx)}</span><span class="${cl(pct)}"><em>涨跌幅</em>${sg(pct, (x) => x.toFixed(2) + "%")}</span><span><em>振幅</em>${amp == null ? "—" : amp.toFixed(2) + "%"}</span>`;
+      };
+      c._lastClosedClose = d.candles.length ? d.candles[d.candles.length - 1].close : null;
+      c._ohlcShow = show;
+      c._ohlcIdle = () => show(c._lastBar);
+      show(c._lastBar);
+      c.subscribeCrosshairMove((pr) => {
+        const k = pr && pr.time != null && pr.seriesData ? pr.seriesData.get(s) : null;
+        c._hover = !!(k && k.open != null);
+        if (c._hover) show({ ...k, time: pr.time }); else show(c._lastBar);
+      });
       return c;
     },
     /* 同比叠加：横轴 = 参考年 2000 的同月同日（UTC），刻度只显示 月-日。
@@ -341,11 +366,12 @@
           if (k == null) return { sr, i, p: null };
           const p = sr.points[k], prev = k > 0 ? sr.points[k - 1] : null, r = p.raw || [p.value, p.value, p.value, p.value];
           const prc = prev ? (prev.raw ? prev.raw[3] : prev.value) : r[0];
-          return { sr, i, p, r, chg: prc ? (r[3] / prc - 1) * 100 : null, ytd: sr.first_close ? (r[3] / sr.first_close - 1) * 100 : null };
+          return { sr, i, p, r, chg: prc ? (r[3] / prc - 1) * 100 : null, chgAbs: prc ? r[3] - prc : null, amp: prc ? (r[1] - r[2]) / prc * 100 : null,
+                   ytd: sr.first_close ? (r[3] / sr.first_close - 1) * 100 : null };
         });
         if (!rows.some((x) => x.p)) { tip.style.display = "none"; return; }
-        const head = `<tr><th>年份</th><th>日期</th><th>开</th><th>高</th><th>低</th><th>收</th><th>涨跌</th><th>年内</th></tr>`;
-        const body = rows.map((x) => `<tr><td><i style="background:${colorOf(x.i, n)}"></i>${x.sr.year}</td>${x.p ? `<td>${escH(String(x.p.date).slice(5, d.interval === "4h" ? 16 : 10))}</td><td>${fp(x.r[0])}</td><td>${fp(x.r[1])}</td><td>${fp(x.r[2])}</td><td><b>${fp(x.r[3])}</b></td><td class="${cl(x.chg)}">${sg(x.chg)}</td><td class="${cl(x.ytd)}">${sg(x.ytd, 1)}</td>` : `<td colspan="7" class="muted">当天无 K 线</td>`}</tr>`).join("");
+        const head = `<tr><th>年份</th><th>日期</th><th>开盘</th><th>最高</th><th>最低</th><th>收盘</th><th>涨跌额</th><th>涨跌幅</th><th>振幅</th><th>年内</th></tr>`;
+        const body = rows.map((x) => `<tr><td><i style="background:${colorOf(x.i, n)}"></i>${x.sr.year}</td>${x.p ? `<td>${escH(String(x.p.date).slice(5, d.interval === "4h" ? 16 : 10))}</td><td>${fp(x.r[0])}</td><td>${fp(x.r[1])}</td><td>${fp(x.r[2])}</td><td><b>${fp(x.r[3])}</b></td><td class="${cl(x.chgAbs)}">${x.chgAbs == null ? "—" : (x.chgAbs >= 0 ? "+" : "\u2212") + fp(Math.abs(x.chgAbs))}</td><td class="${cl(x.chg)}">${sg(x.chg)}</td><td>${x.amp == null ? "—" : x.amp.toFixed(2) + "%"}</td><td class="${cl(x.ytd)}">${sg(x.ytd, 1)}</td>` : `<td colspan="9" class="muted">当天无 K 线</td>`}</tr>`).join("");
         const L = rows[rows.length - 1];
         const diffs = L && L.p ? rows.slice(0, -1).filter((x) => x.p).map((x) => {
           const dp = L.r[3] - x.r[3], dpc = (L.r[3] / x.r[3] - 1) * 100, gap = L.ytd - x.ytd;
