@@ -367,6 +367,7 @@ class PaperBook:
             pos = self.positions.get(sym)
             for op in stack:
                 out.append(rec(op, None, pos=pos, adj=adjs.pop(int(op["fill_id"]), [])))
+        label_actions(out)
         return out
 
     def ledger(self) -> list[dict]:
@@ -378,3 +379,49 @@ class PaperBook:
 
     def orders(self, limit: int = 300) -> list[dict]:
         return self._q(f"SELECT {','.join(ORDER_COLS)} FROM orders ORDER BY id DESC LIMIT ?", (limit,))
+
+
+def _ts(x):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(x).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+EXIT_ACTION = {"ATR止损": "止损", "保本止损": "止损", "止盈": "止盈", "信号转空仓": "平仓", "快速离场": "平仓",
+               "手动平仓": "手动平仓", "一键清仓": "清仓"}
+
+
+def label_actions(trades: list[dict], window_sec: float = 300.0) -> list[dict]:
+    """给开平配对记录加上动作标签（页面展示用）：
+    entry_action：开多 / 开空 / 反手开多 / 反手开空（同币在 window_sec 内刚因「信号反转」平掉反方向）；
+    exit_action：反手（信号反转且随即开了反方向）/ 平仓 / 止损 / 止盈 / 手动平仓 / 清仓；
+    exit_note：信号反转但新方向没有开仓时说明原因（被入场过滤拦截，如 BTC 熊市过滤 / 趋势过滤 / 止损锁定）。"""
+    for t in trades:
+        t["entry_action"] = ("开多" if t.get("side") == "long" else "开空") if t.get("entry_time") else ""
+        t["exit_action"], t["exit_note"] = "", ""
+    by_sym: dict[str, list] = {}
+    for t in trades:
+        by_sym.setdefault(t["symbol"], []).append(t)
+    for rows in by_sym.values():
+        for t in rows:
+            if t.get("status") != "closed":
+                continue
+            r = str(t.get("exit_reason") or "")
+            base = r.split("（", 1)[0]
+            if base == "信号反转":
+                xt = _ts(t.get("exit_time"))
+                nxt = [u for u in rows if u is not t and u.get("side") != t.get("side") and xt is not None
+                       and _ts(u.get("entry_time")) is not None and 0 <= _ts(u.get("entry_time")) - xt <= window_sec]
+                if nxt:
+                    t["exit_action"] = "反手"
+                    for u in nxt[:1]:
+                        u["entry_action"] = "反手开多" if u.get("side") == "long" else "反手开空"
+                else:
+                    t["exit_action"] = "平仓"
+                    t["exit_note"] = "信号已反转，但新方向被入场过滤拦截（如 BTC 熊市过滤 / 趋势过滤 / 止损锁定），只平仓未反手"
+            else:
+                t["exit_action"] = EXIT_ACTION.get(base, "止盈" if base.startswith("止盈") else "平仓")
+    return trades
+
