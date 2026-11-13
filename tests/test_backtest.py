@@ -82,13 +82,35 @@ def nobal():
 
 def test_longs_use_spot_and_shorts_use_perp_prices():
     data = book(4)
-    r = run_backtest(data, nobal())  # 关闭调仓：调仓加仓会把入场价变成加权均价
+    c = nobal()
+    c = {**c, "risk": {**c["risk"], "trade_mode": "spot_perp"}}  # 旧口径：现货做多 + 永续做空
+    r = run_backtest(data, c)  # 关闭调仓：调仓加仓会把入场价变成加权均价
     tr = r["trades"]
     assert (tr.side == "long").any() and (tr.side == "short").any()
     for _, t in tr.iterrows():
         src = data["spot" if t.side == "long" else "perp"][t.symbol].set_index("open_time")
         assert t.market == ("spot" if t.side == "long" else "perp")
         assert t.entry_price == pytest.approx(src.loc[pd.Timestamp(t.entry_time), "open"])
+
+
+def test_perp_both_mode_trades_longs_on_perp_with_leverage_margin():
+    data = book(4)
+    c = nobal()
+    c = {**c, "risk": {**c["risk"], "trade_mode": "perp_both", "perp_leverage": 10}}
+    r = run_backtest(data, c)
+    tr = r["trades"]
+    assert (tr.side == "long").any() and (tr.side == "short").any()
+    for _, t in tr.iterrows():
+        src = data["perp"][t.symbol].set_index("open_time")
+        assert t.market == "perp"
+        assert t.entry_price == pytest.approx(src.loc[pd.Timestamp(t.entry_time), "open"])
+        assert 1 <= t.leverage <= 10
+        # 止损必须先于强平
+        assert (t.init_stop > t.liq_price) if t.side == "long" else (t.init_stop < t.liq_price)
+    assert r["summary"]["liquidations"] == 0
+    # 杠杆只决定保证金，不放大风险：1 倍与 10 倍收益相同
+    c1 = {**c, "risk": {**c["risk"], "perp_leverage": 1}}
+    assert run_backtest(data, c1)["summary"]["ending_equity_usdt"] == pytest.approx(r["summary"]["ending_equity_usdt"])
 
 
 def test_caps_hold():

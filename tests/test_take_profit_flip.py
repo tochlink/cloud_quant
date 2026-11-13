@@ -13,6 +13,7 @@ from tests.test_backtest import book
 def _cfg(**st):
     c = copy.deepcopy(S.DEFAULTS)
     c["symbols"] = []
+    c["risk"]["trade_mode"] = "spot_perp"  # 本文件的价格构造按「现货做多 + 永续做空」口径
     c["strategy"].update(trend_ma=0, short_breaker_bars=0, name_vol_target=0, **st)  # 单币封顶会引发调仓加仓、改写加权入场价，这里只测止盈机制
     return c
 

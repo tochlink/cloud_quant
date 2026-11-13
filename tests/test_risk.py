@@ -45,7 +45,11 @@ def test_settings_reject_looser_risk():
     with pytest.raises(ValueError):
         S.validate(s)
     s = S.load()
-    s["risk"]["perp_leverage"] = 3
+    s["risk"]["perp_leverage"] = 101  # 1–100 倍；默认 10
+    with pytest.raises(ValueError):
+        S.validate(s)
+    s = S.load()
+    s["risk"]["max_gross_exposure"] = 1.5
     with pytest.raises(ValueError):
         S.validate(s)
 
