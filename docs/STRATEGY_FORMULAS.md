@@ -4351,3 +4351,10 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 结论：否决，不进观察名单，不做 walk-forward（没有任何格两所同时在收益和 Sharpe 上胜过基线）。"最近来回翻转多的币缩仓"带来的 Sharpe 提升完全可由等量降杠杆解释。
 - CSV：`output/research_whipsaw_count_sizing_long_history.csv`、`output/research_whipsaw_count_sizing_placebo_long_history.csv`（未推送）；脚本 `scratch/wsz_long.py`、`scratch/wsz_pl.py`（对 run_backtest 源码打补丁，在 SIG 之后改写 NVM，不改仓库代码）。
 - 下一族：出场侧或执行侧中轮换日志未出现的想法（例如止损单在官方 1h K 线上的触发顺序 / 跳空成交价敏感性之外的新方向）。
+
+## 执行层：现货平多卖出数量夹到交易所可用余额（买入手续费从到手币里扣，2026-11-13 09:15 PST，含代码修复，不改策略默认）
+
+- 问题：OKX / Gate 现货市价买入的手续费默认从到手的币里扣（Gate 未开 GT 抵扣时同样），买 Q 个币实得约 `Q × (1 − 0.10%)`。账本与回测按 Q 记（手续费按 USDT 计，经济上等价），但实盘链路平多时直接按账本数量 Q 发卖单，交易所会以余额不足拒单，仓位留在交易所、账本却已平仓。纸面模式与回测不受影响。
+- 修复：`qtw/engine.py` 新增 `clamp_spot_sell`，只在实盘闸门全开、现货 `close_long`（信号离场、止损、调仓减仓、手动平仓都走 `_route`）时生效：先只读查询该币可用余额（OKX `GET /api/v5/account/balance?ccy=…` 的 `availBal`；Gate `GET /spot/accounts?currency=…` 的 `available`），卖出数量 = `floor_qty(min(账本数量, 可用余额))`（按交易所步长 / 最小量 / 最小金额向下取整）；余额足够时原样发单；查询失败时按原数量发并在订单日志写明；夹完低于最小下单量时不发单、记为 error。夹量说明写进订单日志 detail。`OkxTrader.spot_available`、`GateTrader.spot_available` 为只读接口，不下单。
+- 测试：`tests/test_spot_sell_clamp.py`（夹量、余额足够 / 查询失败 / 无接口不夹、低于最小量返回 0、两所余额解析与 OKX 带查询串签名），全套 253 个测试通过。
+- 未改：策略默认、回测、纸面账本。买入后的实际到手数量与账本的差（约 0.1%）仍由账本按 USDT 手续费口径计；实盘对账以交易所余额为准。
