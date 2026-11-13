@@ -73,6 +73,21 @@ DEFAULTS: dict[str, Any] = {
         # tp_reentry = False：止盈后像止损一样锁定，信号改变前不再开同向仓；True：下一根若信号仍在则按新 ATR 重新开仓。0=关闭
         "tp_r": 0.0,
         "tp_reentry": False,
+        # 2026-11-13：可选分批止盈 + 保本止损（默认关闭）。浮盈触及 入场价 ± tp_partial_r × R0（R0 = 入场价到初始止损的距离，
+        # 即 atr_stop_mult × ATR）时按吃单平掉 tp_frac 比例（原因「止盈」）；tp_breakeven = True 时剩余仓位止损移到保本价
+        # （入场价，tp_be_fees = True 时再加两条腿 taker 手续费），之后触及记「保本止损」。已部分止盈的持仓不再参与调仓带。
+        # 回测 / 模拟盘周期 / 实时止损轮询同一公式（engine.partial_tp_price / breakeven_price）。
+        "tp_partial": False,
+        "tp_partial_r": 2.0,
+        "tp_frac": 0.5,
+        "tp_breakeven": False,
+        "tp_be_fees": True,
+        # 2026-11-13：可选快速层离场（默认关闭）：用官方 1m/5m（10m 由 1m/5m 聚合）或 1D K 线判断 4h 持仓的趋势是否已破。
+        # fast_exit_tf = off | 5m | 10m | 1d；该周期收盘价相对 EMA(fast_exit_n) 逆持仓方向（多：收盘 < EMA；空：收盘 > EMA）
+        # 连续 fast_exit_confirm 根已收盘 K 线即平仓（原因「快速离场」），并像止损一样锁定到 4h 信号改变。
+        "fast_exit_tf": "off",
+        "fast_exit_n": 50,
+        "fast_exit_confirm": 2,
         # 2026-11-11：持仓调仓（每根新收盘 K 线一次）。目标名义 = min(权益×单笔风险/现有止损距离%, 权益×单币权重)，
         # 再按总敞口等比缩放；|当前−目标|/目标 > rebalance_band 才调，先减后加，止损不变（见 qtw/rebalance.py）。
         # 真实费率（现货 10 / 永续 5.1 bps）：前 6 段选出 0.1，后 6 段（未参与选择）OKX +33.6% vs 基线 +29.4%，
@@ -230,6 +245,24 @@ def validate(s: dict) -> dict:
     if st["tp_r"] and not 0.5 <= st["tp_r"] <= 20:
         raise ValueError("止盈倍数需为 0（关闭）或 0.5–20 R")
     st["tp_reentry"] = bool(st.get("tp_reentry", False))
+    st["tp_partial"] = bool(st.get("tp_partial", False))
+    st["tp_partial_r"] = float(st.get("tp_partial_r", 2.0) or 2.0)
+    if not 0.5 <= st["tp_partial_r"] <= 20:
+        raise ValueError("分批止盈倍数需在 0.5–20 R 之间")
+    st["tp_frac"] = float(st.get("tp_frac", 0.5) or 0.5)
+    if not 0.05 <= st["tp_frac"] <= 0.95:
+        raise ValueError("分批止盈比例需在 5%–95% 之间")
+    st["tp_breakeven"] = bool(st.get("tp_breakeven", False))
+    st["tp_be_fees"] = bool(st.get("tp_be_fees", True))
+    st["fast_exit_tf"] = str(st.get("fast_exit_tf", "off") or "off")
+    if st["fast_exit_tf"] not in ("off", "5m", "10m", "1d"):
+        raise ValueError("快速离场周期只能是 off / 5m / 10m / 1d")
+    st["fast_exit_n"] = int(st.get("fast_exit_n", 50) or 50)
+    if not 5 <= st["fast_exit_n"] <= 500:
+        raise ValueError("快速离场 EMA 周期需在 5–500 之间")
+    st["fast_exit_confirm"] = int(st.get("fast_exit_confirm", 2) or 1)
+    if not 1 <= st["fast_exit_confirm"] <= 12:
+        raise ValueError("快速离场确认根数需在 1–12 之间")
     st["rebalance_band"] = float(st.get("rebalance_band", 0) or 0)
     if st["rebalance_band"] and not 0.05 <= st["rebalance_band"] <= 2:
         raise ValueError("调仓阈值需为 0（关闭）或 0.05–2（即 5%–200%）")
