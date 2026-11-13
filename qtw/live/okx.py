@@ -63,7 +63,7 @@ def _send(req: dict) -> dict:
 
 def order_payload(symbol: str, market: str, action: str, qty: float, price: float, spec: dict | None = None,
                   pos_mode: str = "net_mode") -> dict:
-    """action: open_long(现货买) / close_long(现货卖) / open_short(永续卖) / close_short(永续买, reduceOnly)。
+    """action: open_long / close_long（现货或永续）/ open_short(永续卖) / close_short(永续买, reduceOnly)。
     pos_mode：OKX 账户持仓模式。开平仓模式（long_short_mode）下永续单必须带 posSide（本系统只做空 → "short"），
     且 reduceOnly 只适用于买卖模式（net_mode），不带；否则交易所会拒单（posSide 参数错误）。"""
     base = symbol[:-4]
@@ -73,11 +73,12 @@ def order_payload(symbol: str, market: str, action: str, qty: float, price: floa
                 "ordType": "market", "tgtCcy": "base_ccy", "sz": f"{qty:.12g}"}
     spec = spec or {"ct_val": 1, "lot_sz": 1}
     lots = math.floor(qty / spec["ct_val"] / spec["lot_sz"] + 1e-9) * spec["lot_sz"]
+    # 永续：open_long 买 / close_long 卖 / open_short 卖 / close_short 买（2026-11-13 起永续也做多）
     p = {"instId": f"{base}-USDT-SWAP", "tdMode": "isolated", "ordType": "market",
-         "side": "sell" if action == "open_short" else "buy", "sz": f"{lots:.10g}"}
+         "side": "buy" if action in ("open_long", "close_short") else "sell", "sz": f"{lots:.10g}"}
     if pos_mode == "long_short_mode":
-        p["posSide"] = "short"
-    elif action == "close_short":
+        p["posSide"] = "long" if action in ("open_long", "close_long") else "short"
+    elif action in ("close_short", "close_long"):
         p["reduceOnly"] = True
     return p
 
@@ -98,14 +99,16 @@ class OkxTrader:
         return redacted(build(self.keys, "POST", "/api/v5/trade/order",
                               order_payload(symbol, market, action, qty, price, spec), self.demo))
 
-    def place_order(self, cfg: dict, symbol, market, action, qty, price, spec=None) -> dict:
+    def place_order(self, cfg: dict, symbol, market, action, qty, price, spec=None, leverage: int | None = None) -> dict:
         from .guard import require
         require(cfg, "okx")
         mode = self.pos_mode() if market == "perp" else "net_mode"
-        if market == "perp" and action == "open_short":
-            lev = {"instId": f"{symbol[:-4]}-USDT-SWAP", "lever": "1", "mgnMode": "isolated"}
+        if market == "perp" and action in ("open_short", "open_long"):
+            L = leverage if leverage is not None else ((cfg or {}).get("risk") or {}).get("perp_leverage", 1)
+            L = max(1, min(100, int(L or 1)))  # 设置页 1–100 倍；交易所该币上限更低时由交易所拒绝
+            lev = {"instId": f"{symbol[:-4]}-USDT-SWAP", "lever": str(L), "mgnMode": "isolated"}
             if mode == "long_short_mode":
-                lev["posSide"] = "short"  # 开平仓模式下逐仓设杠杆必须指定持仓方向
+                lev["posSide"] = "long" if action == "open_long" else "short"  # 开平仓模式下逐仓设杠杆必须指定持仓方向
             _send(build(self.keys, "POST", "/api/v5/account/set-leverage", lev, self.demo))
         return _send(build(self.keys, "POST", "/api/v5/trade/order",
                            order_payload(symbol, market, action, qty, price, spec, mode), self.demo))

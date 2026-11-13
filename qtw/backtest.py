@@ -8,7 +8,8 @@
   * 第 i-1 根收盘后的信号/ATR/权益 → 第 i 根开盘价成交；
   * 止损在第 i 根盘中按最高/最低价检查（跳空则按开盘价成交）；
   * 权益在第 i 根收盘按各自市场的收盘价计价。
-未计资金费率与滑点（见 README）。
+资金费率：传入 funding（官方历史结算费率）时按持仓结算；未计滑点（见 README）。
+杠杆 / 逐仓保证金 / 强平：见 risk.trade_mode / perp_leverage / leverage_scales_exposure 与 qtw/leverage.py。
 趋势过滤：入场时用第 i-1 根收盘价与该市场 SMA(trend_ma) 比较，只拦截逆势新开仓，不影响已有持仓离场。
 """
 from __future__ import annotations
@@ -19,6 +20,7 @@ from dataclasses import asdict, dataclass
 import numpy as np
 import pandas as pd
 
+from . import leverage as LV
 from . import rebalance as RB
 from .risk import scale_to_room, size
 from .settings import taker_rate
@@ -54,6 +56,11 @@ class Trade:
     tp_time: str = ""
     tp_price: float = float("nan")
     tp_pnl_usdt: float = 0.0  # 分批止盈那部分的毛盈亏（已含在 adj_pnl_usdt 内）
+    leverage: float = 1.0  # 永续杠杆（现货恒为 1）；保证金 = 名义 / 杠杆（逐仓）
+    margin_usdt: float = 0.0
+    liq_price: float = float("nan")  # 逐仓强平价（现货 / 不会强平时 NaN 或 0）
+    lev_reason: str = ""  # 杠杆被下调的原因（交易所上限 / 止损必须先于强平）
+    funding_usdt: float = 0.0  # 累计资金费（+ 收取 / − 支付），已含在 pnl_usdt 内
 
 
 # 空头熔断影子账本的固定仓位口径（= 默认风控参数）
@@ -117,13 +124,24 @@ def _trade_quality(closed) -> dict:
             "expectancy_usdt": float(p.mean()), "top10_pnl_share": top / float(p.sum()) if p.sum() > 0 else float("nan")}
 
 
-def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict | None = None, signals=None) -> dict:
+def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict | None = None, signals=None,
+                 funding: dict | None = None) -> dict:
     """signals：可选，多策略注册表（qtw.strategies）用的信号函数 f(ind, idx, syms) -> {symbol: 逐根 {-1,0,1}}，
     替换默认双均线合成信号；执行、止损、仓位、费用与默认完全同一套。None = 默认策略 #1（逐字节不变）。"""
     st, rk = cfg["strategy"], cfg["risk"]
     # 分市场 taker 费率：多单在现货、空单在永续成交（下一根开盘市价 = taker），每条市价腿各收一次
     FEE = {"spot": taker_rate(cfg, "spot"), "perp": taker_rate(cfg, "perp")}
     fee = max(FEE.values())  # 仅用于总敞口缩放时的保守预留
+    # 交易方式 / 杠杆（见 qtw/leverage.py 与 docs/STRATEGY_FORMULAS.md「杠杆与保证金」）
+    #   trade_mode = "perp_both"：多空都在 USDT 永续；"spot_perp"：现货做多 + 永续做空（旧口径）
+    #   perp_leverage：逐仓杠杆（保证金 = 名义 / 杠杆）；leverage_scales_exposure = False 时名义仍按风险定，杠杆不放大风险
+    #   funding：{symbol: [(结算时间 ms, 费率), ...]} 官方历史资金费率；None = 不计
+    t_mode = str(rk.get("trade_mode", "spot_perp") or "spot_perp")
+    L_req = max(1.0, float(rk.get("perp_leverage", 1) or 1))
+    XS = L_req if (bool(rk.get("leverage_scales_exposure", False)) and t_mode == "perp_both") else 1.0
+    lev_protect = bool(rk.get("leverage_protect", True))
+    ruin_frac = float(rk.get("ruin_frac", 0.10))
+    venue_ = str(cfg.get("venue", "okx") or "okx")
     start_eq = float(rk["starting_equity_usdt"])
     need = st["slow_ma"] + 2
     spot_d, perp_d = data.get("spot", {}), data.get("perp", {})
@@ -159,7 +177,13 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     if rg_n and "BTCUSDT" in spot_d:
         b = spot_d["BTCUSDT"].sort_values("open_time").set_index("open_time")
         RGL = btc_regime_blocks_long(b["close"], rg_n).reindex(idx).fillna(False).to_numpy(dtype=bool)
-    MK = {"long": "spot", "short": "perp"}
+    MK = {"long": "perp" if t_mode == "perp_both" else "spot", "short": "perp"}
+    FUND = {}
+    if funding:
+        tns = pd.DatetimeIndex(idx).as_unit("ns").asi8
+        FUND = {s: LV.funding_by_bar(tns, funding.get(s) or []) for s in syms}
+    lev_stats = {"liquidations": 0, "lev_reduced": 0, "funding_long": 0.0, "funding_short": 0.0, "ruined_at": "", "min_equity": start_eq,
+                 "max_margin_pct": 0.0}
     # 可选组合波动率目标（默认关闭，port_vol_target = 0）：每根开盘前用最近 port_vol_lookback 根收盘权益的年化波动 σ
     # 算 k = min(1, 目标/σ)，新开仓与调仓的单笔风险上限、单币权重上限都 × k（总敞口上限不变）。
     pv_t, pv_l = float(st.get("port_vol_target", 0) or 0), int(st.get("port_vol_lookback", 180) or 180)
@@ -211,7 +235,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         realized += g - f
         t.exit_time, t.exit_price, t.exit_reason = when, float(px), reason
         t.fees_usdt += f
-        t.pnl_usdt = g + t.adj_pnl_usdt - t.fees_usdt
+        t.pnl_usdt = g + t.adj_pnl_usdt - t.fees_usdt + t.funding_usdt
         t.return_pct = t.pnl_usdt / t.notional_usdt if t.notional_usdt else 0.0
         t.bars_held, t.status = i - entry_i.pop(s), "closed"
         trades.append(t)
@@ -230,14 +254,59 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         t.fees_usdt += f
         t.notional_usdt -= dq * t.entry_price
         t.qty -= dq
+        t.margin_usdt = t.qty * t.entry_price / max(1.0, t.leverage)
         t.tp_done, t.tp_time, t.tp_price = True, str(when_), float(px)
         if be_on:
             be = breakeven_stop(t.side, t.entry_price, FEE[t.market], be_fee)
             if d * (be - t.stop_price) > 0:
                 t.stop_price, t.be_moved = be, True
 
+    def _relev(t: Trade, s: str):
+        """数量 / 均价变化后重算保证金与强平价（必要时按同一规则重选杠杆）。"""
+        if t.market != "perp":
+            t.margin_usdt = t.qty * t.entry_price
+            return
+        lv = LV.pick(t.side, t.entry_price, t.stop_price, L_req, venue_, s, fee=FEE["perp"], notional=t.qty * t.entry_price, protect=lev_protect)
+        if lv["lev"] < t.leverage:
+            t.leverage, t.lev_reason = lv["lev"], lv["reason"] or t.lev_reason
+        t.liq_price = LV.liq_price(t.side, t.entry_price, t.leverage, lv["mmr"], FEE["perp"])
+        t.margin_usdt = t.qty * t.entry_price / t.leverage
+
+    def liquidate(s: str, px: float, when: str, i: int):
+        """逐仓强平：该仓保证金全部损失（剩余维持保证金计入强平费用）。"""
+        nonlocal realized
+        t = pos.pop(s)
+        sarf.pop(s, None)
+        added.discard(s)
+        g = upnl(t, px)
+        lost = t.margin_usdt
+        realized -= lost
+        t.exit_time, t.exit_price, t.exit_reason = when, float(px), "强制平仓"
+        pen = max(0.0, lost + g)  # 剩余维持保证金被收走；跳空穿仓时 g < −保证金，超出部分由交易所保险基金承担
+        t.fees_usdt += pen
+        t.pnl_usdt = -lost + t.adj_pnl_usdt - (t.fees_usdt - pen) + t.funding_usdt
+        t.return_pct = t.pnl_usdt / t.notional_usdt if t.notional_usdt else 0.0
+        t.bars_held, t.status = i - entry_i.pop(s), "closed"
+        trades.append(t)
+        lev_stats["liquidations"] += 1
+
+    ruined = False
     for i in range(warm + 1, len(times)):
         when = pd.Timestamp(times[i]).isoformat()
+        if ruined:
+            curve.append({"time": pd.Timestamp(ct[i]).isoformat(), "equity": prev_eq, "gross_exposure": 0.0, "net_exposure": 0.0,
+                          "positions": 0, "margin_used": 0.0})
+            continue
+        # 0) 资金费率：(times[i-1], times[i]] 内的结算点，对上一根收盘仍持有的永续仓按本根开盘价结算
+        if FUND:
+            for s, t in pos.items():
+                r = FUND[s][i] if s in FUND else 0.0
+                if t.market == "perp" and r:
+                    d = 1 if t.side == "long" else -1
+                    fp = -d * r * t.qty * float(P(t.side, "open", s)[i])
+                    realized += fp
+                    t.funding_usdt += fp
+                    lev_stats["funding_long" if d > 0 else "funding_short"] += fp
         # 1) 信号离场（用 i-1 收盘信号，在 i 开盘执行）
         for s in list(pos):
             want = side_of(SIG[s][i - 1])
@@ -257,9 +326,10 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         # 2) 入场（同一根 K 线的多个新仓按剩余总敞口额度等比缩放）
         eq_prev = prev_eq
         pv_k = port_vol_factor([c["equity"] for c in curve[-(pv_l + 1):]], pv_t, pv_l, BARS_PER_YEAR.get(st["interval"], 2190)) if pv_t > 0 else 1.0
-        risk_now, w_now = base_risk * pv_k, base_w * pv_k
-        if pv_t > 0:
-            cfg_eff = {**cfg, "risk": {**rk, "max_risk_per_trade": risk_now, "max_weight_per_name": w_now}}
+        risk_now, w_now = base_risk * pv_k * XS, base_w * pv_k * XS
+        if pv_t > 0 or XS != 1.0:
+            cfg_eff = {**cfg, "risk": {**rk, "max_risk_per_trade": risk_now, "max_weight_per_name": w_now,
+                                       "max_gross_exposure": float(rk["max_gross_exposure"]) * XS}}
         gross = sum(abs(t.qty) * P(t.side, "open", s)[i] for s, t in pos.items())
         want: dict = {}
         for s in syms:
@@ -299,19 +369,38 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                 want[s] = (d, z)
                 sarnew.add(s)
         sarq.clear()
-        room = eq_prev * float(rk["max_gross_exposure"]) - gross
+        room = eq_prev * float(rk["max_gross_exposure"]) * XS - gross
         alloc = scale_to_room({s: z.notional for s, (_, z) in want.items()}, room, fee)
+        # 杠杆：每个新永续仓选杠杆（交易所上限 / 止损先于强平），保证金合计不超过可用保证金
+        levs = {}
+        for s, (sg, z) in want.items():
+            sd = side_of(sg)
+            if MK[sd] == "perp":
+                levs[s] = LV.pick(sd, float(P(sd, "open", s)[i]), float(z.stop_price), L_req, venue_, s, fee=FEE["perp"],
+                                  notional=alloc[s], protect=lev_protect)
+        used = sum(t.margin_usdt for t in pos.values())
+        need_m = sum(alloc[s] / (levs[s]["lev"] if s in levs else 1.0) for s in want)
+        free_m = max(0.0, eq_prev - used) / (1 + fee)
+        if XS != 1.0 and need_m > free_m:  # 只在「杠杆放大敞口」时会触及；按风险定仓时保证金 ≤ 名义 ≤ 总敞口上限
+            alloc = {s: v * free_m / need_m for s, v in alloc.items()} if need_m > 0 else alloc
         for s, (sg, z) in want.items():
             notional = alloc[s]
             if notional < 1.0:
                 continue
             px = P(side_of(sg), "open", s)[i]
             qty = notional / px
-            f = notional * FEE[market_of(sg)]
+            f = notional * FEE[MK[side_of(sg)]]
             realized -= f
             tgt = float(px) + (1 if sg > 0 else -1) * tp_r * abs(float(px) - z.stop_price) if tp_r > 0 else float("nan")
-            pos[s] = Trade(s, market_of(sg), side_of(sg), when, float(px), qty, notional, z.stop_price, tgt, fees_usdt=f,
+            pos[s] = Trade(s, MK[side_of(sg)], side_of(sg), when, float(px), qty, notional, z.stop_price, tgt, fees_usdt=f,
                            init_stop=float(z.stop_price))
+            if s in levs:
+                lv = levs[s]
+                pos[s].leverage, pos[s].liq_price, pos[s].lev_reason = lv["lev"], lv["liq"], lv["reason"]
+                pos[s].margin_usdt = notional / lv["lev"]
+                lev_stats["lev_reduced"] += 1 if lv["lev"] < L_req else 0
+            else:
+                pos[s].margin_usdt = notional
             entry_i[s] = i
             if s in sarnew:
                 sarf[s] = -sg
@@ -368,6 +457,11 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                     t.notional_usdt -= dq * t.entry_price  # 名义 = 剩余数量 × 加权入场价
                     t.qty -= dq
                 else:
+                    if XS != 1.0:  # 放大敞口时：加仓所需保证金不能超过可用保证金
+                        free_m = prev_eq - sum(x.margin_usdt for x in pos.values())
+                        delta = min(delta, max(0.0, free_m) * max(1.0, t.leverage) / (1 + fee))
+                        if delta < 1.0:
+                            continue
                     aq = delta / px
                     f = delta * FEE[t.market]
                     realized -= f
@@ -376,6 +470,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                     t.notional_usdt += delta
                     t.fees_usdt += f
                 t.resizes += 1
+                _relev(t, q)
         # 3) 盘中止损 / 止盈。开盘已越过止盈价 → 按开盘价止盈；否则同一根同时触及时保守地先算止损。
         #    分批止盈（tp_partial）：开盘越过分批价 → 开盘价平 tp_frac，此后本根剩余时间按保本止损继续检查；
         #    盘中触及 → 按分批价平 tp_frac，保本止损从下一根起生效（4h 内先后顺序未知）。
@@ -410,6 +505,14 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                     continue
             o, h, lo = P(t.side, "open", s)[i], P(t.side, "high", s)[i], P(t.side, "low", s)[i]
             tg = t.target_price
+            lq = t.liq_price
+            if t.market == "perp" and lq == lq and lq > 0:
+                # 开盘跳过强平价 → 开盘即强平；盘中：强平价比止损更近才会先被打到（止损更近则先止损）
+                if (t.side == "long" and (o <= lq or (lo <= lq and lq > t.stop_price))) or \
+                        (t.side == "short" and (o >= lq or (h >= lq and lq < t.stop_price))):
+                    liquidate(s, o if (o <= lq if t.side == "long" else o >= lq) else lq, when, i)
+                    blocked[s] = 1 if t.side == "long" else -1
+                    continue
             if ptp_on and not t.tp_done and s not in sarf:
                 pt = partial_tp_target(t.side, t.entry_price, t.init_stop, ptp_r)
                 if pt == pt and ((t.side == "long" and o >= pt) or (t.side == "short" and o <= pt)):
@@ -444,15 +547,27 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         eq = realized + sum(upnl(t, P(t.side, "close", s)[i]) for s, t in pos.items())
         g = sum(abs(t.qty) * P(t.side, "close", s)[i] for s, t in pos.items())
         n = sum((1 if t.side == "long" else -1) * t.qty * P(t.side, "close", s)[i] for s, t in pos.items())
+        mu = sum(t.margin_usdt for t in pos.values())
         curve.append({"time": pd.Timestamp(ct[i]).isoformat(), "equity": eq, "gross_exposure": g,
-                      "net_exposure": n, "positions": len(pos)})
+                      "net_exposure": n, "positions": len(pos), "margin_used": mu})
         prev_eq = eq
+        lev_stats["min_equity"] = min(lev_stats["min_equity"], eq)
+        if eq > 0:
+            lev_stats["max_margin_pct"] = max(lev_stats["max_margin_pct"], mu / eq)
+        if eq <= start_eq * ruin_frac:  # 爆仓：权益 ≤ 起始 × ruin_frac，全部按收盘平掉并停止交易
+            for s in list(pos):
+                close(s, P(pos[s].side, "close", s)[i], when, "爆仓停止", i)
+            ruined, lev_stats["ruined_at"] = True, pd.Timestamp(ct[i]).isoformat()
+            realized = max(0.0, realized)  # 账户余额不会为负（穿仓部分由交易所保险基金承担）
+            prev_eq = realized
+            curve[-1]["equity"] = realized
+            lev_stats["min_equity"] = min(lev_stats["min_equity"], realized)
 
     last_t = pd.Timestamp(ct[-1]).isoformat()
     open_trades = []
     for s, t in pos.items():
         t.exit_price = float(P(t.side, "close", s)[-1])
-        t.pnl_usdt = upnl(t, t.exit_price) + t.adj_pnl_usdt - t.fees_usdt
+        t.pnl_usdt = upnl(t, t.exit_price) + t.adj_pnl_usdt - t.fees_usdt + t.funding_usdt
         t.return_pct = t.pnl_usdt / t.notional_usdt
         t.exit_reason, t.bars_held = "持仓中（按最后收盘价估值）", len(times) - 1 - entry_i[s]
         open_trades.append(t)
@@ -502,6 +617,13 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_band_down": float(st.get("rebalance_band_down", 0) or 0), "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l, "name_vol_target": nv_t, "name_vol_lookback": nv_l, "chop_n": int(st.get("chop_n", 0) or 0), "chop_max": float(st.get("chop_max", 50) or 50), "elder_short_gate_n": el_n, "elder_short_gate_x": el_x, "sar_hold_bars": sar_h, "sar_risk_mult": sar_k, "sar_atr_mult": sar_m,
         "resizes": int(sum(t.resizes for t in closed + open_trades)), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
+        "trade_mode": t_mode, "perp_leverage": L_req, "leverage_scales_exposure": XS != 1.0, "exposure_mult": XS,
+        "liquidations": lev_stats["liquidations"], "lev_reduced_entries": lev_stats["lev_reduced"],
+        "funding_usdt": lev_stats["funding_long"] + lev_stats["funding_short"], "funding_long_usdt": lev_stats["funding_long"],
+        "funding_short_usdt": lev_stats["funding_short"], "funding_included": bool(FUND), "ruined": bool(lev_stats["ruined_at"]),
+        "ruined_at": lev_stats["ruined_at"], "min_equity_usdt": lev_stats["min_equity"],
+        "avg_margin_used_pct": float((ec["margin_used"] / ec["equity"].where(ec["equity"] > 0)).mean()) if "margin_used" in ec else float("nan"),
+        "max_margin_used_pct": lev_stats["max_margin_pct"],
     }
     return {"summary": summary, "equity": ec.drop(columns=["peak"]), "bar_open_times": [pd.Timestamp(t).isoformat() for t in times],
             "trades": pd.DataFrame([asdict(t) for t in closed + open_trades])}

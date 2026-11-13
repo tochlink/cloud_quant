@@ -146,11 +146,6 @@ async def lifespan(_app: FastAPI):
     if realtime.on_tick not in stream._on_quote:
         stream.on_quote(realtime.on_tick)
     stream.on_bar_close(realtime.on_bar_close)
-    from . import shadow as _shadow  # 多策略影子子账本（只记录，不碰默认账本 / 实盘）
-    _shadow.load_all()
-    if _shadow.on_tick not in stream._on_quote:
-        stream.on_quote(_shadow.on_tick)
-    stream.on_bar_close(_shadow.on_bar_close)
     if _kick_after_freeze not in stream._on_host_freeze:
         stream._on_host_freeze.append(_kick_after_freeze)
     stream.start()
@@ -188,8 +183,6 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="QTW 量化交易控制台", version=__version__, lifespan=lifespan)
-from .strategies_api import router as _strategies_router  # noqa: E402  多策略页（v7）
-app.include_router(_strategies_router)
 
 
 # ---------------- 状态 / 总览 ----------------
@@ -326,6 +319,32 @@ def _period_pnl(ledger: list, eq_now: float, starting: float, closed: list) -> d
     return out
 
 
+def _lev_fields(p) -> dict:
+    """持仓的杠杆 / 逐仓保证金 / 强平价 / 距强平与距止损（%，按标记价）。现货仓杠杆 1、无强平价。"""
+    mk = float(p.mark_price or 0)
+    lq = float(getattr(p, "liq_price", 0) or 0)
+    perp = p.market == "perp"
+    d_liq = (abs(mk - lq) / mk) if perp and lq > 0 and mk > 0 else None
+    d_stop = (abs(mk - float(p.stop_price)) / mk) if mk > 0 and p.stop_price else None
+    return {"leverage": float(getattr(p, "leverage", 1) or 1) if perp else 1.0,
+            "margin_usdt": float(getattr(p, "margin_usdt", 0) or 0) or abs(p.qty * p.entry_price),
+            "liq_price": lq if perp and lq > 0 else None, "liq_distance_pct": d_liq, "stop_distance_pct": d_stop,
+            "stop_before_liq": (d_stop is None or d_liq is None or d_stop < d_liq),
+            "lev_reason": getattr(p, "lev_reason", "") or "", "funding_usdt": float(getattr(p, "funding_usdt", 0) or 0),
+            "side_cn": "做多" if p.side == "long" else "做空", "market_cn": "现货" if p.market == "spot" else "USDT 永续"}
+
+
+def _margin_summary(cfg: dict, bk, eq: float) -> dict:
+    from . import leverage as LV
+    mu = bk.margin_used()
+    rk = cfg["risk"]
+    return {"margin_used_usdt": mu, "free_margin_usdt": eq - mu, "margin_used_pct": (mu / eq) if eq > 0 else None,
+            "funding_total_usdt": float(getattr(bk, "funding_total", 0.0) or 0.0),
+            "trade_mode": rk.get("trade_mode", "perp_both"), "perp_leverage": rk.get("perp_leverage", 1),
+            "leverage_scales_exposure": bool(rk.get("leverage_scales_exposure", False)), "exposure_mult": LV.exposure_mult(cfg),
+            "leverage_warn": int(rk.get("perp_leverage", 1) or 1) > LV.LEV_WARN}
+
+
 def _dashboard_data() -> dict:
     """Shared paper-book snapshot used by /api/dashboard and thin monitoring aliases."""
     cfg = S.load()
@@ -341,7 +360,7 @@ def _dashboard_data() -> dict:
                   "tp_price": _nan_none(engine.partial_tp_price(p, cfg["strategy"])),
                   "tp_enabled": bool(cfg["strategy"].get("tp_partial")), "tp_r": cfg["strategy"].get("tp_partial_r", 2.0),
                   "tp_frac": cfg["strategy"].get("tp_frac", 0.5), "exit_rule_cn": engine.exit_rule_cn(p.side, cfg["strategy"]),
-                  "book": "长线", "selected": p.symbol in cfg["symbols"]}
+                  "book": "长线", "selected": p.symbol in cfg["symbols"], **_lev_fields(p)}
                  for p in bk.positions.values()]
     fills = bk.fills()
     ledger = bk.ledger()
@@ -358,9 +377,10 @@ def _dashboard_data() -> dict:
     week_start_eq = float(week_ledger[0]["equity_usdt"]) if week_ledger else bk.starting
     now = utcnow()
     return {
+        **_margin_summary(cfg, bk, eq),
         "time": iso(now), "time_la": la(now), "time_sh": sh(now), "mode": "live" if S.live_armed(cfg) else "paper",
         "venue": cfg["venue"], "starting_equity": bk.starting, "equity": eq, "realized": bk.realized,
-        "unrealized": eq - bk.realized, "cash_free": max(0.0, eq - bk.gross()) if abs(eq - bk.gross()) < 1e-6 else eq - bk.gross(), "gross": bk.gross(), "net": bk.net(),
+        "unrealized": eq - bk.realized, "cash_free": eq - bk.margin_used(), "gross": bk.gross(), "net": bk.net(),
         "total_pnl": eq - bk.starting, "total_return": eq / bk.starting - 1,
         # realized = 起始资金 + 已实现盈亏 − 手续费（账面资本）；realized_pnl 才是净已实现
         "book_capital": bk.realized, "realized_pnl": bk.realized - bk.starting,
@@ -957,13 +977,21 @@ def backtest(body: dict = Body(default={})):
         frames, errs = mcache.many(cfg["venue"], cfg["symbols"], cfg["strategy"]["interval"], bars)
         if not frames["spot"] or not frames["perp"]:
             raise HTTPException(502, f"官方公共行情获取失败（不会用任何替代数据）：{errs}")
+        fund, fund_info = None, {}
+        try:  # 官方历史资金费率（永续多空都计）；拿不到就不计，并在结果里注明
+            from . import leverage as LV
+            t0 = min(int(pd.Timestamp(d["open_time"].iloc[0]).value // 1_000_000) for d in frames["perp"].values())
+            fund, fund_info = LV.funding_series(cfg["venue"], list(frames["perp"]), t0, fetch=True)
+        except Exception as e:  # noqa: BLE001
+            fund_info = {"error": str(e)[:200]}
         try:
-            res = run_backtest(frames, cfg)
+            res = run_backtest(frames, cfg, funding=fund)
         except ValueError as e:
             raise HTTPException(502, f"{e}；行情错误：{errs}") from e
         prov = mcache.data_provenance(frames)
         created = iso(utcnow())
         summ = {**res["summary"], "venue": cfg["venue"], **prov, "bars_requested": bars,
+                "funding_source": "；".join(f"{k}: {v}" for k, v in fund_info.items())[:600],
                 "data_errors": "; ".join(f"{k}: {v}" for k, v in errs.items())}
         eqdf, tr = res["equity"], res["trades"]
         with db.tx() as c:
@@ -991,7 +1019,7 @@ def _export_bt(run_id, summ, eqdf, tr, venue, prov):
     d.mkdir(parents=True, exist_ok=True)
     tag = {"run_id": run_id, "venue": venue, "data_source": prov["data_source"], "fetched_at": prov["fetched_at"]}
     eqdf.assign(**tag).to_csv(d / "backtest_equity.csv", index=False)
-    tr.assign(**tag, price_market=tr["side"].map({"long": "spot", "short": "perp"})).to_csv(d / "backtest_trades.csv", index=False)
+    tr.assign(**tag, price_market=tr["market"]).to_csv(d / "backtest_trades.csv", index=False)
     pd.DataFrame([{"metric": k, "value": v} for k, v in {"run_id": run_id, **summ}.items()]).to_csv(
         d / "backtest_summary.csv", index=False)
 
@@ -1042,7 +1070,7 @@ def _live_payload() -> dict:
         "prices": snap["prices"], "forming": snap["forming"],
         "forming_alt": _forming_alt(cfg["venue"]),
         "mark_candles": snap.get("mark_candles") or {},
-        "paper": {"equity": eq, "realized": bk.realized, "unrealized": eq - bk.realized, "gross": bk.gross(),
+        "paper": {"equity": eq, "realized": bk.realized, "unrealized": eq - bk.realized, "gross": bk.gross(), "margin_used": bk.margin_used(),
                   "net": bk.net(), "total_pnl": eq - bk.starting,
                   "positions": {p.symbol: {"mark": p.mark_price, "mark_time": p.mark_time, "source": p.mark_source,
                                            "entry": p.entry_price, "upnl": p.upnl(), "upnl_pct": p.upnl_pct(),

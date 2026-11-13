@@ -19,6 +19,7 @@ from .paper import ORDER_COLS, PaperBook
 from .paths import OUTPUT_DIR
 from .backtest import short_breaker
 from .risk import cap_at_entry, scale_to_room, size
+from . import leverage as LV
 from .strategy import bar_close_equity, btc_regime_blocks_long, combine, indicators, last_cross, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
 from .timeutil import iso, la, sh, utcnow
 
@@ -117,6 +118,15 @@ def _exit_checks(cfg: dict, bk, s: str, p, px: float, kind: str, q, events: list
     st = cfg.get("strategy") or {}
     venue = cfg["venue"]
     side, mkt = p.side, p.market
+    lq = float(getattr(p, "liq_price", 0) or 0)
+    if mkt == "perp" and lq > 0 and ((side == "long" and px <= lq) or (side == "short" and px >= lq)):
+        # 逐仓强平（标记价触及强平价）：正常情况下止损先触发，走到这里说明跳空 / 行情断档
+        qty = p.qty
+        bk.blocks[s] = p.direction
+        pnl = bk.liquidate(s, px, kind, venue, data_source=q.data_source, price_time=iso(q.ts))
+        _route(cfg, s, mkt, "close_long" if side == "long" else "close_short", qty, px)
+        events.append(f"{s} 强制平仓{('多' if side == 'long' else '空')} {qty:.6g} @ {px:g}（逐仓强平价 {lq:.6g}{tag}，损失保证金 {pnl:+.2f}）")
+        return True
     hit = (side == "long" and px <= p.stop_price) or (side == "short" and px >= p.stop_price)
     if hit or take_profit_hit(p, px, st):
         why = ("保本止损" if p.be_moved else "ATR止损") if hit else "止盈"
@@ -150,9 +160,50 @@ def _exit_checks(cfg: dict, bk, s: str, p, px: float, kind: str, q, events: list
                 if p.direction * (be - p.stop_price) > 0:
                     p.stop_price, p.be_moved = be, 1
                     msg += f"；剩余止损移到保本 {be:.6g}"
+            relever(cfg, bk, s)
             bk.save()
             events.append(msg)
     return False
+
+
+def relever(cfg: dict, bk, s: str) -> None:
+    """开仓 / 加仓 / 调仓 / 移动止损后、以及每个信号周期，重算该永续仓的杠杆、保证金与强平价：
+    L_eff = min(设置, 交易所上限, 止损相对加权均价先于强平的安全上限)，见 qtw/leverage.pick、qtw/margin.py。"""
+    p = bk.positions.get(s)
+    if not p or p.market != "perp":
+        return
+    lv = LV.pick(p.side, p.entry_price, p.stop_price, float(cfg["risk"].get("perp_leverage", 1) or 1), cfg["venue"], s,
+                 fee=bk.fee_for("perp"), notional=p.qty * p.entry_price)
+    lev = lv["lev"]  # 已含「止损先于强平」与交易所上限；设置改动后旧仓也会调到新倍数（逐仓可随时调杠杆）
+    cur = float(p.leverage or 1)
+    liq = LV.liq_price(p.side, p.entry_price, lev, lv["mmr"] + bk.fee_for("perp"))
+    mk = float(p.mark_price or 0)
+    if lev > cur and mk > 0 and p.direction * (mk - p.stop_price) <= 0 or lev > cur and mk > 0 and p.direction * (mk - liq) <= 0:
+        return  # 标记价已越过止损 / 新强平价：交易所不允许这样加杠杆，保持原倍数
+    bk.set_leverage(s, lev, liq, lv["reason"])
+
+
+def apply_funding(cfg: dict, bk) -> list[str]:
+    """资金费结算（事件驱动：每次信号周期 = 每根 K 线收盘时补算已过去的结算点）：
+    对每个永续持仓，按交易所官方已结算费率，金额 = −方向 × 费率 × 数量 × 标记价。拿不到费率就跳过（不编造）。"""
+    perps = {s: p for s, p in bk.positions.items() if p.market == "perp"}
+    if not perps:
+        return []
+    since = min(int(p.funding_ms or 0) for p in perps.values())
+    try:
+        rows, _ = LV.funding_series(cfg["venue"], list(perps), since, fetch=True, proxy_gate_for_okx=False)
+    except Exception as e:  # noqa: BLE001
+        log.warning("资金费率拉取失败：%s", e)
+        return []
+    out = []
+    for s, p in perps.items():
+        tot = 0.0
+        for t_ms, r in rows.get(s, []):
+            if t_ms > int(p.funding_ms or 0) and t_ms <= int(utcnow().timestamp() * 1000):
+                tot += bk.apply_funding(s, r, float(p.mark_price), t_ms)
+        if tot:
+            out.append(f"{s} 资金费 {tot:+.4f} U（{'多' if p.side == 'long' else '空'}·永续）")
+    return out
 
 
 def poll_stops(cfg: dict | None = None) -> list[str]:
@@ -287,6 +338,13 @@ def vol_scaled_cfg(cfg: dict, bk) -> dict:
     if k < 1.0:
         out["risk"] = {**rk, "max_risk_per_trade": float(rk["max_risk_per_trade"]) * k,
                        "max_weight_per_name": float(rk["max_weight_per_name"]) * k}
+    x = LV.exposure_mult(cfg)  # 可选「杠杆放大敞口」（默认关 = 1）：单笔风险 / 单币权重 / 总敞口 × 杠杆
+    if x != 1.0:
+        r0 = out["risk"]
+        out["risk"] = {**r0, "max_risk_per_trade": float(r0["max_risk_per_trade"]) * x,
+                       "max_weight_per_name": float(r0["max_weight_per_name"]) * x,
+                       "max_gross_exposure": float(r0["max_gross_exposure"]) * x}
+    out["_exposure_mult"] = x
     return out
 
 
@@ -341,7 +399,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         ssig = int(ind["spot"]["signal"].iloc[-1]) if "spot" in ind else 0
         psig = int(ind["perp"]["signal"].iloc[-1]) if "perp" in ind else 0
         sig = int(combine([ssig], [psig])[0])
-        side, mkt = side_of(sig), market_of(sig)
+        side, mkt = side_of(sig), LV.market_for(sig, cfg)  # perp_both：多空都在永续；spot_perp：多现货、空永续
         use = mkt if mkt in ind else ("spot" if "spot" in ind else "perp")
         src = ind[use]
         last = src.iloc[-1]
@@ -661,7 +719,12 @@ def _route(cfg, sym, market, action, qty, price):
                 return "error"
         else:
             note = ""
-        res = tr.place_order(cfg, sym, market, action, qty, price, spec)
+        lev = 1
+        if market == "perp":
+            p_ = _BOOK.positions.get(sym) if _BOOK is not None else None
+            lev = int(p_.leverage) if p_ is not None and p_.market == "perp" else int(cfg["risk"].get("perp_leverage", 1) or 1)
+            lev = max(1, min(100, lev))  # 实盘杠杆上限 100 倍
+        res = tr.place_order(cfg, sym, market, action, qty, price, spec, leverage=lev)
         _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,
                    ref_price=price, status="sent", detail=((note + "｜") if note else "") + str(res)[:300])
         return "sent"
@@ -691,6 +754,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
                 bk.mark(s, px, iso(q.ts), q.data_source)
             except MarketDataError as e:
                 errors[s] = f"报价失败：{e}"
+        events += apply_funding(cfg, bk)  # 资金费（永续多空都计）
         # 2) 离场：信号改变 / 触及止损
         for s, p in list(bk.positions.items()):
             if s not in prices:
@@ -709,6 +773,8 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
                 pnl = bk.close(s, px, kind, reason, venue, data_source=q.data_source, price_time=iso(q.ts))
                 _route(cfg, s, p.market, "close_long" if p.side == "long" else "close_short", p.qty, px)
                 events.append(f"{s} 平{('多' if p.side == 'long' else '空')} {p.qty:.6g} @ {px:g}（{reason}，盈亏 {pnl:+.2f}）")
+        for s in list(bk.positions):  # 杠杆设置变化 / 止损移动后：按当前均价与止损重算杠杆、保证金、强平价
+            relever(cfg, bk, s)
         # 解除止损锁
         for s in list(bk.blocks):
             if s in rows and not block_active(bk, s, rows[s]):
@@ -739,6 +805,13 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
                 want[s] = (r, px, kind, z, q)
         room = eq * rk["max_gross_exposure"] - bk.gross()
         alloc = scale_to_room({s: w[3].notional for s, w in want.items()}, room, bk.fee)
+        levs = {s: LV.pick(r["side"], px, z.stop_price, float(rk.get("perp_leverage", 1) or 1), venue, s, fee=bk.fee_for("perp"),
+                           notional=alloc[s]) for s, (r, px, kind, z, q) in want.items() if r["market"] == "perp"}
+        if cfg.get("_exposure_mult", 1.0) != 1.0:  # 放大敞口时：新仓保证金合计不超过可用保证金
+            need_m = sum(alloc[s] / (levs[s]["lev"] if s in levs else 1.0) for s in want)
+            free_m = max(0.0, eq - bk.margin_used()) / (1 + bk.fee)
+            if need_m > free_m and need_m > 0:
+                alloc = {s: v * free_m / need_m for s, v in alloc.items()}
         for s, (r, px, kind, z, q) in want.items():
             if alloc[s] < 1.0:
                 continue
@@ -746,11 +819,15 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
             if qty <= 0:
                 errors[s] = f"建议 {alloc[s]:.2f} U 低于该市场最小下单量，未开仓"
                 continue
+            lv = levs.get(s) or {"lev": 1.0, "liq": 0.0, "reason": ""}
             bk.open(symbol=s, market=r["market"], side=r["side"], qty=qty, price=px, price_kind=kind,
                     stop=z.stop_price, signal_bar=r["as_of"], reason=f"{r['advice']}信号（{st['rule_id']}）", venue=venue,
-                    data_source=q.data_source, price_time=iso(q.ts))
+                    data_source=q.data_source, price_time=iso(q.ts), leverage=lv["lev"], liq_price=lv["liq"], lev_reason=lv["reason"])
             _route(cfg, s, r["market"], "open_long" if r["side"] == "long" else "open_short", qty, px)
-            events.append(f"{s} 开{('多·现货' if r['side'] == 'long' else '空·永续')} {qty:.6g} @ {px:g}，止损 {z.stop_price:.6g}")
+            mk = "现货" if r["market"] == "spot" else f"永续 {lv['lev']:g}x"
+            events.append(f"{s} 开{('多' if r['side'] == 'long' else '空')}·{mk} {qty:.6g} @ {px:g}，止损 {z.stop_price:.6g}"
+                          + (f"，强平 {lv['liq']:.6g}" if r["market"] == "perp" and lv["liq"] else "")
+                          + (f"（{lv['reason']}）" if lv["reason"] else ""))
         opened = {s for s in want if s in bk.positions and alloc.get(s, 0) >= 1.0}
         # 4) 每根新收盘 K 线调仓一次（rebalance_band；公式与回测第 2c 步相同，见 qtw/rebalance.py）
         events += _rebalance(cfg, bk, {k: v for k, v in rows.items() if k in cfg["symbols"]}, opened, errors)
@@ -824,6 +901,7 @@ def _rebalance(cfg, bk, rows: dict, opened: set, errors: dict) -> list[str]:
         side, mkt = p.side, p.market
         res = bk.resize(s, new_qty, px, kind, f"调仓（目标 {it['target_usdt']:.2f} USDT，偏离>{float(st['rebalance_band']):.0%}）",
                         cfg["venue"], data_source=q.data_source, price_time=iso(q.ts))
+        relever(cfg, bk, s)  # 加权均价变了：重算杠杆 / 强平价，保证止损仍先于强平
         if res["action"] == "reduce":
             _route(cfg, s, mkt, "close_long" if side == "long" else "close_short", res["qty"], px)
             events.append(f"{s} 减仓{('多' if side == 'long' else '空')} {res['qty']:.6g} @ {px:g}（调仓，已实现 {res['pnl']:+.2f}）")
