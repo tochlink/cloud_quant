@@ -216,6 +216,13 @@ def taker_rate(cfg: dict, market: str) -> float:
     return float(v) / 10_000
 
 
+def _as_bool(v) -> bool:
+    """严格布尔：只有 True / 非零数 / "true" "1" "yes" "on"（不分大小写）为真；"false" "0" "" 等为假。"""
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "1", "yes", "on")
+    return bool(v)
+
+
 def validate(s: dict) -> dict:
     st, rk = s["strategy"], s["risk"]
     for k in ("spot_taker_bps", "spot_maker_bps", "perp_taker_bps", "perp_maker_bps", "taker_bps"):
@@ -357,6 +364,8 @@ def validate(s: dict) -> dict:
     s["symbols"] = list(dict.fromkeys(syms))
     if s["live"]["mode"] not in ("paper", "live"):
         raise ValueError("模式只能是 paper 或 live")
+    for k in ("live_enabled", "okx_demo", "gate_testnet"):  # 字符串 "false" / "0" 不能被 bool() 当成 True（否则 live_enabled:"false" 也会开实盘）
+        s["live"][k] = _as_bool(s["live"].get(k, DEFAULTS["live"][k]))
     s["worker"]["interval_sec"] = max(60, int(s["worker"]["interval_sec"]))
     if s["worker"].get("deselect_policy") not in ("keep", "flatten"):
         raise ValueError("取消勾选币种的处理方式只能是 keep 或 flatten")

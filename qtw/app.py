@@ -907,12 +907,17 @@ def put_live(body: dict = Body(...)):
     """切换纸面/实盘。开启实盘必须同时提交确认语；关闭随时可以。"""
     cur = S.load()["live"]
     new = {**cur, **{k: body[k] for k in ("mode", "live_enabled", "okx_demo", "gate_testnet", "confirm_phrase") if k in body}}
+    if "live_enabled" in body:
+        new["live_enabled"] = S._as_bool(body["live_enabled"])
     if new["mode"] == "live" or new["live_enabled"]:
         if new.get("confirm_phrase") != S.LIVE_CONFIRM_PHRASE:
             raise HTTPException(400, f"开启实盘需要输入确认语：{S.LIVE_CONFIRM_PHRASE}")
     else:
         new["confirm_phrase"] = ""
-    cfg = S.update({"live": new})
+    try:
+        cfg = S.update({"live": new})
+    except (ValueError, KeyError, TypeError) as e:
+        raise HTTPException(400, str(e)) from e
     okk, reasons = guard.check(cfg, cfg["venue"])
     return ok({"live": cfg["live"], "live_gate_open": okk, "live_block_reasons": reasons})
 
