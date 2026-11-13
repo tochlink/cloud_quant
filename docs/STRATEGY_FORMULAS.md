@@ -2814,3 +2814,17 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
   - Stochastic：fadeS N14 X0.6 +168…+172%、N84 X0.6 +165…+175%，但 N42 X0.6 +145…+155% 落后，且 fadeS 安慰剂高达 Gate +196.8%、OKX +173.6%，不成立；need N84 X0 +167.2…+167.6% 小胜但安慰剂分散很大（+85…+150%）；fadeL、need 短周期大幅变差。
 - 结论：不改默认。Stochastic 门控拒绝；CCI fadeS N20–50 X1–2 进观察名单（两个交易所、邻域、压力费率都成立，但 2026-03 后无增益），等 2026-03 后数据更多再复测。
 - CSV：`output/research_stoch_cci_gate_long_history.csv`、`output/research_stoch_cci_gate_monthly.csv`（不入库）。
+
+## 轮换：Ultimate Oscillator 与 Balance of Power 买压门控（2026-11-12 21:55 PST，研究，不改默认；不进观察名单）
+
+- 查重：轮换日志已有 CLV（收盘位置）、CMF / MFI、Stochastic / CCI，但没有 Williams 的 Ultimate Oscillator（多周期买压比）和 Balance of Power（实体 / 振幅）门控，本轮补测。
+- 公式（官方现货 4h，因果）：
+  - UO：`BP = C − min(L, C₋₁)`，`TR = max(H, C₋₁) − min(L, C₋₁)`，`A_k = ΣBP / ΣTR`（k 根），`UO = 100·(4A_a + 2A_b + A_c)/7`，(a, b, c) = (7, 14, 28) × s，s = 1 / 3 / 6；`x = (UO − 50)/50`。
+  - BOP：`x = SMA_N((C − O)/(H − L))`，N = 14 / 42 / 84（另测 N28 做邻域）。
+  - 规则：need T 新多需 x > T、新空需 x < −T；fadeS X 当 x < −X 时拦新空；fadeL X 当 x > X 时拦新多。只拦新开 / 反手。安慰剂：x 序列确定性循环时移（seed 1–3）。
+- 网格：UO need 0 / 0.2、fade 0.3 / 0.5；BOP need 0 / 0.1、fade 0.1 / 0.2；Gate 与 OKX；真实 + 压力费率；2026-03-05 前后切分；按月对比。脚本 `scratch/uo_long.py`、`scratch/uo_month.py`。
+- 结果（基线 Gate +162.2% / −18.8% / 1.69，OKX +164.9% / −18.9% / 1.70）：
+  - UO：fade 规则在 s ≥ 3 时几乎不触发（≈ 基线），s = 1 的 fadeL 变差（+147…+150%）；need 全部大幅变差（+0.5…+135%）。拒绝。
+  - BOP fadeS N14 X0.1 单格领先：Gate +181.1% / −16.7% / 1.78，OKX +184.6% / −16.5% / 1.79，压力费率 +162.8% / +165.1%；但邻格不稳（Gate X0.2 +157.4%、N28 压力费率只有 +150%、N42 X0.1 +153.6…+166.8%），按月 2026-03 后 Gate 4 好 4 差、OKX 1 好 5 差（合计 −0.75 / −0.70 个点），增益全部在 2026-03 前（11/13 个月），还是已知的「做空投降」模式。BOP need / fadeL 全部变差。安慰剂 +153…+164%。
+- 结论：拒绝，不改默认、不进观察名单。Ultimate Oscillator 与 Balance of Power 买压家族已覆盖。
+- CSV：`output/research_ultimate_osc_bop_gate_long_history.csv`、`output/research_ultimate_osc_bop_gate_monthly.csv`（不入库）。
