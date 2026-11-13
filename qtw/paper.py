@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import threading
 from dataclasses import asdict, dataclass, fields
@@ -146,6 +147,10 @@ class PaperBook:
             self.realized = float(st.get("realized_usdt", self.starting))
             self.created = st.get("created_at", iso(utcnow()))
             self.funding_total = float(st.get("funding_total_usdt", 0.0) or 0.0)
+            try:
+                self.funding_pending = [dict(x) for x in json.loads(st.get("funding_pending_json") or "[]")]
+            except (TypeError, ValueError):
+                self.funding_pending = []
             self.positions = {r["symbol"]: Position(**{k: r[k] for k in POS_COLS}) for r in
                               self._q("SELECT * FROM paper_positions")}
             for p in self.positions.values():
@@ -189,7 +194,8 @@ class PaperBook:
     def _save(self, c):
         for k, v in (("starting_equity_usdt", self.starting), ("realized_usdt", self.realized),
                      ("created_at", self.created), ("updated_at", iso(utcnow())),
-                     ("funding_total_usdt", float(getattr(self, "funding_total", 0.0)))):
+                     ("funding_total_usdt", float(getattr(self, "funding_total", 0.0))),
+                     ("funding_pending_json", json.dumps(getattr(self, "funding_pending", []), separators=(",", ":")))):
             c.execute("INSERT OR REPLACE INTO paper_state(key,value) VALUES(?,?)", (k, str(v)))
         c.execute("DELETE FROM paper_positions")
         for p in self.positions.values():
@@ -212,6 +218,7 @@ class PaperBook:
             self.created = iso(utcnow())
             self.starting = self.realized = float(starting_equity)
             self.funding_total = 0.0
+            self.funding_pending = []
             self.positions, self.blocks, self.halts = {}, {}, set()
             self._save(c)
 
@@ -251,11 +258,44 @@ class PaperBook:
             self.funding_total = float(getattr(self, "funding_total", 0.0)) + amt
             return amt
 
+    def _defer_funding(self, p) -> None:
+        """平仓时，持仓期间（funding_ms, 平仓时刻] 内可能已有结算点，但官方历史还没公布（或还没拉到）。
+        记一笔待结算，之后拿到官方费率再按平仓价补记；超过 24 小时仍拿不到就放弃（不编造）。"""
+        if p.market != "perp":
+            return
+        if not hasattr(self, "funding_pending"):
+            self.funding_pending = []
+        self.funding_pending.append(dict(symbol=p.symbol, direction=int(p.direction), qty=float(p.qty),
+                                         price=float(p.mark_price or p.entry_price), from_ms=int(p.funding_ms or 0),
+                                         to_ms=int(utcnow().timestamp() * 1000)))
+
+    def apply_pending_funding(self, rows_by_symbol: dict, now_ms: int | None = None) -> float:
+        """补记已平永续仓在持仓期内的结算点：rows_by_symbol = {symbol: [(t_ms, rate), ...]}。
+        金额 = −方向 × 费率 × 平仓数量 × 平仓前标记价。拿到平仓之后的结算点（说明区间内已全部公布）或超过 24 小时即移除。"""
+        now_ms = int(now_ms if now_ms is not None else utcnow().timestamp() * 1000)
+        tot, keep = 0.0, []
+        with _LOCK:
+            for e in list(getattr(self, "funding_pending", []) or []):
+                rows = rows_by_symbol.get(e["symbol"]) or []
+                for t_ms, r in rows:
+                    if int(e["from_ms"]) < int(t_ms) <= int(e["to_ms"]):
+                        amt = -int(e["direction"]) * float(r) * float(e["qty"]) * float(e["price"])
+                        self.realized += amt
+                        self.funding_total = float(getattr(self, "funding_total", 0.0)) + amt
+                        tot += amt
+                        e["from_ms"] = int(t_ms)
+                done = any(int(t) > int(e["to_ms"]) for t, _ in rows) or now_ms - int(e["to_ms"]) > 24 * 3600_000
+                if not done:
+                    keep.append(e)
+            self.funding_pending = keep
+        return tot
+
     def liquidate(self, symbol: str, price: float, price_kind: str, venue: str, mode="paper",
                   data_source="", price_time="") -> float:
         """逐仓强平：该仓保证金全部损失（剩余维持保证金作为强平费用），记一条 reason=强制平仓 的平仓成交。"""
         with _LOCK, db.tx(self.conn) as c:
             p = self.positions.pop(symbol)
+            self._defer_funding(p)
             lost = float(p.margin_usdt or p.qty * p.entry_price / max(1.0, p.leverage))
             g = p.upnl(price)
             pen = max(0.0, lost + g)
@@ -303,6 +343,7 @@ class PaperBook:
               data_source="", price_time="") -> float:
         with _LOCK, db.tx(self.conn) as c:
             p = self.positions.pop(symbol)
+            self._defer_funding(p)
             notional = p.qty * price
             fee = notional * self.fee_for(p.market)
             pnl = p.upnl(price)

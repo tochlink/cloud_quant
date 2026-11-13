@@ -196,6 +196,26 @@ def fetch_funding(venue: str, symbol: str, since_ms: int, timeout: float = 15) -
     return len(rows)
 
 
+_FUND_TRIED: dict = {}  # (venue, symbol) -> 上次补拉时间（秒），同一币 5 分钟内不重复请求
+
+
+def _funding_due(venue: str, symbol: str, now_s: float | None = None) -> bool:
+    """是否该向官方补拉：按库里最近两个结算点推断结算间隔（1–8 小时，默认 8 小时），
+    下一个结算点已过去就补拉（之前固定「最新一条早于 9 小时前」才拉，会漏掉刚结算的那一笔：
+    例如 08:00 已入库时，16:00 的结算要到 17:00 之后才会去拉，期间平掉的仓位就漏记资金费）。"""
+    from . import db
+    now_s = time.time() if now_s is None else now_s
+    if now_s - _FUND_TRIED.get((venue, symbol), 0.0) < 300:
+        return False
+    r = db.query("SELECT t_ms FROM funding_rates WHERE venue=? AND symbol=? ORDER BY t_ms DESC LIMIT 2", (venue, symbol))
+    if not r:
+        return True
+    last = int(r[0]["t_ms"])
+    step = int(r[0]["t_ms"]) - int(r[1]["t_ms"]) if len(r) > 1 else 8 * 3600_000
+    step = min(8 * 3600_000, max(3600_000, step))
+    return now_s * 1000 >= last + step
+
+
 def funding_series(venue: str, symbols: list[str], start_ms: int, *, fetch: bool = True, proxy_gate_for_okx: bool = True) -> tuple[dict, dict]:
     """{symbol: [(t_ms, rate), ...]} 与覆盖说明。库里没有就向官方补拉（fetch=True）。
     OKX 公共历史只有约 3 个月：更早的部分用 Gate 同币种官方费率代替（proxy_gate_for_okx，结果里注明）。"""
@@ -209,8 +229,9 @@ def funding_series(venue: str, symbols: list[str], start_ms: int, *, fetch: bool
         if fetch:
             for v in ({venue, "gate"} if venue == "okx" and proxy_gate_for_okx else {venue}):
                 try:
-                    last = db.query("SELECT MAX(t_ms) m FROM funding_rates WHERE venue=? AND symbol=?", (v, s))[0]["m"]
-                    if last is None or last < int(time.time() * 1000) - 9 * 3600_000:
+                    if _funding_due(v, s):
+                        last = db.query("SELECT MAX(t_ms) m FROM funding_rates WHERE venue=? AND symbol=?", (v, s))[0]["m"]
+                        _FUND_TRIED[(v, s)] = time.time()
                         fetch_funding(v, s, max(start_ms - 1, int(last or 0)))
                 except Exception as e:  # noqa: BLE001
                     info[f"{s}:{v}:error"] = str(e)[:120]

@@ -187,15 +187,22 @@ def apply_funding(cfg: dict, bk) -> list[str]:
     """资金费结算（事件驱动：每次信号周期 = 每根 K 线收盘时补算已过去的结算点）：
     对每个永续持仓，按交易所官方已结算费率，金额 = −方向 × 费率 × 数量 × 标记价。拿不到费率就跳过（不编造）。"""
     perps = {s: p for s, p in bk.positions.items() if p.market == "perp"}
-    if not perps:
+    pend = list(getattr(bk, "funding_pending", []) or [])
+    if not perps and not pend:
         return []
-    since = min(int(p.funding_ms or 0) for p in perps.values())
+    since = min([int(p.funding_ms or 0) for p in perps.values()] + [int(e["from_ms"]) for e in pend])
     try:
-        rows, _ = LV.funding_series(cfg["venue"], list(perps), since, fetch=True, proxy_gate_for_okx=False)
+        rows, _ = LV.funding_series(cfg["venue"], sorted(set(perps) | {e["symbol"] for e in pend}), since, fetch=True,
+                                    proxy_gate_for_okx=False)
     except Exception as e:  # noqa: BLE001
         log.warning("资金费率拉取失败：%s", e)
         return []
     out = []
+    if pend:  # 已平仓位在持仓期内、平仓时尚未公布的结算点（见 PaperBook.apply_pending_funding）
+        tot = bk.apply_pending_funding(rows)
+        if tot:
+            out.append(f"已平永续仓补记资金费 {tot:+.4f} U")
+        bk.save()
     for s, p in perps.items():
         tot = 0.0
         for t_ms, r in rows.get(s, []):
