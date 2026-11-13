@@ -9,6 +9,9 @@
   已有持仓不因趋势过滤平仓，离场仍只看信号反转/归零与 ATR 止损。
 震荡指数闸门（chop_n>0，可选，默认关闭，仅作用于入场）：CHOP_n = 100·log10(ΣTR_n / (maxH_n − minL_n)) / log10(n)，
   上一根 CHOP > chop_max（震荡市）时不新开 / 反手开仓；已有持仓离场、止损、调仓不受影响。
+Elder-Ray 空头闸门（elder_short_gate_n>0，可选，默认关闭，只拦新开 / 反手空单）：用现货 K 线，
+  E = EMA_N(close)，ATR = Wilder ATR14，bull = (high − E) / ATR；上一根 bull < −X（整根 K 线低于 EMA 超过 X 个 ATR，
+  空头已过度延伸）时不新开空；已有持仓、止损、离场、调仓不受影响；前 N+20 根数据不足时不拦。
 止损：入场价 ∓ atr_stop_mult × ATR(入场前一根收盘)。止损后保持空仓，直到信号方向改变。
 """
 from __future__ import annotations
@@ -36,11 +39,31 @@ def chop_ok(chop: float, chop_n: int, chop_max: float) -> bool:
     return chop <= chop_max
 
 
+def elder_bull_power(df: pd.DataFrame, n: int, atr_n: int = 14) -> pd.Series:
+    """Elder-Ray 牛力（ATR 归一化，只用已收盘 K 线）：(high − EMA_n(close)) / WilderATR_atr_n。前 n+20 根为 NaN。"""
+    h, l, c = df["high"].astype(float), df["low"].astype(float), df["close"].astype(float)
+    e = c.ewm(span=int(n), adjust=False).mean()
+    prev = c.shift(1)
+    tr = pd.concat([h - l, (h - prev).abs(), (l - prev).abs()], axis=1).max(axis=1)
+    atr = tr.ewm(alpha=1 / atr_n, adjust=False).mean()
+    out = (h - e) / atr.replace(0, np.nan)
+    out.iloc[: int(n) + 20] = np.nan
+    return out
+
+
+def elder_short_ok(bull: float, n: int, x: float) -> bool:
+    """Elder-Ray 空头入场闸门：关闭（n=0）或牛力未形成（NaN）时为 True；bull < −x 时不新开空。"""
+    if not n or not (bull == bull):
+        return True
+    return not bull < -float(x)
+
+
 def indicators(df: pd.DataFrame, fast: int, slow: int, atr_period: int, confirm_bars: int = 1, trend_ma: int = 0,
-               chop_n: int = 0) -> pd.DataFrame:
+               chop_n: int = 0, elder_n: int = 0) -> pd.DataFrame:
     out = df.copy()
     c = out["close"]
     out["chop"] = chop_index(out, int(chop_n)) if chop_n else np.nan
+    out["elder_bull"] = elder_bull_power(out, int(elder_n)) if elder_n else np.nan
     out["trend_ma"] = c.rolling(int(trend_ma), min_periods=int(trend_ma)).mean() if trend_ma else np.nan
     out["sma_fast"] = c.rolling(fast, min_periods=fast).mean()
     out["sma_slow"] = c.rolling(slow, min_periods=slow).mean()

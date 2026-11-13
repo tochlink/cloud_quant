@@ -19,7 +19,7 @@ from .paper import ORDER_COLS, PaperBook
 from .paths import OUTPUT_DIR
 from .backtest import short_breaker
 from .risk import cap_at_entry, scale_to_room, size
-from .strategy import bar_close_equity, btc_regime_blocks_long, combine, indicators, last_cross, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok
+from .strategy import bar_close_equity, btc_regime_blocks_long, combine, indicators, last_cross, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
 from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
@@ -237,6 +237,9 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     need = max(st["lookback_bars"], st["slow_ma"] + st["atr_period"] + 5, int(st.get("trend_ma", 0) or 0) + 5,
                int(st.get("chop_n", 0) or 0) + 5)
     cn, cmax = int(st.get("chop_n", 0) or 0), float(st.get("chop_max", 50) or 50)
+    en, ex = int(st.get("elder_short_gate_n", 0) or 0), float(st.get("elder_short_gate_x", 0) or 0)
+    if en:
+        need = max(need, 4 * en + 120)  # EMA / Wilder ATR 需要足够历史收敛，与长历史回测一致
     nv_t, nv_l = float(st.get("name_vol_target", 0) or 0), int(st.get("name_vol_lookback", 120) or 120)
     if nv_t > 0:
         need = max(need, nv_l + 5)  # 单币波动率封顶需要 lookback+1 根收盘
@@ -256,7 +259,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         for m in ("spot", "perp"):
             df = frames.get(m, {}).get(sym)
             if df is not None and len(df) >= st["slow_ma"] + 1:
-                ind[m] = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1), st.get("trend_ma", 0), cn)
+                ind[m] = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1), st.get("trend_ma", 0), cn, en)
                 ind[m].attrs.update(df.attrs)
         if not ind:
             pos = bk.positions.get(sym)
@@ -339,6 +342,11 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             row["chop"] = cv if cv == cv else None
             if sig != 0 and not chop_ok(cv, cn, cmax):
                 row["chop_ok"] = False
+        if en:
+            ev = float(ind["spot"]["elder_bull"].iloc[-1]) if "spot" in ind else float("nan")
+            row["elder_bull"] = ev if ev == ev else None
+            if sig < 0 and not elder_short_ok(ev, en, ex):
+                row["elder_ok"] = False
         if rg["n"]:
             row["btc_regime_block_long"] = bool(rg["blocked"])
             if sig > 0 and rg["blocked"]:
@@ -386,6 +394,11 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             cv = row.get("chop")
             entry = f"震荡指数闸门：CHOP{cn} = {cv:.1f} > {cmax:g}（震荡市），暂不新开 / 反手开仓（CHOP 回落后恢复；已有持仓不受影响）" if cv is not None else f"震荡指数 CHOP{cn} 尚未形成，暂不新开仓"
             exit_, state = "—", "chop_wait"
+            row["stop_source"] = "suggested"
+            row["stop_side"] = side
+        elif row.get("elder_ok") is False:
+            entry = f"Elder-Ray 空头闸门：现货牛力 {row['elder_bull']:.2f} < −{ex:g} ATR（整根 K 线低于 EMA{en}，空头过度延伸），暂不新开 / 反手开空（回到阈值内后恢复；已有持仓不受影响）"
+            exit_, state = "—", "elder_wait"
             row["stop_source"] = "suggested"
             row["stop_side"] = side
         elif not tok:
@@ -548,7 +561,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         want = {}
         for s in cfg["symbols"]:
             r = rows.get(s)
-            if not r or s in bk.positions or s in bk.halts or r["signal"] == 0 or block_active(bk, s, r) or r.get("trend_ok") is False or r.get("regime_ok") is False or r.get("chop_ok") is False or r.get("state") == "short_paused":
+            if not r or s in bk.positions or s in bk.halts or r["signal"] == 0 or block_active(bk, s, r) or r.get("trend_ok") is False or r.get("regime_ok") is False or r.get("chop_ok") is False or r.get("elder_ok") is False or r.get("state") == "short_paused":
                 continue
             if r["side"] == "long" and not rk["allow_spot_long"] or r["side"] == "short" and not rk["allow_perp_short"]:
                 continue

@@ -51,6 +51,13 @@ DEFAULTS: dict[str, Any] = {
         # 未达到改默认的标准（output/research_choppiness_entry_gate_monthly_walkforward.csv）。0=关闭；建议试用 chop_n 56 / chop_max 50
         "chop_n": 0,
         "chop_max": 50.0,
+        # 2026-11-12：可选 Elder-Ray 空头入场闸门（默认关闭，只拦新开 / 反手空单）。现货 4h：E = EMA_N(close)，bull = (high − E) / WilderATR14；
+        # 上一根 bull < −X（整根 K 线低于 EMA 超过 X 个 ATR，空头过度延伸）时不新开空，已有持仓 / 止损 / 离场 / 调仓不变。
+        # 研究（scratch/eray_*.py，docs/STRATEGY_FORMULAS.md）：N26 X0 Gate +196.6% / OKX +193.3%（基线约 +156% / +159%），
+        # 2026-03 后 +59.6…+60.5% vs +57.3%，10 个时移安慰剂 2026-03 后都更差；3/6 个月 walk-forward 胜基线、12 个月略低，未改默认。
+        # 0=关闭；建议试用 elder_short_gate_n 26–50 / elder_short_gate_x 0–0.5
+        "elder_short_gate_n": 0,
+        "elder_short_gate_x": 0.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -187,6 +194,12 @@ def validate(s: dict) -> dict:
     st["chop_max"] = float(st.get("chop_max", 50) or 50)
     if not 20 <= st["chop_max"] <= 100:
         raise ValueError("震荡指数阈值需在 20–100 之间")
+    st["elder_short_gate_n"] = int(st.get("elder_short_gate_n", 0) or 0)
+    if st["elder_short_gate_n"] and not 5 <= st["elder_short_gate_n"] <= 300:
+        raise ValueError("Elder-Ray 空头闸门 EMA 周期需为 0（关闭）或 5–300")
+    st["elder_short_gate_x"] = float(st.get("elder_short_gate_x", 0) or 0)
+    if not 0 <= st["elder_short_gate_x"] <= 5:
+        raise ValueError("Elder-Ray 空头闸门 ATR 倍数需在 0–5 之间")
     st["pyramid_r"] = float(st.get("pyramid_r", 0) or 0)
     st["pyramid_frac"] = float(st.get("pyramid_frac", 0.5) or 0)
     if st["pyramid_r"] and not 0.5 <= st["pyramid_r"] <= 5:
