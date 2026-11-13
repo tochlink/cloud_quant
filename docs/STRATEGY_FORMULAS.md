@@ -2770,3 +2770,18 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
   - 月度 walk-forward（7 个候选含 off，按训练窗 Sharpe 选）：3 / 6 个月训练两所 Sharpe 都赢（Gate 2.05 vs 1.87、2.12 vs 1.97；OKX 2.02 vs 1.88、2.13 vs 1.99，回撤 −13…−16% vs −17.9%）；12 个月训练两所略输（Gate +91.7% / 2.23 vs +95.4% / 2.30，OKX +86.7% / 2.18 vs +90.1% / 2.25），训练窗几乎总选反手。
 - 结论：本轮不改默认（12 个月 walk-forward 未打平、OKX 后段只 3/8 月更好）。这是近期少见的在两所整段、回撤、Sharpe、压力费率、邻域、安慰剂全部过关的出场侧族，列为强观察：下一轮先在 backtest 中做成可选参数（如 sar_hold_bars / sar_risk_mult / sar_atr_mult，默认 0 = 关），再评估引擎（模拟 / 实盘）一致实现；若后续 2026-03 后数据两所都 ≥ 6/9 月更好且 12 个月 walk-forward 至少打平，再考虑默认。
 - CSV：`output/research_stop_and_reverse.csv`、`output/research_stop_and_reverse_monthly_walkforward.csv`、`output/research_stop_and_reverse_monthly_walkforward_monthly_vs_off.csv`（未推送）；脚本 `scratch/sar_core.py`、`scratch/sar_long.py`、`scratch/sar_wf.py`（对 run_backtest 源码打补丁执行，不改仓库代码）。
+
+### 止损反手做成可选回测参数（2026-11-12 21:35 PST，实现，不改默认）
+
+- 参数（`qtw/settings.py` 策略参数，默认关闭）：`sar_hold_bars`（0 = 关闭，1–100）、`sar_risk_mult`（0.1–3，默认 1.0）、`sar_atr_mult`（0.5–10，默认 2.0）。
+- 规则（`qtw/backtest.py`，与 `scratch/sar_core.py` 补丁逐行一致）：第 i 根原方向 ATR 止损 → 第 i+1 根开盘开反向仓，单笔风险 / 单币权重上限 = 当前上限 × NVM × `sar_risk_mult`，止损 = `sar_atr_mult` × ATR(i−1)；
+  持有满 `sar_hold_bars` 根按开盘价平仓（原因「反手时间」）或被自身止损；期间上一根信号转为反手方向则转为正常持仓（之后按常规规则离场 / 调仓）。
+  反手仓不参与调仓；反手仓止损后不再连环反手，并恢复原方向锁定；反手多单受 `btc_regime_ma`、`allow_spot_long` 约束，反手空单受 `allow_perp_short` 约束；空头熔断影子账本强制关闭反手。
+- 无前视：反手方向和仓位只用第 i 根止损事实 + 第 i−1 根收盘的 ATR / 权益 / 体制，第 i+1 根开盘成交（`tests/test_stop_and_reverse.py`：仅在反向止损下一根开盘开出、无连环反手、截断未来数据前已平仓交易不变）。
+- 一致性校验（`scratch/sar_parity.py`，官方 Gate / OKX 现货 + USDT 永续 4h，4500 根，窗口已滚动到 2025-01-17 → 2026-11-13，默认参数 + 真实费率）：
+  off / H12 k1 m2 / H6 k0.5 m1 / H12 压力费率共 8 组，生产实现与 scratch 补丁**逐笔成交、权益曲线完全一致**（最大权益差 0.0）。
+  本窗口 H12 k1 m2：Gate +216.5% / 回撤 −15.4% / 日 Sharpe 1.90 vs 关闭 +138.3% / −26.7% / 1.49；OKX +221.2% / −15.4% / 1.93 vs +140.5% / −26.5% / 1.52；
+  2026-03-05 后 Gate +55.8% vs +51.4%，OKX +57.2% vs +50.5%；压力费率 +192.3% / +192.6%。（回撤为日内权益峰谷口径，与 sar_long.py 口径不同，只做组内比较。）
+  CSV：`output/research_stop_and_reverse_backtest_parity.csv`。
+- 引擎 / 模拟盘：**暂只在回测生效**。引擎止损由 `poll_stops` 实时触发、锁定状态持久化在纸面账本，要做到一致需要给持仓加反手标记与持有计数、在下一根收盘周期开反手仓并做体制 / 允许方向检查，改动较大，留待后续单独一轮做引擎对齐。
+- 状态：强观察，默认不变（改默认门槛：2026-03 后 ≥ 6/9 个月两个交易所都更好，且 12 个月 walk-forward 至少打平）。
