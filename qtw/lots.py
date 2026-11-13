@@ -62,17 +62,25 @@ def _fetch(venue: str, symbol: str, market: str) -> Lot:
             prec = int(d.get("amount_precision", 8))
             return Lot("gate", symbol, market, 10.0 ** -prec, float(d.get("min_base_amount") or 0),
                        min_quote=float(d.get("min_quote_amount") or 0), source="gate /spot/currency_pairs")
-        d = h.get(f"/futures/usdt/contracts/{b}_USDT")
-        ct = float(d["quanto_multiplier"])
-        cstep = 1.0 if not d.get("enable_decimal") else 0.001
-        mn = float(d.get("order_size_min") or 1)
-        return Lot("gate", symbol, market, cstep * ct, mn * ct, ct, cstep, source="gate /futures/usdt/contracts")
+        return gate_perp_lot(symbol, h.get(f"/futures/usdt/contracts/{b}_USDT"))
     raise ValueError(venue)
+
+
+def gate_perp_lot(symbol: str, d: dict) -> Lot:
+    """Gate USDT 永续合约元数据 → Lot。enable_decimal 的合约允许 0.001 张步长，接口返回 order_size_min = 0；
+    0 是有效值（不是缺失），不能用 `or 1` 回退成 1 张——否则 SOL / ETH / XRP 等最小量被放大到 1 张
+    （SOL 1 张 = 1 SOL），小资金开仓被跳过、调仓按整张取整。缺失时才按 1 张；最小量不低于一个步长。"""
+    ct = float(d["quanto_multiplier"])
+    cstep = 0.001 if d.get("enable_decimal") else 1.0
+    raw = d.get("order_size_min")
+    mn = float(raw) if raw not in (None, "") else 1.0
+    mn = max(mn, cstep)
+    return Lot("gate", symbol, "perp", cstep * ct, mn * ct, ct, cstep, source="gate /futures/usdt/contracts")
 
 
 def spec(venue: str, symbol: str, market: str) -> Lot:
     venue = venue.lower()
-    key = f"lot:{venue}:{market}:{symbol}"
+    key = f"lot2:{venue}:{market}:{symbol}"  # lot2：修正 Gate 小数合约最小量后弃用旧缓存
     now = time.time()
     with _LOCK:
         x = _MEM.get(key)
