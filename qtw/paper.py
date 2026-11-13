@@ -1,9 +1,10 @@
 """持久化纸面账本 —— SQLite 为唯一数据源（data/qtw.sqlite），CSV 只是导出物。
 
-记账模型（1 倍保证金）：
+记账模型（逐仓保证金，2026-11-13 起永续可设杠杆）：
   realized = 起始资金 + 已实现盈亏 − 手续费
   equity   = realized + Σ 未实现盈亏
-  可用现金 = equity − Σ |持仓名义|（现货占用资金，永续空头占用等额保证金）
+  可用资金 = equity − Σ 占用（现货 = 买入名义；永续 = 名义 / 杠杆 的逐仓保证金）
+  资金费在结算点计入 realized（apply_funding）；被强平时损失该仓全部逐仓保证金（liquidate）
 成交价必须来自交易所公共行情（现货最新价 / 永续标记价），本模块不产生任何价格。
 """
 from __future__ import annotations
@@ -40,6 +41,12 @@ class Position:
     init_stop: float = 0.0  # 初始止损（R0 = |入场价 − 初始止损|）；旧持仓加载时用当前止损回填
     tp_done: int = 0  # 已分批止盈
     be_moved: int = 0  # 剩余仓位止损已移到保本价
+    leverage: float = 1.0  # 永续逐仓杠杆（现货 1）
+    margin_usdt: float = 0.0  # 占用保证金 = 名义 / 杠杆（现货 = 名义）
+    liq_price: float = 0.0  # 逐仓强平价（0 = 不会强平 / 现货）
+    lev_reason: str = ""  # 杠杆被下调的原因
+    funding_usdt: float = 0.0  # 本仓累计资金费（+ 收取 / − 支付），已计入 realized
+    funding_ms: int = 0  # 已结算到的最后一个资金费时间（ms）
 
     @property
     def direction(self) -> int:
@@ -138,6 +145,7 @@ class PaperBook:
             self.starting = float(st.get("starting_equity_usdt", starting_equity))
             self.realized = float(st.get("realized_usdt", self.starting))
             self.created = st.get("created_at", iso(utcnow()))
+            self.funding_total = float(st.get("funding_total_usdt", 0.0) or 0.0)
             self.positions = {r["symbol"]: Position(**{k: r[k] for k in POS_COLS}) for r in
                               self._q("SELECT * FROM paper_positions")}
             for p in self.positions.values():
@@ -145,6 +153,17 @@ class PaperBook:
                 p.tp_done, p.be_moved = int(p.tp_done or 0), int(p.be_moved or 0)
                 if not (p.init_stop and float(p.init_stop) > 0):
                     p.init_stop = float(p.stop_price)  # 旧持仓：尚未移动过的止损即初始止损
+                p.leverage = float(p.leverage or 1) or 1.0
+                p.liq_price, p.funding_usdt = float(p.liq_price or 0), float(p.funding_usdt or 0)
+                p.funding_ms, p.lev_reason = int(p.funding_ms or 0), p.lev_reason or ""
+                if not p.funding_ms:  # 旧持仓：从入场时间起算资金费（不能追溯入场前的结算点）
+                    try:
+                        from datetime import datetime
+                        p.funding_ms = int(datetime.fromisoformat(str(p.entry_time).replace("Z", "+00:00")).timestamp() * 1000)
+                    except (TypeError, ValueError):
+                        p.funding_ms = int(utcnow().timestamp() * 1000)
+                if not (p.margin_usdt and float(p.margin_usdt) > 0):
+                    p.margin_usdt = float(p.qty) * float(p.entry_price) / p.leverage  # 旧持仓：1 倍
             healed = self._heal_venues()
             self.blocks = {r["symbol"]: int(r["blocked_signal"]) for r in self._q("SELECT * FROM paper_blocks")}
             self.halts = {r["symbol"] for r in self._q("SELECT symbol FROM paper_halts")}
@@ -169,7 +188,8 @@ class PaperBook:
 
     def _save(self, c):
         for k, v in (("starting_equity_usdt", self.starting), ("realized_usdt", self.realized),
-                     ("created_at", self.created), ("updated_at", iso(utcnow()))):
+                     ("created_at", self.created), ("updated_at", iso(utcnow())),
+                     ("funding_total_usdt", float(getattr(self, "funding_total", 0.0)))):
             c.execute("INSERT OR REPLACE INTO paper_state(key,value) VALUES(?,?)", (k, str(v)))
         c.execute("DELETE FROM paper_positions")
         for p in self.positions.values():
@@ -191,6 +211,7 @@ class PaperBook:
                 c.execute(f"DELETE FROM {t}")
             self.created = iso(utcnow())
             self.starting = self.realized = float(starting_equity)
+            self.funding_total = 0.0
             self.positions, self.blocks, self.halts = {}, {}, set()
             self._save(c)
 
@@ -200,6 +221,52 @@ class PaperBook:
 
     def gross(self) -> float:
         return sum(abs(p.qty * p.mark_price) for p in self.positions.values())
+
+    def margin_used(self) -> float:
+        """占用资金：永续 = 逐仓保证金（名义 / 杠杆），现货 = 买入名义。"""
+        return sum(float(p.margin_usdt or 0) or abs(p.qty * p.entry_price) for p in self.positions.values())
+
+    def set_leverage(self, symbol: str, lev: float, liq: float, reason: str = "") -> None:
+        """开仓 / 调仓 / 移动止损后更新杠杆、保证金（= 数量 × 均价 / 杠杆）与强平价。"""
+        with _LOCK:
+            p = self.positions.get(symbol)
+            if not p:
+                return
+            p.leverage = float(max(1.0, lev))
+            p.liq_price = float(liq if liq == liq else 0.0)
+            p.margin_usdt = p.qty * p.entry_price / (p.leverage if p.market == "perp" else 1.0)
+            if reason:
+                p.lev_reason = reason
+
+    def apply_funding(self, symbol: str, rate: float, price: float, t_ms: int) -> float:
+        """资金费结算：金额 = −方向 × 费率 × 数量 × 价格（正费率多付空收）。计入 realized，不产生成交记录。"""
+        with _LOCK:
+            p = self.positions.get(symbol)
+            if not p or p.market != "perp" or int(t_ms) <= int(p.funding_ms or 0):
+                return 0.0
+            amt = -p.direction * float(rate) * p.qty * float(price)
+            self.realized += amt
+            p.funding_usdt = float(p.funding_usdt or 0) + amt
+            p.funding_ms = int(t_ms)
+            self.funding_total = float(getattr(self, "funding_total", 0.0)) + amt
+            return amt
+
+    def liquidate(self, symbol: str, price: float, price_kind: str, venue: str, mode="paper",
+                  data_source="", price_time="") -> float:
+        """逐仓强平：该仓保证金全部损失（剩余维持保证金作为强平费用），记一条 reason=强制平仓 的平仓成交。"""
+        with _LOCK, db.tx(self.conn) as c:
+            p = self.positions.pop(symbol)
+            lost = float(p.margin_usdt or p.qty * p.entry_price / max(1.0, p.leverage))
+            g = p.upnl(price)
+            pen = max(0.0, lost + g)
+            self.realized -= lost
+            _ins(c, "paper_fills", dict(time=iso(utcnow()), symbol=symbol, market=p.market,
+                                        side="sell" if p.side == "long" else "buy", action="close", qty=p.qty, price=price,
+                                        price_kind=price_kind, notional_usdt=p.qty * price, fee_usdt=pen,
+                                        realized_pnl_usdt=-lost, reason="强制平仓", mode=mode, venue=venue,
+                                        data_source=data_source, price_time=price_time))
+            self._save(c)
+            return -lost
 
     def net(self) -> float:
         return sum(p.direction * p.qty * p.mark_price for p in self.positions.values())
@@ -212,7 +279,7 @@ class PaperBook:
                 p.mark_price, p.mark_time, p.mark_source = price, when, source or p.mark_source
 
     def open(self, *, symbol, market, side, qty, price, price_kind, stop, signal_bar, reason, venue, mode="paper",
-             data_source="", price_time=""):
+             data_source="", price_time="", leverage: float = 1.0, liq_price: float = 0.0, lev_reason: str = ""):
         with _LOCK, db.tx(self.conn) as c:
             notional = qty * price
             fee = notional * self.fee_for(market)
@@ -220,6 +287,12 @@ class PaperBook:
             now = iso(utcnow())
             self.positions[symbol] = Position(symbol, market, side, qty, price, now, stop, price, now, notional, fee,
                                               signal_bar, venue, data_source, init_stop=float(stop))
+            p = self.positions[symbol]
+            p.leverage = float(max(1.0, leverage)) if market == "perp" else 1.0
+            p.margin_usdt = notional / p.leverage
+            p.liq_price = float(liq_price or 0.0) if market == "perp" else 0.0
+            p.lev_reason = lev_reason or ""
+            p.funding_ms = int(utcnow().timestamp() * 1000)  # 开仓之后的结算点才计资金费
             _ins(c, "paper_fills", dict(time=now, symbol=symbol, market=market, side="buy" if side == "long" else "sell",
                                         action="open", qty=qty, price=price, price_kind=price_kind, notional_usdt=notional,
                                         fee_usdt=fee, realized_pnl_usdt=-fee, reason=reason, mode=mode, venue=venue,
@@ -264,6 +337,7 @@ class PaperBook:
             self.realized += g - fee
             p.qty = float(new_qty)
             p.fees_paid += fee
+            p.margin_usdt = p.qty * p.entry_price / (max(1.0, float(p.leverage or 1)) if p.market == "perp" else 1.0)
             _ins(c, "paper_fills", dict(time=iso(utcnow()), symbol=symbol, market=p.market, side=side, action=action,
                                         qty=abs(dq), price=price, price_kind=price_kind, notional_usdt=notional,
                                         fee_usdt=fee, realized_pnl_usdt=g - fee, reason=reason, mode=mode, venue=venue,
@@ -275,7 +349,7 @@ class PaperBook:
         with _LOCK, db.tx(self.conn) as c:
             eq = self.equity()
             row = {"time": iso(utcnow()), "equity_usdt": eq, "realized_usdt": self.realized,
-                   "unrealized_usdt": eq - self.realized, "cash_free_usdt": eq - self.gross(),
+                   "unrealized_usdt": eq - self.realized, "cash_free_usdt": eq - self.margin_used(),
                    "gross_exposure_usdt": self.gross(), "net_exposure_usdt": self.net(),
                    "positions": len(self.positions), "note": note}
             _ins(c, "paper_ledger", row)

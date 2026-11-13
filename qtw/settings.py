@@ -122,7 +122,14 @@ DEFAULTS: dict[str, Any] = {
         "max_risk_per_trade": 0.05,
         "max_weight_per_name": 0.20,
         "max_gross_exposure": 1.0,  # 总敞口 ≤ 1 倍权益
-        "perp_leverage": 1,  # v1 保守：永续 1 倍保证金，不放大
+        # 2026-11-13 t69u：多空都用 USDT 永续（perp_both，默认）；保留「现货做多 + 永续做空」（spot_perp）。
+        # 杠杆默认 10 倍、可设 1–100 倍（还受交易所该币上限约束），逐仓：保证金 = 名义 / 杠杆。
+        # 默认「杠杆不放大风险」：名义仍按单笔风险 / 单币权重 / 总敞口定，10 倍只是少占保证金；
+        # 每仓实际杠杆 = min(设置, 交易所上限, 止损先于强平的安全上限)，见 qtw/leverage.py、qtw/margin.py。
+        "trade_mode": "perp_both",
+        "perp_leverage": 10,
+        # 可选（默认关）：杠杆放大敞口 —— 单笔风险、单币权重、总敞口都 × 杠杆。历史回测在 ≥3 倍时回撤 / 爆仓风险急剧上升，仅供观察
+        "leverage_scales_exposure": False,
         "allow_spot_long": True,
         "allow_perp_short": True,
     },
@@ -181,6 +188,10 @@ def load() -> dict:
                 data = yaml.safe_load(PATH.read_text(encoding="utf-8")) or {}
                 _write_db(_merge(DEFAULTS, data))
                 PATH.rename(PATH.with_suffix(".yaml.migrated"))
+        rk = data.get("risk") if isinstance(data.get("risk"), dict) else None
+        if rk is not None and "trade_mode" not in rk:
+            # v1 存档：perp_leverage 被强制为 1（不是用户选择）。升级到 t69u 后改用新默认（多空永续、10 倍，仓位仍按风险）
+            data = {**data, "risk": {k: v for k, v in rk.items() if k != "perp_leverage"}}
         out = _merge(DEFAULTS, data)
         out["strategy"]["fast_exit_tf"] = "off"  # 已存的旧值（5m / 10m / 1d）也不生效，见 validate() 注释
         return out
@@ -302,8 +313,19 @@ def validate(s: dict) -> dict:
         raise ValueError("单笔风险上限不能超过 5%（已约定规则）")
     if not 0 < rk["max_weight_per_name"] <= 0.20:
         raise ValueError("单币权重上限不能超过 20%（已约定规则）")
-    if float(rk["max_gross_exposure"]) > 1.0 or int(rk["perp_leverage"]) != 1:
-        raise ValueError("v1 仅支持 1 倍总敞口与 1 倍永续保证金")
+    if float(rk["max_gross_exposure"]) > 1.0:
+        raise ValueError("总敞口上限不能超过 1 倍权益（放大敞口请用「杠杆放大敞口」开关）")
+    rk["trade_mode"] = str(rk.get("trade_mode", "perp_both") or "perp_both")
+    if rk["trade_mode"] not in ("perp_both", "spot_perp"):
+        raise ValueError("交易方式只能是 perp_both（多空都用永续）或 spot_perp（现货做多 + 永续做空）")
+    try:
+        lev = float(rk.get("perp_leverage", 10))
+    except (TypeError, ValueError):
+        raise ValueError("杠杆倍数需为 1–100 的整数") from None
+    if lev != int(lev) or not 1 <= lev <= 100:
+        raise ValueError("杠杆倍数需为 1–100 的整数")
+    rk["perp_leverage"] = int(lev)
+    rk["leverage_scales_exposure"] = bool(rk.get("leverage_scales_exposure", False))
     if s["venue"] not in ("okx", "gate"):
         raise ValueError("交易所只能是 okx 或 gate")
     syms = [x.strip().upper().replace("/", "").replace("-", "") for x in s["symbols"] if x.strip()]

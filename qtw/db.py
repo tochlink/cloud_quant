@@ -101,7 +101,10 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
         conn.executescript(SCHEMA)
         # 2026-11-13：分批止盈 / 保本字段（旧库就地加列，不动已有数据）
         have = {r[1] for r in conn.execute("PRAGMA table_info(paper_positions)").fetchall()}
-        for col, ddl in (("init_stop", "REAL DEFAULT 0"), ("tp_done", "INTEGER DEFAULT 0"), ("be_moved", "INTEGER DEFAULT 0")):
+        for col, ddl in (("init_stop", "REAL DEFAULT 0"), ("tp_done", "INTEGER DEFAULT 0"), ("be_moved", "INTEGER DEFAULT 0"),
+                         # 2026-11-13 t69u：永续杠杆 / 逐仓保证金 / 强平价 / 资金费
+                         ("leverage", "REAL DEFAULT 1"), ("margin_usdt", "REAL DEFAULT 0"), ("liq_price", "REAL DEFAULT 0"),
+                         ("lev_reason", "TEXT DEFAULT ''"), ("funding_usdt", "REAL DEFAULT 0"), ("funding_ms", "INTEGER DEFAULT 0")):
             if col not in have:
                 conn.execute(f"ALTER TABLE paper_positions ADD COLUMN {col} {ddl}")
         conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
