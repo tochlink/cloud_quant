@@ -95,9 +95,11 @@ def yoy(venue: str, symbol: str, interval: str, years: list[int], market: str = 
             continue
         c0 = float(sub["close"].iloc[0])
         pts = []
-        for t, c in zip(ot[m], sub["close"]):
-            v = (float(c) / c0 - 1) * 100 if mode == "pct" else float(c)
-            pts.append({"time": _ref_ts(t), "value": round(v, 6), "date": t.strftime("%Y-%m-%d %H:%M")})
+        nv = (lambda x: round((float(x) / c0 - 1) * 100, 6)) if mode == "pct" else (lambda x: float(x))
+        for t, o, h, l_, c in zip(ot[m], sub["open"], sub["high"], sub["low"], sub["close"]):
+            # value = 收盘（线图）；open/high/low/close = K 线（pct 模式按当年第一根收盘归一）；raw = 官方原始 OHLC（悬浮提示用）
+            pts.append({"time": _ref_ts(t), "value": nv(c), "open": nv(o), "high": nv(h), "low": nv(l_), "close": nv(c),
+                        "raw": [float(o), float(h), float(l_), float(c)], "date": t.strftime("%Y-%m-%d %H:%M")})
         series.append({"year": y, "points": pts, "first_close": c0, "last_close": float(sub["close"].iloc[-1]),
                        "change": float(sub["close"].iloc[-1]) / c0 - 1, "first_date": pts[0]["date"], "last_date": pts[-1]["date"]})
     return {"symbol": symbol, "venue": venue, "market": market, "interval": interval, "mode": mode,

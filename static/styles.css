@@ -707,3 +707,21 @@ i[data-icon]{display:inline-flex;align-items:center;justify-content:center;line-
 .r-pos .rp-w{flex:none;color:var(--muted)}
 .r-pos .rp-now{flex:none;margin-left:auto;overflow:visible}
 @media (max-width:1500px){ .pos-tbl th,.pos-tbl td{padding-left:6px;padding-right:6px} .pos-tbl .pt-sym{gap:7px} }
+/* 2026-11-13 同比 K 线 + 悬浮差异提示 */
+.sig-page.yoy-on .chart-panel{flex:1 1 58%}
+.sig-page.yoy-on .sig-panel{flex:1 1 30%;min-height:150px}
+.sig-page.yoy-on .chart-head{flex-wrap:wrap;row-gap:6px}
+.sig-page.yoy-on .chart-head>div:first-child{flex:1 0 auto;min-width:0}
+.sig-page.yoy-on .chart-head h3,.sig-page.yoy-on #chartSrc{overflow:visible;text-overflow:clip}
+.sig-page.yoy-on .chart-ctl{flex-wrap:wrap;row-gap:6px}
+.yoy-legend i.k{width:10px;height:10px;border:1.5px solid;border-radius:2px;box-sizing:border-box}
+.yoy-tip{position:absolute;z-index:9;width:430px;box-sizing:border-box;pointer-events:none;background:rgba(255,255,255,.97);border:1px solid #e4dff8;border-radius:10px;box-shadow:0 6px 20px rgba(60,40,140,.14);padding:6px 8px;font-size:11px;line-height:15px;color:var(--ink-2)}
+.yoy-tip table{width:100%;border-collapse:collapse;table-layout:fixed}
+.yoy-tip th{font-weight:600;color:var(--muted);text-align:right;padding:0 3px}
+.yoy-tip td{text-align:right;padding:0 3px;white-space:nowrap;overflow:hidden;font-variant-numeric:tabular-nums}
+.yoy-tip th:first-child,.yoy-tip td:first-child{text-align:left;width:44px}
+.yoy-tip th:nth-child(2),.yoy-tip td:nth-child(2){width:44px;text-align:left}
+.yoy-tip td i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:3px}
+.yoy-tip .yoy-diff{margin-top:3px;padding-top:3px;border-top:1px dashed #ece8fd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.yoy-tip .pos{color:#1a9a68}.yoy-tip .neg{color:#d33f5a}
+.sig-page.yoy-on .chart-ctl{flex:1 1 100%;min-width:0;justify-content:flex-start}

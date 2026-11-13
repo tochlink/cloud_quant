@@ -53,6 +53,7 @@
     }
     return best || "开仓";
   }
+  function hexA(hex, a) { const h = hex.replace("#", ""); const v = parseInt(h.length === 3 ? h.split("").map((x) => x + x).join("") : h, 16); return `rgba(${(v >> 16) & 255},${(v >> 8) & 255},${v & 255},${a})`; }
   function escH(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&#38;", "<": "&#60;", ">": "&#62;", '"': "&#34;", "'": "&#39;" }[c]));
   }
@@ -294,25 +295,71 @@
       c._lastBar = d.candles.length ? { ...d.candles[d.candles.length - 1] } : null;
       return c;
     },
-    /* 同比叠加：横轴 = 参考年 2000 的同月同日（UTC），刻度只显示 月-日 */
-    yoy(el, d, colors) {
+    /* 同比叠加：横轴 = 参考年 2000 的同月同日（UTC），刻度只显示 月-日。
+       style = "k"（默认，每年一组 K 线：空心 = 收涨、实心 = 收跌，颜色区分年份，同一天按年份并排）| "line"（只画收盘线）。
+       悬浮：十字线 + 固定宽度提示框（各年日期 / 开高低收 / 涨跌 / 年内涨跌，以及最新年份与其他年份的差异）。 */
+    yoy(el, d, colorOf, style) {
       el.innerHTML = "";
+      const K = style !== "line";
       const md = (ts) => { const x = new Date(ts * 1000); return `${String(x.getUTCMonth() + 1).padStart(2, "0")}-${String(x.getUTCDate()).padStart(2, "0")}`; };
+      const pfmt = (v) => d.mode === "pct" ? (v >= 0 ? "+" : "") + v.toFixed(1) + "%" : (Math.abs(v) >= 100 ? v.toFixed(2) : v.toPrecision(5));
       const c = LightweightCharts.createChart(el, { ...base, width: el.clientWidth, height: el.clientHeight,
+        crosshair: { mode: 0 },
         timeScale: { borderColor: "#ece8fd", timeVisible: false, tickMarkFormatter: (ts) => md(ts) },
-        localization: { locale: "zh-CN", timeFormatter: (ts) => md(ts), priceFormatter: (v) => d.mode === "pct" ? (v >= 0 ? "+" : "") + v.toFixed(1) + "%" : (Math.abs(v) >= 100 ? v.toFixed(2) : v.toPrecision(5)) } });
+        localization: { locale: "zh-CN", timeFormatter: (ts) => md(ts), priceFormatter: pfmt } });
       const ro = new ResizeObserver(() => { if (!el.isConnected) { ro.disconnect(); return; } c.applyOptions({ width: el.clientWidth, height: el.clientHeight }); });
       ro.observe(el);
       const n = d.series.length;
+      const idx = []; // 每年：基准时间（整点）→ 点序号
       d.series.forEach((sr, i) => {
+        const map = new Map(); idx.push(map);
         if (!sr.points.length) return;
-        const col = colors[(i + colors.length - n) % colors.length];
-        const ln = c.addLineSeries({ color: col, lineWidth: i === n - 1 ? 3 : 2, title: String(sr.year), priceLineVisible: false });
-        const seen = new Set();
-        ln.setData(sr.points.filter((p) => (seen.has(p.time) ? false : (seen.add(p.time), true))).map((p) => ({ time: p.time, value: p.value })));
+        const col = colorOf(i, n), off = K ? i * 60 : 0; // K 线模式每年错开 i 分钟 → 同一天的各年 K 线并排、不重叠
+        const seen = new Set(), pts = [];
+        sr.points.forEach((p, k) => { if (!seen.has(p.time)) { seen.add(p.time); map.set(p.time, k); pts.push(p); } });
+        if (K) {
+          const s = c.addCandlestickSeries({ upColor: hexA(col, 0.14), downColor: col, borderVisible: true, borderUpColor: col, borderDownColor: col,
+            wickUpColor: col, wickDownColor: col, title: String(sr.year), priceLineVisible: false, lastValueVisible: true });
+          s.setData(pts.map((p) => ({ time: p.time + off, open: p.open ?? p.value, high: p.high ?? p.value, low: p.low ?? p.value, close: p.close ?? p.value })));
+        } else {
+          c.addLineSeries({ color: col, lineWidth: i === n - 1 ? 3 : 2, title: String(sr.year), priceLineVisible: false })
+            .setData(pts.map((p) => ({ time: p.time, value: p.value })));
+        }
       });
       c.timeScale().fitContent();
       c._n = 0;
+      // ---- 悬浮提示 ----
+      const tip = document.createElement("div"); tip.className = "yoy-tip"; tip.style.display = "none"; el.appendChild(tip);
+      const fp = (v) => (v == null || !isFinite(v) ? "—" : Math.abs(v) >= 1000 ? v.toLocaleString("en-US", { maximumFractionDigits: 2 }) : Math.abs(v) >= 1 ? v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : v.toPrecision(4));
+      const sg = (v, dgt = 2, unit = "%") => (v == null || !isFinite(v) ? "—" : (v >= 0 ? "+" : "\u2212") + Math.abs(v).toFixed(dgt) + unit);
+      const cl = (v) => (v == null || !isFinite(v) ? "" : v >= 0 ? "pos" : "neg");
+      c.subscribeCrosshairMove((pr) => {
+        if (!pr || pr.time == null || !pr.point || pr.point.x < 0 || pr.point.y < 0) { tip.style.display = "none"; return; }
+        const bt = Number(pr.time) - (Number(pr.time) % 3600);
+        const rows = d.series.map((sr, i) => {
+          const k = idx[i] && idx[i].get(bt);
+          if (k == null) return { sr, i, p: null };
+          const p = sr.points[k], prev = k > 0 ? sr.points[k - 1] : null, r = p.raw || [p.value, p.value, p.value, p.value];
+          const prc = prev ? (prev.raw ? prev.raw[3] : prev.value) : r[0];
+          return { sr, i, p, r, chg: prc ? (r[3] / prc - 1) * 100 : null, ytd: sr.first_close ? (r[3] / sr.first_close - 1) * 100 : null };
+        });
+        if (!rows.some((x) => x.p)) { tip.style.display = "none"; return; }
+        const head = `<tr><th>年份</th><th>日期</th><th>开</th><th>高</th><th>低</th><th>收</th><th>涨跌</th><th>年内</th></tr>`;
+        const body = rows.map((x) => `<tr><td><i style="background:${colorOf(x.i, n)}"></i>${x.sr.year}</td>${x.p ? `<td>${escH(String(x.p.date).slice(5, d.interval === "4h" ? 16 : 10))}</td><td>${fp(x.r[0])}</td><td>${fp(x.r[1])}</td><td>${fp(x.r[2])}</td><td><b>${fp(x.r[3])}</b></td><td class="${cl(x.chg)}">${sg(x.chg)}</td><td class="${cl(x.ytd)}">${sg(x.ytd, 1)}</td>` : `<td colspan="7" class="muted">当天无 K 线</td>`}</tr>`).join("");
+        const L = rows[rows.length - 1];
+        const diffs = L && L.p ? rows.slice(0, -1).filter((x) => x.p).map((x) => {
+          const dp = L.r[3] - x.r[3], dpc = (L.r[3] / x.r[3] - 1) * 100, gap = L.ytd - x.ytd;
+          return `<div class="yoy-diff">${L.sr.year} vs ${x.sr.year}：收盘差 <b class="${cl(dp)}">${dp >= 0 ? "+" : "\u2212"}${fp(Math.abs(dp))}</b>（<span class="${cl(dpc)}">${sg(dpc)}</span>）· 年内涨跌差 <b class="${cl(gap)}">${sg(gap, 1, " pts")}</b></div>`;
+        }).join("") : "";
+        tip.innerHTML = `<table>${head}${body}</table>${diffs}`;
+        tip.style.display = "block";
+        const W = el.clientWidth, H = el.clientHeight, tw = tip.offsetWidth, th = tip.offsetHeight;
+        let x = pr.point.x + 16; if (x + tw > W - 70) x = pr.point.x - tw - 16; // 右侧留出价格轴
+        x = Math.max(4, Math.min(x, W - tw - 4));
+        const y = Math.max(4, Math.min(H - th - 28, 6));
+        tip.style.left = x + "px"; tip.style.top = y + "px";
+      });
+      c._yoyTip = tip;
       return c;
     },
     equity(el, pts, extra) {

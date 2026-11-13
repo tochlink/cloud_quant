@@ -653,7 +653,9 @@ function bindGo() { document.querySelectorAll("#page [data-go]").forEach((el) =>
 /* ---------- 信号 / 进出场 ---------- */
 const IV_SEC = { "1m": 60, "5m": 300, "10m": 600, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400, "1w": 604800, "1M": 2629800, "1y": 31557600 };
 const CHART_IVS = [["1m", "1m"], ["5m", "5m"], ["10m", "10m"], ["15m", "15m"], ["1h", "1h"], ["4h", "4h"], ["1d", "1D"], ["1w", "1W"], ["1M", "1M"], ["1y", "1Y"]];
-const YOY_COLORS = ["#9a98b8", "#2cc4c9", "#6c5ce7", "#f0a030", "#e5536b", "#25b07a"];
+/* 同比年份颜色：按“新 → 旧”取色（最新年份 = 紫，上一年 = 琥珀…），避开 K 线涨跌的红 / 绿 */
+const YOY_PAL = ["#6c5ce7", "#f0a030", "#2cc4c9", "#8a8aa8", "#e58fb0", "#5b9bf0"];
+const yoyColor = (i, n) => YOY_PAL[(n - 1 - i) % YOY_PAL.length];
 async function pageSignals() {
   const s = S.status.settings.strategy;
   $("#page").innerHTML = `
@@ -814,6 +816,12 @@ function showSignalModal(sym) {
 function chartIv() { return S.chartIv || S.status.settings.strategy.interval; }
 function syncChartCtl() {
   const yoy = S.chartMode === "yoy", iv = chartIv();
+  const pg = $(".sig-page");
+  if (pg && pg.classList.contains("yoy-on") !== yoy) {
+    pg.classList.toggle("yoy-on", yoy);
+    if (S.pg && S.pg.signals) delete S.pg.signals._fit;
+    requestAnimationFrame(() => renderSigList()); // 图表区高度变了：按新高度重新分页信号列表，避免裁切
+  }
   document.querySelectorAll("#ivSeg [data-iv]").forEach((b) => b.classList.toggle("on", !yoy && b.dataset.iv === iv));
   document.querySelectorAll("#modeSeg [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === (yoy ? "yoy" : "k")));
   ["#ivSeg", "#rangeSel"].forEach((q) => { const e = $(q); if (e) e.style.display = yoy ? "none" : ""; });
@@ -849,30 +857,38 @@ function renderYoyCtl(on) {
   box.innerHTML = `<select class="mini" id="yoySym" aria-label="币种">${syms.map((x) => `<option value="${x}" ${x === (y.sym || S.selSym) ? "selected" : ""}>${base(x)}</option>`).join("")}</select>
     <select class="mini" id="yoyIv" aria-label="周期">${[["1d", "日线"], ["1w", "周线"], ["4h", "4h"]].map(([v, l]) => `<option value="${v}" ${v === (y.iv || "1d") ? "selected" : ""}>${l}</option>`).join("")}</select>
     ${(avail.length ? avail : y.years || []).slice(-6).map((yr) => `<label class="yr"><input type="checkbox" value="${yr}" ${(y.years || []).includes(yr) ? "checked" : ""}/>${yr}</label>`).join("")}
-    <div class="seg" id="yoyMode" role="group" aria-label="数值"><button data-v="pct" class="${(y.mode || "pct") === "pct" ? "on" : ""}">涨跌 %</button><button data-v="raw" class="${y.mode === "raw" ? "on" : ""}">价格</button></div>`;
+    <div class="seg" id="yoyMode" role="group" aria-label="数值"><button data-v="pct" class="${(y.mode || "pct") === "pct" ? "on" : ""}">涨跌 %</button><button data-v="raw" class="${y.mode === "raw" ? "on" : ""}">价格</button></div>
+    <div class="seg" id="yoyStyle" role="group" aria-label="画法"><button data-v="k" class="${(y.style || "k") === "k" ? "on" : ""}" title="每年一组 K 线（空心 = 收涨，实心 = 收跌）">K线</button><button data-v="line" class="${y.style === "line" ? "on" : ""}" title="只画收盘线">线</button></div>`;
   $("#yoySym").onchange = (e) => { S.yoy.sym = e.target.value; loadYoy(); };
   $("#yoyIv").onchange = (e) => { S.yoy.iv = e.target.value; loadYoy(); };
   box.querySelectorAll("label.yr input").forEach((c) => (c.onchange = () => { S.yoy.years = [...box.querySelectorAll("label.yr input:checked")].map((x) => +x.value); if (S.yoy.years.length) loadYoy(); }));
   box.querySelectorAll("#yoyMode [data-v]").forEach((b) => (b.onclick = () => { S.yoy.mode = b.dataset.v; loadYoy(); }));
+  box.querySelectorAll("#yoyStyle [data-v]").forEach((b) => (b.onclick = () => { S.yoy.style = b.dataset.v; loadYoy(); }));
 }
 async function loadYoy() {
   const el = $("#candleChart"); if (!el) return;
   const now = new Date().getUTCFullYear();
-  S.yoy = S.yoy || { years: [now - 1, now], iv: "1d", mode: "pct" };
+  S.yoy = S.yoy || { years: [now - 1, now], iv: "1d", mode: "pct", style: "k" };
   S.yoy.sym = S.yoy.sym || S.selSym || "ETHUSDT";
   const m = S.chartMkt || "spot", y = S.yoy;
   document.querySelectorAll("#mktSeg [data-m]").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
   syncChartCtl();
-  $("#chartTitle").textContent = `${base(y.sym)}/USDT · ${m === "perp" ? "USDT 永续" : "现货"} · 同比（${y.years.join(" vs ")}）`;
+  const ivCn = { "1d": "日线", "1w": "周线", "4h": "4h" }[y.iv] || y.iv;
+  $("#chartTitle").textContent = `${base(y.sym)} ${m === "perp" ? "永续" : "现货"} · ${ivCn}同比 ${y.years.join(" vs ")}`;
+  $("#chartTitle").title = `${base(y.sym)}/USDT · ${m === "perp" ? "USDT 永续" : "现货"} · ${ivCn} · 同比（${y.years.join(" vs ")}）`;
   const req = (S._candleReq = (S._candleReq || 0) + 1);
   try {
     const d = await api(`/api/chart/yoy?symbol=${y.sym}&interval=${y.iv}&years=${y.years.join(",")}&market=${m}&mode=${y.mode}`);
     if (req !== S._candleReq || !document.body.contains(el)) return;
     y.data = d; renderYoyCtl(true);
-    S.chart = BigCharts.yoy(el, d, YOY_COLORS); S.chart._yoy = true;
+    S.chart = BigCharts.yoy(el, d, yoyColor, y.style || "k"); S.chart._yoy = true;
     const leg = $("#chartLegend");
-    if (leg) leg.innerHTML = `<span class="yoy-legend">${d.series.map((sr, i) => `<span><i style="background:${YOY_COLORS[(i + YOY_COLORS.length - d.series.length) % YOY_COLORS.length]}"></i>${sr.year}${sr.change != null ? `：${sr.first_date ? sr.first_date.slice(5, 10) : ""} 起 ${(sr.change >= 0 ? "+" : "") + (sr.change * 100).toFixed(1)}%` : "：无数据"}</span>`).join("")}</span><span class="muted">横轴为一年中的同一天 · ${y.mode === "pct" ? "按当年第一根收盘归一" : "原始价格"} · ${esc(d.data_source)}${d.aggregated_from ? " · 周线由 1D 聚合" : ""}</span>`;
-    const src = $("#chartSrc"); if (src) src.textContent = `${d.series.map((x) => x.points.length).reduce((a, b) => a + b, 0)} 个点来自 ${d.data_source} · ${d.source_host}（历史按需拉取并缓存到 SQLite）`;
+    const n = d.series.length, K = (y.style || "k") === "k";
+    const npts = d.series.map((x) => x.points.length).reduce((a, b) => a + b, 0);
+    const srcFull = `${npts} 个点来自 ${d.data_source} · ${d.source_host}（官方 K 线，历史按需拉取并缓存到 SQLite${d.aggregated_from ? "；周线由 1D 聚合" : ""}）`;
+    if (leg) leg.innerHTML = `<span class="yoy-legend">${d.series.map((sr, i) => `<span><i class="${K ? "k" : ""}" style="${K ? `border-color:${yoyColor(i, n)};background:linear-gradient(90deg,${yoyColor(i, n)} 50%,transparent 50%)` : `background:${yoyColor(i, n)}`}"></i>${sr.year}${sr.change != null ? `：${sr.first_date ? sr.first_date.slice(5, 10) : ""} 起 ${(sr.change >= 0 ? "+" : "") + (sr.change * 100).toFixed(1)}%` : "：无数据"}</span>`).join("")}</span><span class="muted" title="${esc(srcFull)}">${K ? "空心收涨 · 实心收跌 · 同日各年并排 · " : ""}${y.mode === "pct" ? "按当年首根收盘归一" : "原始价格"} · 悬停看差异</span>`;
+    const src = $("#chartSrc");
+    if (src) { src.textContent = `横轴为一年中的同一天 · ${npts} 个官方 K 线点（${(d.venue || "").toUpperCase()}）`; src.title = srcFull; }
   } catch (e) { el.innerHTML = `<div class="empty neg">${esc(e.message)}</div>`; }
 }
 function applyRange() {
