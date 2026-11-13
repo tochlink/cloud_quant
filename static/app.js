@@ -49,7 +49,7 @@ function hydrateIcons(root = document) {
   });
 }
 const NAV = [
-  ["dashboard", "home", "总览", "总览"], ["signals", "signals", "信号", "信号 / 进出场"], ["indicators", "indicators", "指标", "指标 / 多空证据"], ["backtest", "backtest", "回测", "回测"], ["positions", "positions", "持仓", "持仓"],
+  ["dashboard", "home", "总览", "总览"], ["signals", "signals", "信号", "信号 / 进出场"], ["indicators", "indicators", "指标", "指标 / 多空证据"], ["backtest", "backtest", "回测", "回测"], ["strategies", "strategies", "策略", "多策略 / 影子盘"], ["positions", "positions", "持仓", "持仓"],
   ["trades", "trades", "成交", "成交"], ["risk", "risk", "风控", "风控 / 自动交易"], ["settings", "settings", "设置", "行情源 / API / 实盘"], ["help", "help", "帮助", "帮助"],
 ];
 const COIN = { BTC: "#f7931a", ETH: "#627eea", BNB: "#e0a800", SOL: "linear-gradient(135deg,#9945ff,#14f195)", XRP: "#23292f", ADA: "#0033ad", DOGE: "#c2a633", AVAX: "#e84142", LTC: "#345d9d", LINK: "#2a5ada", TRX: "#d8222a", DOT: "#e6007a" };
@@ -80,6 +80,8 @@ const VN = { okx: "OKX", gate: "Gate.io" };
 const base = (sym) => sym.replace(/USDT$/, "");
 const pxOk = (x) => x != null && isFinite(Number(x)) && Number(x) > 0;
 const fpPx = (x) => (pxOk(x) ? fp(x) : "—");
+// 右侧持仓卡片空间窄：入仓价最多 5 位有效数字（≥1 万取整），完整价在悬停提示里
+const fpPxC = (x) => (!pxOk(x) ? "—" : Math.abs(x) >= 1e4 ? Number(x).toFixed(0) : fp(x, 5));
 const tCompact = (iso) => { if (!iso) return "—"; return PT.short(iso).replace(/ 北京时间$/, ""); };
 function fqty(x) {
   if (x == null || !isFinite(Number(x))) return "—";
@@ -594,7 +596,7 @@ function renderRight() {
       return `<div class="r-row r-pos"><button type="button" class="r-row-main" data-sym="${p.symbol}" data-mkt="${p.market}" title="查看 ${base(p.symbol)} 的信号与 K 线">${coin(p.symbol)}
         <span class="rp-l1"><b>${base(p.symbol)}</b><span class="side-tag ${p.side}">${p.side === "short" ? "空" : "多"}${p.market === "perp" ? `${fp(p.leverage || 1, 3)}x` : "·现货"}</span>${bookTag(p)}${p.halted ? '<span class="pill flat rp-halt">已停</span>' : ""}
           <span class="rp-pnl num ${cls(pnl.usdt)}" data-live="pnl" data-stacked="c" ${live} title="浮动盈亏（已扣手续费）"><span data-live-pnl-txt>${fmtPnl(pnl, "c")}</span></span></span>
-        <span class="rp-l2"><span class="num rp-qty" title="数量 ${fp(p.qty, 10)} ${base(p.symbol)}">${fp(p.qty, 5)}</span><span class="rp-kv num" title="当前价（${p.market === "perp" ? "永续标记价" : "现货最新价"}）"><em>现</em><b data-live="px" ${live}>${fpPx(mark)}</b></span><span class="rp-kv num" title="入仓价"><em>入</em>${fpPx(p.entry_price)}</span></span>
+        <span class="rp-l2"><span class="num rp-qty" title="数量 ${fp(p.qty, 10)} ${base(p.symbol)}">${fp(p.qty, 5)}</span><span class="rp-kv num" title="当前价（${p.market === "perp" ? "永续标记价" : "现货最新价"}）"><em>现</em><b data-live="px" ${live}>${fpPx(mark)}</b></span><span class="rp-kv num" title="入仓价 ${fpPx(p.entry_price)}"><em>入</em>${fpPxC(p.entry_price)}</span></span>
         <span class="rp-l3" title="止损 ${fpPx(p.stop_price)} · 止盈 ${tp}（${esc(tpTitle)}）· ${esc(p.exit_rule_cn || "")}"><span class="rp-chip sl num"><em>损</em>${fpPx(p.stop_price)}${p.be_moved ? "<i>保本</i>" : ""}</span><span class="rp-chip tp num"><em>盈</em>${tp}${p.tp_done ? "<i>已</i>" : ""}</span><span class="rp-w num" data-live="weight" ${live} title="仓位权重">${pct(p.weight, 1)}</span></span>
       </button><span class="r-acts"><button type="button" class="ibtn" data-act="halt" data-sym="${p.symbol}" title="${p.halted ? "恢复自动管理" : "停止自动开平（止损止盈仍生效）"}" aria-label="${p.halted ? "恢复" : "停止"} ${base(p.symbol)}">${ic(p.halted ? "play" : "stop")}</button><button type="button" class="ibtn danger" data-act="close" data-sym="${p.symbol}" title="按市价平仓" aria-label="平仓 ${base(p.symbol)}">${ic("x")}</button></span></div>`;
     }).join("");
@@ -1703,7 +1705,7 @@ $("#livePill").onclick = () => {
 };
 
 /* ---------- 路由与刷新 ---------- */
-const PAGES = { dashboard: pageDashboard, signals: pageSignals, indicators: pageIndicators, backtest: pageBacktest, positions: pagePositions, trades: pageTrades, risk: pageRisk, settings: pageSettings, help: pageHelp };
+const PAGES = { dashboard: pageDashboard, signals: pageSignals, indicators: pageIndicators, backtest: pageBacktest, strategies: (...a) => window.pageStrategies(...a), positions: pagePositions, trades: pageTrades, risk: pageRisk, settings: pageSettings, help: pageHelp };
 const SUBS = { dashboard: "系统化纸面 / 研究工具 · 不构成投资建议", signals: "实时 K 线与每个币的进出场建议", indicators: "更多技术指标与多空证据（参考证据，不参与下单）", backtest: "真实公共历史 K 线 · 无前视回测", strategies: "多套策略的回测验证、判定与影子盘（默认策略不变）", positions: "纸面持仓 · 可平仓或停止自动管理", trades: "开平配对的成交记录", risk: "自动交易、紧急停止与风控参数", settings: "行情源、API 密钥（加密保存）与实盘闸门", help: "使用说明与风险提示" };
 async function refreshStatus() { S.status = await api("/api/status"); renderMode(); }
 async function refreshDash() {
