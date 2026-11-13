@@ -17,7 +17,7 @@ import json
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, db, engine, stream, vault, worker
+from . import __version__, db, engine, realtime, stream, vault, worker
 from . import settings as S
 from .backtest import run_backtest
 from . import equity_series
@@ -70,9 +70,11 @@ def _persist_tick() -> None:
     except Exception:  # noqa: BLE001
         log.exception("persist marks failed")
     try:
-        ev = engine.poll_stops()
-        if ev:
-            log.info("实时止损：%s", "；".join(ev))
+        # 止损 / 止盈由 realtime.on_tick 在每个 WS tick 判定；这里只在 WS 断线（报价陈旧）时用 REST 兜底
+        if not realtime.ws_fresh(S.load()["venue"]):
+            ev = engine.poll_stops()
+            if ev:
+                log.info("REST 兜底止损：%s", "；".join(ev))
     except Exception:  # noqa: BLE001
         log.exception("poll stops failed")
     _persist_ticks += 1
@@ -141,6 +143,9 @@ async def lifespan(_app: FastAPI):
     if bk.migrated:
         log.info("已把旧版 CSV 纸面账本迁移到 SQLite：%s", bk.migrated)
     stream.on_quote(engine.mark_from_stream)
+    if realtime.on_tick not in stream._on_quote:
+        stream.on_quote(realtime.on_tick)
+    stream.on_bar_close(realtime.on_bar_close)
     if _kick_after_freeze not in stream._on_host_freeze:
         stream._on_host_freeze.append(_kick_after_freeze)
     stream.start()
@@ -288,7 +293,8 @@ def _dashboard_data() -> dict:
                   "init_stop": engine._init_stop(p), "tp_done": bool(p.tp_done), "be_moved": bool(p.be_moved),
                   "tp_price": _nan_none(engine.partial_tp_price(p, cfg["strategy"])),
                   "tp_enabled": bool(cfg["strategy"].get("tp_partial")), "tp_r": cfg["strategy"].get("tp_partial_r", 2.0),
-                  "tp_frac": cfg["strategy"].get("tp_frac", 0.5), "exit_rule_cn": engine.exit_rule_cn(p.side, cfg["strategy"])}
+                  "tp_frac": cfg["strategy"].get("tp_frac", 0.5), "exit_rule_cn": engine.exit_rule_cn(p.side, cfg["strategy"]),
+                  "book": "长线", "selected": p.symbol in cfg["symbols"]}
                  for p in bk.positions.values()]
     fills = bk.fills()
     ledger = bk.ledger()
@@ -443,6 +449,9 @@ def risk_overview():
 def signals(quotes: bool = True):
     cfg = S.load()
     sig = engine.compute_signals(cfg, with_quotes=quotes)
+    for r in sig.get("rows", []):
+        r.setdefault("book", "长线")  # 当前信号全部来自长线 4h 核心；短线层未通过验证、关闭
+    sig["short_layer"] = {"enabled": bool(cfg["short_layer"]["enabled"]), "validated": S.SHORT_LAYER_VALIDATED}
     sig["csv"] = engine.export_signals_csv(sig)
     sig["cycle"] = _signal_cycle_meta(cfg, sig)
     try:
@@ -544,11 +553,71 @@ def worker_status():
     return ok(worker.status())
 
 
+@app.get("/api/realtime")
+def realtime_status():
+    """事件驱动状态：tick / K 线收盘事件 → 决策的延迟（本进程收到事件到判定完成）。"""
+    return ok(realtime.status())
+
+
+_SL_RESEARCH = None
+
+
+@app.get("/api/short_layer")
+def short_layer():
+    global _SL_RESEARCH
+    if _SL_RESEARCH is None:
+        from pathlib import Path
+        _SL_RESEARCH = json.loads((Path(__file__).parent / "short_layer_research.json").read_text(encoding="utf-8"))
+    cfg = S.load()
+    return ok({**cfg["short_layer"], "validated": S.SHORT_LAYER_VALIDATED, "research": _SL_RESEARCH,
+               "locked_reason": "" if S.SHORT_LAYER_VALIDATED else "未通过验证：两家交易所未见数据上扣费后每笔期望均为负，不能开启"})
+
+
+@app.get("/api/universe")
+def universe():
+    """开始交易时的币种选择：支持的币种、上次选择、取消勾选后仍持仓的币。"""
+    cfg = S.load()
+    held = {s: {"side": p.side, "market": p.market, "qty": p.qty} for s, p in engine.book(cfg).positions.items()}
+    sup = list(dict.fromkeys(S.SUPPORTED_SYMBOLS + list(cfg["symbols"]) + list(held)))
+    return ok({"supported": sup, "selected": cfg["symbols"], "held": held,
+               "deselect_policy": cfg["worker"].get("deselect_policy", "keep")})
+
+
+def _apply_selection(body: dict) -> dict:
+    """保存币种选择；policy=flatten 时把取消勾选、仍有纸面持仓的币按官方价平掉。返回 {symbols, flattened, kept}。"""
+    cfg = S.load()
+    syms = [str(x).upper() for x in (body.get("symbols") or []) if str(x).strip()]
+    allowed = set(S.SUPPORTED_SYMBOLS) | set(cfg["symbols"])
+    bad = [x for x in syms if x not in allowed]
+    if bad:
+        raise HTTPException(400, f"不支持的币种：{'、'.join(bad)}")
+    if not syms:
+        raise HTTPException(400, "请至少选择一个币种")
+    policy = body.get("deselect_policy", cfg["worker"].get("deselect_policy", "keep"))
+    if policy not in ("keep", "flatten"):
+        raise HTTPException(400, "deselect_policy 只能是 keep 或 flatten")
+    S.update({"symbols": syms, "worker": {"deselect_policy": policy}})
+    realtime.invalidate_cfg()
+    flattened, kept = [], []
+    for s in list(engine.book(cfg).positions):
+        if s in syms:
+            continue
+        if policy == "flatten":
+            out = engine.close_position(s)
+            (flattened if out.get("ok") else kept).append(s)
+        else:
+            kept.append(s)
+    return {"symbols": syms, "flattened": flattened, "kept": kept, "deselect_policy": policy}
+
+
 @app.post("/api/worker/{action}")
-def worker_ctl(action: str):
+def worker_ctl(action: str, body: dict | None = Body(default=None)):
     if action == "start":
+        sel = _apply_selection(body) if body and body.get("symbols") is not None else None
         S.update({"worker": {"enabled": True}})
         worker.start()
+        if sel is not None:
+            return ok({**worker.status(), "selection": sel})
     elif action == "stop":
         S.update({"worker": {"enabled": False}})
         worker.stop()
@@ -614,7 +683,7 @@ def orders():
 @app.get("/api/trades")
 def trades():
     """Round-trip paper trade records (entry/exit paired). Newest first."""
-    return ok(list(reversed(engine.book().trade_records())))
+    return ok([{**t, "book": t.get("book") or "长线"} for t in reversed(engine.book().trade_records())])
 
 
 # ---------------- 设置 / 密钥 ----------------
@@ -639,7 +708,9 @@ def put_settings(patch: dict = Body(...)):
                     f"当前有 {n} 个纸面持仓，不能切换行情源。请先平仓（紧急停止）或重置账本后再切换 OKX / Gate。",
                 )
     try:
-        return ok(S.update(patch))
+        out = S.update(patch)
+        realtime.invalidate_cfg()
+        return ok(out)
     except (ValueError, KeyError, TypeError) as e:
         raise HTTPException(400, str(e)) from e
 
@@ -719,6 +790,8 @@ def backtest(body: dict = Body(default={})):
     for k in ("fast_ma", "slow_ma", "atr_stop_mult", "confirm_bars"):
         if body.get(k) is not None:
             cfg["strategy"][k] = body[k]
+    if body.get("symbols"):  # 可选：只回测选中的币种（默认用当前交易币种选择）
+        cfg["symbols"] = [str(x).upper() for x in body["symbols"]]
     cfg = S.validate(cfg)
     bars = int(body.get("bars", 1500))
     bars = max(cfg["strategy"]["slow_ma"] + 50, min(5000, bars))

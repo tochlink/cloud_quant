@@ -101,6 +101,22 @@ def breakeven_stop(side: str, entry: float, fee_rate: float, with_fees: bool = T
     return float(entry) * (1 + f) if side == "long" else float(entry) * (1 - f)
 
 
+def _trade_quality(closed) -> dict:
+    """胜率之外的成交质量：平均盈利 / 平均亏损、盈亏比（payoff）、每笔期望、前 10% 盈利笔数贡献的净利占比。"""
+    p = np.array([float(t.pnl_usdt) for t in closed], dtype=float)
+    if not len(p):
+        return {"avg_win_usdt": float("nan"), "avg_loss_usdt": float("nan"), "payoff_ratio": float("nan"),
+                "expectancy_usdt": float("nan"), "top10_pnl_share": float("nan")}
+    w, lo = p[p > 0], p[p <= 0]
+    aw = float(w.mean()) if len(w) else float("nan")
+    al = float(lo.mean()) if len(lo) else float("nan")
+    k = max(1, int(round(len(p) * 0.1)))
+    top = float(np.sort(p)[::-1][:k].sum())
+    return {"avg_win_usdt": aw, "avg_loss_usdt": al,
+            "payoff_ratio": aw / -al if len(w) and len(lo) and al < 0 else float("nan"),
+            "expectancy_usdt": float(p.mean()), "top10_pnl_share": top / float(p.sum()) if p.sum() > 0 else float("nan")}
+
+
 def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict | None = None) -> dict:
     st, rk = cfg["strategy"], cfg["risk"]
     # 分市场 taker 费率：多单在现货、空单在永续成交（下一根开盘市价 = taker），每条市价腿各收一次
@@ -461,6 +477,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "closed_trades": len(closed), "open_trades": len(open_trades),
         "win_rate": len(wins) / len(closed) if closed else float("nan"),
         "profit_factor": gp / gl if gl > 0 else float("nan"),
+        **_trade_quality(closed),
         "avg_bars_held": float(np.mean([t.bars_held for t in closed])) if closed else float("nan"),
         "fees_usdt": sum(t.fees_usdt for t in closed + open_trades),
         "stop_exits": sum(1 for t in closed if t.exit_reason == "ATR止损"),

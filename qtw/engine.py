@@ -633,7 +633,9 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         bk = book(cfg)
         cfg = vol_scaled_cfg(cfg, bk)  # 可选组合波动率目标：入场与调仓的风险/权重上限 × k（默认关闭 k=1）
         venue, st, rk = cfg["venue"], cfg["strategy"], cfg["risk"]
-        sig = compute_signals(cfg, with_quotes=False)
+        # 取消勾选但仍有持仓的币（deselect_policy=keep）：照常按信号 / 止损管理到离场，但不再新开（入场只看 cfg["symbols"]）
+        extra = [s for s in bk.positions if s not in cfg["symbols"]]
+        sig = compute_signals({**cfg, "symbols": list(cfg["symbols"]) + extra} if extra else cfg, with_quotes=False)
         events, errors = [], dict(sig["errors"])
         rows = {r["symbol"]: r for r in sig["rows"] if not r.get("error")}
         # 1) 用最新公共价格给持仓计价
@@ -707,7 +709,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
             events.append(f"{s} 开{('多·现货' if r['side'] == 'long' else '空·永续')} {qty:.6g} @ {px:g}，止损 {z.stop_price:.6g}")
         opened = {s for s in want if s in bk.positions and alloc.get(s, 0) >= 1.0}
         # 4) 每根新收盘 K 线调仓一次（rebalance_band；公式与回测第 2c 步相同，见 qtw/rebalance.py）
-        events += _rebalance(cfg, bk, rows, opened, errors)
+        events += _rebalance(cfg, bk, {k: v for k, v in rows.items() if k in cfg["symbols"]}, opened, errors)
         # 5) 信号变化日志（旧 → 新 + 本周期对该标的的动作）
         try:
             acts = {}

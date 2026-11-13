@@ -130,7 +130,13 @@ DEFAULTS: dict[str, Any] = {
     # 永续 maker 0.02% / taker 0.051%。策略在下一根开盘以市价成交，按 taker 计费、每条市价腿各收一次。
     # taker_bps 为旧版单一费率字段（仅在缺少分市场费率时回退使用）。
     "fees": {"spot_taker_bps": 10.0, "spot_maker_bps": 8.0, "perp_taker_bps": 5.1, "perp_maker_bps": 2.0, "taker_bps": 4.0},
-    "worker": {"enabled": True, "interval_sec": 60},  # 7×24 纸面自动交易（服务运行即运行；紧急停止会关闭）
+    # 7×24 纸面自动交易（服务运行即运行；紧急停止会关闭）。决策由实时 WS 事件驱动（qtw/realtime.py）：
+    # interval_sec 只是旧字段，不再用于定时轮询。deselect_policy：开始交易时取消勾选、但仍有持仓的币
+    # keep = 继续按止损 / 信号管理到离场（不再新开），flatten = 确认时按官方价立即平掉（纸面）。
+    "worker": {"enabled": True, "interval_sec": 60, "deselect_policy": "keep"},
+    # 短线层（1m / 5m / 10m / 1h，顺 4h / 1D 方向的独立进出场系统，独立风险预算）。
+    # 2026-11-13 研究：两家交易所未见数据上扣费后期望均为负 → 未通过验证，不能开启（见 docs/STRATEGY_FORMULAS.md「短线层」）。
+    "short_layer": {"enabled": False, "base_tf": "5m", "budget_frac": 0.3},
     "live": {
         "mode": "paper",  # paper | live
         "live_enabled": False,
@@ -302,7 +308,20 @@ def validate(s: dict) -> dict:
     if s["live"]["mode"] not in ("paper", "live"):
         raise ValueError("模式只能是 paper 或 live")
     s["worker"]["interval_sec"] = max(60, int(s["worker"]["interval_sec"]))
+    if s["worker"].get("deselect_policy") not in ("keep", "flatten"):
+        raise ValueError("取消勾选币种的处理方式只能是 keep 或 flatten")
+    sl = s["short_layer"]
+    if sl.get("enabled") and not SHORT_LAYER_VALIDATED:
+        raise ValueError("短线层未通过验证（未见数据上扣费后期望为负），不能开启")
+    if sl.get("base_tf") not in ("1m", "5m", "10m", "1h"):
+        raise ValueError("短线层周期只能是 1m / 5m / 10m / 1h")
+    if not 0 < float(sl.get("budget_frac", 0.3)) <= 0.5:
+        raise ValueError("短线风险预算需在 0–50% 之间")
     return s
+
+
+SHORT_LAYER_VALIDATED = False  # 研究门槛未通过；只有新研究在两家交易所未见数据上扣费后期望 > 0 才能改为 True
+SUPPORTED_SYMBOLS = list(DEFAULTS["symbols"])  # 开始交易时可勾选的币种（官方 OKX / Gate 都有现货与 USDT 永续）
 
 
 def save(s: dict) -> dict:
