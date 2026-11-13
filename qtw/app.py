@@ -266,6 +266,14 @@ def _closed_trades(fills: list[dict]) -> list[dict]:
     return [f for f in fills if f["action"] == "close"]
 
 
+def _nan_none(x):
+    try:
+        v = float(x)
+        return v if math.isfinite(v) else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _dashboard_data() -> dict:
     """Shared paper-book snapshot used by /api/dashboard and thin monitoring aliases."""
     cfg = S.load()
@@ -276,7 +284,11 @@ def _dashboard_data() -> dict:
                   "mark_source": p.mark_source, "venue": p.venue,
                   "stop_price": p.stop_price, "notional": p.qty * p.mark_price,
                   "weight": (p.qty * p.mark_price / eq) if eq else 0, "upnl": p.upnl(),
-                  "upnl_pct": p.upnl_pct(), "halted": p.symbol in bk.halts}
+                  "upnl_pct": p.upnl_pct(), "halted": p.symbol in bk.halts,
+                  "init_stop": engine._init_stop(p), "tp_done": bool(p.tp_done), "be_moved": bool(p.be_moved),
+                  "tp_price": _nan_none(engine.partial_tp_price(p, cfg["strategy"])),
+                  "tp_enabled": bool(cfg["strategy"].get("tp_partial")), "tp_r": cfg["strategy"].get("tp_partial_r", 2.0),
+                  "tp_frac": cfg["strategy"].get("tp_frac", 0.5), "exit_rule_cn": engine.exit_rule_cn(p.side, cfg["strategy"])}
                  for p in bk.positions.values()]
     fills = bk.fills()
     ledger = bk.ledger()
@@ -463,28 +475,58 @@ def _signal_cycle_meta(cfg: dict, sig: dict) -> dict:
 
 
 @app.get("/api/candles")
-def candles(symbol: str, bars: int = 300, market: str = "spot"):
+def candles(symbol: str, bars: int = 300, market: str = "spot", interval: str = ""):
+    """图表 K 线：interval 可选 1m 5m 10m 15m 1h 4h 1d 1w 1M 1y（默认策略周期）。10m 由官方 1m 聚合，1w/1M/1y 由官方 1D 聚合。"""
+    from .market import chart as mchart
     cfg = S.load()
     st = cfg["strategy"]
     if market not in ("spot", "perp"):
         raise HTTPException(400, "market 只能是 spot 或 perp")
+    iv = interval or st["interval"]
+    if iv not in mchart.CHART_INTERVALS:
+        raise HTTPException(400, f"不支持的周期 {iv}")
     bars = max(st["slow_ma"] + 10, min(1000, bars))
     try:
-        df = mcache.candles(cfg["venue"], symbol.upper(), st["interval"], bars, market)
+        df = mchart.chart_candles(cfg["venue"], symbol.upper(), iv, bars, market)
     except MarketDataError as e:
         raise HTTPException(502, f"行情获取失败：{e}") from e
-    ind = indicators(df, st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1))
+    if df.empty:
+        raise HTTPException(502, "交易所未返回该周期的已收盘 K 线")
+    ind = indicators(df.drop(columns=["partial"], errors="ignore"), st["fast_ma"], st["slow_ma"], st["atr_period"], st.get("confirm_bars", 1))
     t = ((ind["open_time"] - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1)).astype(int).tolist()
-    ch = ind["signal"].ne(ind["signal"].shift(1)) & ind["sma_slow"].notna() & ind["signal"].shift(1).notna()
-    markers = [{"time": int(t[i]), "signal": int(ind["signal"].iloc[i])} for i in range(len(ind)) if ch.iloc[i] and i > 0]
-    return ok({"symbol": symbol.upper(), "venue": cfg["venue"], "interval": st["interval"], "market": market,
+    markers = []
+    if iv == st["interval"]:  # 交叉标记只在策略周期上显示（信号只用 4h）
+        ch = ind["signal"].ne(ind["signal"].shift(1)) & ind["sma_slow"].notna() & ind["signal"].shift(1).notna()
+        markers = [{"time": int(t[i]), "signal": int(ind["signal"].iloc[i])} for i in range(len(ind)) if ch.iloc[i] and i > 0]
+    part = df["partial"].tolist() if "partial" in df else [False] * len(df)
+    return ok({"symbol": symbol.upper(), "venue": cfg["venue"], "interval": iv, "strategy_interval": st["interval"], "market": market,
                "data_source": df.attrs.get("data_source"), "source_host": df.attrs.get("source_host"),
-               "fetched_at": df.attrs.get("fetched_at"),
+               "fetched_at": df.attrs.get("fetched_at"), "aggregated_from": df.attrs.get("aggregated_from", ""),
+               "interval_sec": mchart.SEC[iv], "partial_last": bool(part[-1]) if part else False,
                "candles": [{"time": int(t[i]), "open": r.open, "high": r.high, "low": r.low, "close": r.close}
                            for i, r in enumerate(ind.itertuples())],
                "fast": [{"time": int(t[i]), "value": v} for i, v in enumerate(ind["sma_fast"]) if not pd.isna(v)],
                "slow": [{"time": int(t[i]), "value": v} for i, v in enumerate(ind["sma_slow"]) if not pd.isna(v)],
                "markers": markers})
+
+
+@app.get("/api/chart/yoy")
+def chart_yoy(symbol: str = "ETHUSDT", interval: str = "1d", years: str = "", market: str = "spot", mode: str = "pct"):
+    """同比叠加：同一币种不同年份在「一年中的同一天」横轴上对比（pct：按当年第一根收盘归一为 %；raw：原始价格）。"""
+    from .market import chart as mchart
+    cfg = S.load()
+    if market not in ("spot", "perp") or mode not in ("pct", "raw"):
+        raise HTTPException(400, "参数无效")
+    ys = [int(x) for x in str(years).split(",") if x.strip().isdigit()]
+    if not ys:
+        now = pd.Timestamp.utcnow().year
+        ys = [now - 1, now]
+    try:
+        return ok(mchart.yoy(cfg["venue"], symbol.upper(), interval, ys, market, mode))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except MarketDataError as e:
+        raise HTTPException(502, f"行情获取失败：{e}") from e
 
 
 # ---------------- 纸面 / 自动交易 ----------------

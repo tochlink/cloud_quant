@@ -65,15 +65,13 @@ def order_payload(symbol: str, market: str, action: str, qty: float, price: floa
     """action: open_long(现货买) / close_long(现货卖) / open_short(永续卖) / close_short(永续买, reduceOnly)。"""
     base = symbol[:-4]
     if market == "spot":
-        if action == "open_long":
-            return {"instId": f"{base}-USDT", "tdMode": "cash", "side": "buy", "ordType": "market",
-                    "tgtCcy": "quote_ccy", "sz": f"{qty * price:.4f}"}
-        return {"instId": f"{base}-USDT", "tdMode": "cash", "side": "sell", "ordType": "market",
-                "tgtCcy": "base_ccy", "sz": f"{qty:.8f}".rstrip("0").rstrip(".")}
+        # 2026-11-13：按数量下单（币数量，已按 lotSz 向下取整，见 qtw/lots.py）；买卖都用 base_ccy
+        return {"instId": f"{base}-USDT", "tdMode": "cash", "side": "buy" if action == "open_long" else "sell",
+                "ordType": "market", "tgtCcy": "base_ccy", "sz": f"{qty:.12g}"}
     spec = spec or {"ct_val": 1, "lot_sz": 1}
-    lots = math.floor(qty / spec["ct_val"] / spec["lot_sz"]) * spec["lot_sz"]
+    lots = math.floor(qty / spec["ct_val"] / spec["lot_sz"] + 1e-9) * spec["lot_sz"]
     p = {"instId": f"{base}-USDT-SWAP", "tdMode": "isolated", "ordType": "market",
-         "side": "sell" if action == "open_short" else "buy", "sz": f"{lots:g}"}
+         "side": "sell" if action == "open_short" else "buy", "sz": f"{lots:.10g}"}
     if action == "close_short":
         p["reduceOnly"] = True
     return p

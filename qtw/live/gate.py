@@ -51,13 +51,13 @@ def _send(req: dict):
 def order_request(symbol: str, market: str, action: str, qty: float, price: float, spec: dict | None = None):
     pair = f"{symbol[:-4]}_USDT"
     if market == "spot":
-        if action == "open_long":  # 市价买：amount 为计价币(USDT)
+        if action == "open_long":  # Gate 现货市价买只接受计价币金额：amount = 取整后的币数量 × 参考价（USDT）
             return "/spot/orders", {"currency_pair": pair, "side": "buy", "type": "market",
                                     "time_in_force": "ioc", "amount": f"{qty * price:.4f}"}
         return "/spot/orders", {"currency_pair": pair, "side": "sell", "type": "market",
-                                "time_in_force": "ioc", "amount": f"{qty:.8f}".rstrip("0").rstrip(".")}
+                                "time_in_force": "ioc", "amount": f"{qty:.12g}"}
     spec = spec or {"ct_val": 1}
-    n = int(math.floor(qty / spec["ct_val"]))
+    n = int(math.floor(qty / spec["ct_val"] + 1e-9))
     p = {"contract": pair, "price": "0", "tif": "ioc", "size": -n if action == "open_short" else n}
     if action == "close_short":
         p["reduce_only"] = True

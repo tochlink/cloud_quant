@@ -74,6 +74,8 @@ OKX_BUSINESS = ["wss://ws.okx.com/ws/v5/business"]
 GATE_SPOT = ["wss://api.gateio.ws/ws/v4/"]
 GATE_FUT = ["wss://fx-ws.gateio.ws/v4/ws/usdt"]
 OKX_BAR = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1Dutc"}
+# 2026-11-13：快速判断层额外订阅官方 1m K 线（OKX candle1m / Gate candlesticks 1m），收盘根写入 SQLite（10m 由 1m 聚合）
+FAST_WS_INTERVAL = "1m"
 STALE_SEC = 20
 # After the last WS quote, keep mode as ws/recovering this long so a reconnect
 # storm (sockets flap, REST briefly fills marks) does not flash "rest" in health/UI.
@@ -737,6 +739,10 @@ def apply_okx_candle_message(m, url, interval, inst_map) -> int:
     else:
         store_mkt, source = mkt, "okx_public_ws"
     n = 0
+    if ch in ("candle1m", "mark-price-candle1m"):
+        if is_mark:
+            return 0  # 1m 只订阅成交价 K 线
+        interval = "1m"
     for row in m.get("data", []) or []:
         parsed = parse_okx_ws_candle(ch, row)
         if not parsed:
@@ -766,6 +772,8 @@ def _okx_tasks(symbols, interval):
         args = [{"channel": f"candle{bar}", "instId": x} for x in spot + swap]
         # Official mark-price candlesticks on the same business socket (SWAP only).
         args += [{"channel": f"mark-price-candle{bar}", "instId": x} for x in swap]
+        if bar != "1m":
+            args += [{"channel": "candle1m", "instId": x} for x in spot + swap]
         return [json.dumps({"op": "subscribe", "args": args})]
 
     def h_pub(m, url):
@@ -788,7 +796,7 @@ def _okx_tasks(symbols, interval):
         apply_okx_candle_message(m, url, interval, rev)
 
     _conn_state("okx_public", channels=["tickers(spot)", "mark-price(swap)"])
-    _conn_state("okx_business", channels=[f"candle{bar}(spot+swap)", f"mark-price-candle{bar}(swap)"])
+    _conn_state("okx_business", channels=[f"candle{bar}(spot+swap)", f"mark-price-candle{bar}(swap)", "candle1m(spot+swap)"])
     return [_run_ws("okx_public", okx_ws_urls("public"), sub_pub, h_pub, lambda: "ping"),
             _run_ws("okx_business", okx_ws_urls("business"), sub_bus, h_bus, lambda: "ping")]
 
@@ -801,8 +809,8 @@ def _gate_tasks(symbols, interval):
         def f():
             t = int(time.time())
             out = [json.dumps({"time": t, "channel": f"{prefix}.tickers", "event": "subscribe", "payload": pairs})]
-            out += [json.dumps({"time": t, "channel": f"{prefix}.candlesticks", "event": "subscribe", "payload": [interval, p]})
-                    for p in pairs]
+            out += [json.dumps({"time": t, "channel": f"{prefix}.candlesticks", "event": "subscribe", "payload": [iv, p]})
+                    for iv in dict.fromkeys([interval, FAST_WS_INTERVAL]) for p in pairs]
             return out
         return f
 
@@ -831,16 +839,18 @@ def _gate_tasks(symbols, interval):
                     sym = rev.get(n.split("_", 1)[1] if "_" in n else "")
                     if not sym:
                         continue
+                    civ = n.split("_", 1)[0] if "_" in n else interval
+                    civ = civ if civ in (interval, FAST_WS_INTERVAL) else interval
                     closed = bool(r.get("w"))
                     om = int(r["t"]) * 1000
-                    _forming_put("gate", market, sym, interval, om, r["o"], r["h"], r["l"], r["c"], closed, "gate_public_ws")
+                    _forming_put("gate", market, sym, civ, om, r["o"], r["h"], r["l"], r["c"], closed, "gate_public_ws")
                     if closed:
-                        _store_closed("gate", market, sym, interval, om, r["o"], r["h"], r["l"], r["c"], r.get("a") or r.get("v") or 0,
+                        _store_closed("gate", market, sym, civ, om, r["o"], r["h"], r["l"], r["c"], r.get("a") or r.get("v") or 0,
                                       "gate_public_ws", _host(url))
         return h
 
-    _conn_state("gate_spot", channels=["spot.tickers", f"spot.candlesticks({interval})"])
-    _conn_state("gate_futures", channels=["futures.tickers(mark_price)", f"futures.candlesticks({interval})"])
+    _conn_state("gate_spot", channels=["spot.tickers", f"spot.candlesticks({interval}+{FAST_WS_INTERVAL})"])
+    _conn_state("gate_futures", channels=["futures.tickers(mark_price)", f"futures.candlesticks({interval}+{FAST_WS_INTERVAL})"])
     return [_run_ws("gate_spot", GATE_SPOT, subs("spot"), handler("spot", "spot", "gate_spot"),
                     lambda: json.dumps({"time": int(time.time()), "channel": "spot.ping"})),
             _run_ws("gate_futures", GATE_FUT, subs("futures"), handler("futures", "perp", "gate_futures"),
