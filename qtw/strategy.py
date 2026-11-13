@@ -115,6 +115,29 @@ def port_vol_factor(equity, target: float, lookback: int, bars_per_year: float =
     return min(1.0, float(target) / sd) if sd > 0 else 1.0
 
 
+def ls_parity_scales(sig: dict, nvm_long: dict, nvm_short: dict, cap: float) -> tuple[np.ndarray, np.ndarray]:
+    """可选动态多空风险平价「up」（ls_parity_cap，0 / ≤1 = 关闭）。第 t 根收盘的合成信号 sig[s]（1 / −1 / 0）下，
+    R_L = Σ_{sig=1} nvm_long[s]，R_S = Σ_{sig=−1} nvm_short[s]；两侧都非空时只把较小一侧放大到较大一侧：
+    ls = clip(max(R_L, R_S) / R_L, 1/cap, cap)，ss 同理（较大一侧为 1）；否则 1。调用方第 t+1 根用 t 的乘数
+    （与 name_vol_mult 同口径）乘单笔风险上限与单币权重上限，总敞口上限不变。研究：docs/STRATEGY_FORMULAS.md
+    「动态多空风险平价」与 2026-11-13 新默认复核（scratch/drp2/drp2.py）。"""
+    syms = list(sig)
+    n = len(np.asarray(sig[syms[0]])) if syms else 0
+    ls, ss = np.ones(n), np.ones(n)
+    if not syms or not cap or float(cap) <= 1:
+        return ls, ss
+    rl, rs = np.zeros(n), np.zeros(n)
+    for s in syms:
+        g = np.asarray(sig[s])
+        rl += np.where(g == 1, np.asarray(nvm_long[s], dtype=float), 0.0)
+        rs += np.where(g == -1, np.asarray(nvm_short[s], dtype=float), 0.0)
+    both = (rl > 1e-12) & (rs > 1e-12)
+    tgt, c = np.maximum(rl, rs), float(cap)
+    ls = np.where(both, np.clip(tgt / np.where(rl > 0, rl, 1.0), 1.0 / c, c), 1.0)
+    ss = np.where(both, np.clip(tgt / np.where(rs > 0, rs, 1.0), 1.0 / c, c), 1.0)
+    return ls, ss
+
+
 def name_vol_mult(close, target: float, lookback: int, bars_per_year: float = 2190) -> np.ndarray:
     """单币波动率封顶（可选，name_vol_target = 0 关闭）：σ_t = 最近 lookback 根对数收益的样本标准差 × √bars_per_year
     （含第 t 根收盘），返回逐根 m_t = min(1, target / σ_t)；调用方在第 t+1 根用 m_t 乘单笔风险上限与单币权重上限（只缩不放）。

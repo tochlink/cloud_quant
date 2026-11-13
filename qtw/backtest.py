@@ -24,7 +24,7 @@ from . import leverage as LV
 from . import rebalance as RB
 from .risk import scale_to_room, size
 from .settings import taker_rate
-from .strategy import btc_regime_blocks_long, combine, name_vol_mult, port_vol_factor, indicators, market_of, side_of, trend_ok, chop_ok, elder_short_ok
+from .strategy import btc_regime_blocks_long, combine, ls_parity_scales, name_vol_mult, port_vol_factor, indicators, market_of, side_of, trend_ok, chop_ok, elder_short_ok
 
 BARS_PER_YEAR = {"15m": 35040, "1h": 8760, "4h": 2190, "1d": 365}
 
@@ -178,6 +178,11 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         b = spot_d["BTCUSDT"].sort_values("open_time").set_index("open_time")
         RGL = btc_regime_blocks_long(b["close"], rg_n).reindex(idx).fillna(False).to_numpy(dtype=bool)
     MK = {"long": "perp" if t_mode == "perp_both" else "spot", "short": "perp"}
+    # 可选动态多空风险平价 up（ls_parity_cap，0 = 关闭）：按上一根已收盘合成信号把较小一侧信号书的单币风险 / 权重乘数放大到与较大一侧相同（≤ cap 倍）
+    lsp_c = float(st.get("ls_parity_cap", 0) or 0)
+    LSP = ls_parity_scales(SIG, {s: NVM[MK["long"]][s] for s in syms}, {s: NVM["perp"][s] for s in syms}, lsp_c) if lsp_c > 1 else None
+    NVS = {"long": {s: NVM[MK["long"]][s] * (LSP[0] if LSP else 1.0) for s in syms},
+           "short": {s: NVM["perp"][s] * (LSP[1] if LSP else 1.0) for s in syms}}
     FUND = {}
     if funding:
         tns = pd.DatetimeIndex(idx).as_unit("ns").asi8
@@ -351,7 +356,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
             if sg < 0 and not elder_short_ok(PX["spot"]["elder_bull"][s][i - 1], el_n, el_x):
                 continue
             z = size(side=sd, equity=eq_prev, price=P(sd, "open", s)[i], atr=P(sd, "atr", s)[i - 1],
-                     max_risk=risk_now * NVM[MK[sd]][s][i - 1], max_weight=w_now * NVM[MK[sd]][s][i - 1],
+                     max_risk=risk_now * NVS[sd][s][i - 1], max_weight=w_now * NVS[sd][s][i - 1],
                      atr_mult=st["atr_stop_mult"])
             if z.notional > 0:
                 want[s] = (sg, z)
@@ -363,7 +368,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                 continue
             sd = side_of(d)
             z = size(side=sd, equity=eq_prev, price=P(sd, "open", s)[i], atr=P(sd, "atr", s)[i - 1],
-                     max_risk=risk_now * NVM[MK[sd]][s][i - 1] * sar_k, max_weight=w_now * NVM[MK[sd]][s][i - 1] * sar_k,
+                     max_risk=risk_now * NVS[sd][s][i - 1] * sar_k, max_weight=w_now * NVS[sd][s][i - 1] * sar_k,
                      atr_mult=sar_m)
             if z.notional > 0:
                 want[s] = (d, z)
@@ -442,7 +447,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
             rb_plan = RB.plan(held, {q: float(P(t.side, "open", q)[i]) for q, t in held.items()},
                               {q: float(P(t.side, "atr", q)[i - 1]) for q, t in held.items()},
                               equity=eq_prev, new_notional=new_n, cfg=cfg_eff, gross_now=g_now, fee=fee,
-                              name_mult={q: float(NVM[MK[t.side]][q][i - 1]) for q, t in held.items()})
+                              name_mult={q: float(NVS[t.side][q][i - 1]) for q, t in held.items()})
             for it in rb_plan:  # 与引擎 _rebalance 同一个计划函数（qtw/rebalance.py）
                 q, px, delta = it["symbol"], it["price"], it["delta_usdt"]
                 t = pos[q]
@@ -614,7 +619,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": round(FEE["spot"] * 10_000, 4), "spot_taker_bps": round(FEE["spot"] * 10_000, 4), "perp_taker_bps": round(FEE["perp"] * 10_000, 4), "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
-        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_band_down": float(st.get("rebalance_band_down", 0) or 0), "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l, "name_vol_target": nv_t, "name_vol_lookback": nv_l, "chop_n": int(st.get("chop_n", 0) or 0), "chop_max": float(st.get("chop_max", 50) or 50), "elder_short_gate_n": el_n, "elder_short_gate_x": el_x, "sar_hold_bars": sar_h, "sar_risk_mult": sar_k, "sar_atr_mult": sar_m,
+        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_band_down": float(st.get("rebalance_band_down", 0) or 0), "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l, "name_vol_target": nv_t, "name_vol_lookback": nv_l, "chop_n": int(st.get("chop_n", 0) or 0), "chop_max": float(st.get("chop_max", 50) or 50), "elder_short_gate_n": el_n, "elder_short_gate_x": el_x, "sar_hold_bars": sar_h, "sar_risk_mult": sar_k, "sar_atr_mult": sar_m, "ls_parity_cap": lsp_c,
         "resizes": int(sum(t.resizes for t in closed + open_trades)), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
         "trade_mode": t_mode, "perp_leverage": L_req, "leverage_scales_exposure": XS != 1.0, "exposure_mult": XS,

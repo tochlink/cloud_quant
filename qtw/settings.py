@@ -65,6 +65,11 @@ DEFAULTS: dict[str, Any] = {
         "sar_hold_bars": 0,
         "sar_risk_mult": 1.0,
         "sar_atr_mult": 2.0,
+        # 2026-11-13：可选动态多空风险平价 up（默认关闭，仅回测生效）。上一根合成信号下，较小一侧信号书（Σ 单币波动乘数）的
+        # 单笔风险 / 单币权重上限放大到与较大一侧相同，最多 ls_parity_cap 倍；总敞口上限不变。研究（scratch/drp2/*.py）：多空永续 10× 下
+        # C3 Gate +228.7% / OKX +235.8%（基线 +163.3% / +165.4%），Sharpe 2.01 / 2.04，回撤 −16.0%，2026-03 后两所 6/9 月更好；
+        # C 越大越好、无内部最优，超额集中在 2025-10，未改默认。0=关闭，建议试用 2–3
+        "ls_parity_cap": 0.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -254,6 +259,9 @@ def validate(s: dict) -> dict:
     st["sar_atr_mult"] = float(st.get("sar_atr_mult", 2.0) or 0)
     if not 0.5 <= st["sar_atr_mult"] <= 10:
         raise ValueError("止损反手 ATR 止损倍数需在 0.5–10 之间")
+    st["ls_parity_cap"] = float(st.get("ls_parity_cap", 0) or 0)
+    if st["ls_parity_cap"] and not 1 <= st["ls_parity_cap"] <= 10:
+        raise ValueError("多空风险平价放大上限需为 0（关闭）或 1–10")
     st["pyramid_r"] = float(st.get("pyramid_r", 0) or 0)
     st["pyramid_frac"] = float(st.get("pyramid_frac", 0.5) or 0)
     if st["pyramid_r"] and not 0.5 <= st["pyramid_r"] <= 5:
