@@ -4026,6 +4026,21 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - CSV：`output/research_split_ladder_atr_stop_long_history.csv`、`output/research_split_ladder_atr_stop_long_history_stress.csv`、`output/research_split_ladder_atr_stop_monthly.csv`（不入库）；脚本 `scratch/sst_long.py`（对 `run_backtest` 源码做断言替换后在模块命名空间执行，不改仓库代码）。
 - 下一族：结构不同的方向（尚未覆盖的执行 / 仓位构建 / 出场想法）；不要再测指标入场门控，也不要重测止损倍数 / 分层止损。
 
+## 轮换：现货 / 永续信号合成规则（spot/perp signal combine rule，信号构建 / 跨市场一致性，2026-11-13 ~07:35 PST，研究，不改默认；strict 弱观察）
+- 查重：`research_spot_perp_agreement.csv` 只在旧基线、短窗口上测过「严格一致」，`research_signal_agreement_sizing_long_history.csv` 是按一致度缩放仓位；没有在当前 50/150 长历史基线上测过合成规则本身（冲突处理、单一市场驱动、一致才开）。
+- 公式：现货、永续各自的已确认 50/150 信号 \(s, p\in\{-1,0,1\}\) 不变，只换 `combine`。base（默认）：\(s=1,p\ne-1\Rightarrow+1\)；\(p=-1,s\ne1\Rightarrow-1\)；否则 0。strict：\(s=p=1\Rightarrow+1\)，\(s=p=-1\Rightarrow-1\)，否则 0。spot_only / perp_only：只用一个市场的信号驱动多空两边。hold：冲突（\(s=1,p=-1\)）时沿用上一根合成值。either_long / either_short：冲突时判多 / 判空。仓位、止损、调仓等全部默认。
+- 数据：Gate / OKX 官方 4500 根 4h，8 币，窗口 2025-01-17 → 2026-11-13 PT，2026-03-05 前后切分；真实费率与压力费率。
+- 结果（真实费率，整段 / 回撤 / 日 Sharpe / 2026-03 前 / 2026-03 后）：
+  - base：Gate +159.96% / −18.84% / 1.67 / +63.20% / +59.28%；OKX +162.60% / −18.85% / 1.69 / +65.05% / +59.10%。
+  - 全窗口**没有一根**现货 +1 同时永续 −1 的冲突，hold / either_long / either_short 与基线逐笔一致。
+  - 真正不同的只有「一个市场已翻向、另一个仍是 0」的一根：Gate 9 次、OKX 5 次，全部是两边相差一根的快速翻转（例如上一根永续 −1 开空、下一根现货 +1 反手开多）。strict 把这类一根的来回跳过：Gate +172.12% / −18.51% / 1.73 / +70.42% / +59.68%；OKX +164.81% / −18.27% / 1.70 / +66.45% / +59.10%。spot_only：Gate +170.88% / 1.73，OKX +163.82%；perp_only：Gate +161.05%，OKX +163.45%。
+  - 压力费率：strict Gate +153.30%（基线 +143.04%），OKX +147.38%（基线 +145.43%）。
+  - 增益几乎全在 2026-03 前；后段 Gate +0.40 点、OKX 持平，后段逐月胜 / 负 Gate 2 / 1、OKX 2 / 3（其余月份相同）。12 个月滚动 walk-forward（每月按前 12 个月择 base 或 strict，2026-01 起 11 个月，全部选中 strict）：Gate +93.81% 对 +93.33%，OKX +88.09% 对 +88.11%，持平。
+- 解读：两市场信号相差一根的反手是真实的「来回打脸」成本，strict 只要两边都确认才持仓，逻辑上合理且后段不吃亏；但只有 5–9 个事件，增益（Gate +12 点、OKX +2 点）在 K 线相位测试显示的 ±25 点时点离散度之内，不足以改默认。
+- 结论：不改默认，不写入引擎；strict（两市场都确认才开 / 任一离开即平）进弱观察名单，后段事件更多后复核。冲突处理（hold / either）在当前数据上无意义。
+- CSV：`output/research_spot_perp_signal_combine_rule_long_history.csv`、`output/research_spot_perp_signal_combine_rule_monthly.csv`、`output/research_spot_perp_signal_combine_rule_monthly_walkforward.csv`（不入库）；脚本 `scratch/cmb_long.py`（替换 `backtest.combine`，不改仓库代码）。
+- 下一族：结构不同的方向（尚未覆盖的执行 / 仓位构建 / 出场想法）；不要再测指标入场门控、止损倍数 / 分层止损或合成规则。
+
 ## 分批止盈 + 保本止损、快速判断层（1m / 5m / 10m / 1D）、按官方精度的数量下单、图表周期与同比（2026-11-13 ~07:00 PST，已实现为可选项；生产默认全部关闭）
 
 ### 1. 分批止盈（`tp_partial`）与保本止损（`tp_breakeven`）
