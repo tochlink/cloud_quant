@@ -4376,3 +4376,9 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 问题：紧急停止（Kill Switch）按设计不向交易所发任何订单，只关实盘开关、平掉纸面账本。若停止前实盘闸门是开着的，账本显示全部已平，但交易所上的实盘持仓仍在，返回信息里没有任何提示，订单日志也没有记录，容易误以为已经全部离场。
 - 改进：`kill_switch` 先记下停止前是否实盘已开（`live_armed`）；若是，每个被平掉的纸面持仓写一条 `not_sent` 实盘订单日志（「紧急停止只平纸面账本，未向交易所发单；请到交易所手动处理该实盘持仓」），并在返回的 events（界面弹窗）末尾追加「交易所上的实盘持仓仍在，请到交易所手动平仓」。仍然不发任何订单。
 - 测试：`tests/test_trading_chain.py::test_kill_switch_warns_when_live_was_armed`，全套 257 个测试通过。
+
+### 执行层：OKX 开平仓模式（long_short_mode）下永续单带 posSide（2026-11-13 09:35 PST，含代码修复）
+
+- 问题：OKX 账户有两种持仓模式。默认「买卖模式」（`net_mode`）下现有永续单（`side` + `reduceOnly`）没问题；但账户若设成「开平仓模式」（`long_short_mode`），永续下单和逐仓设杠杆都必须带 `posSide`，而 `reduceOnly` 只适用于买卖模式。原代码不带 `posSide`，在开平仓模式下每笔开空 / 平空都会被拒。
+- 修复：`OkxTrader.pos_mode()` 只读查询 `GET /api/v5/account/config` 的 `posMode`（实例内缓存）；`order_payload(..., pos_mode)` 在 `long_short_mode` 下给永续单加 `posSide: "short"`（本系统永续只做空），不带 `reduceOnly`；开空前的 `set-leverage`（逐仓 1 倍）同样加 `posSide: "short"`。买卖模式与现货单完全不变。Gate 未改。
+- 测试：`tests/test_okx_pos_mode.py`，全套 260 个测试通过。

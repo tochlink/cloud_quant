@@ -61,8 +61,11 @@ def _send(req: dict) -> dict:
     return j
 
 
-def order_payload(symbol: str, market: str, action: str, qty: float, price: float, spec: dict | None = None) -> dict:
-    """action: open_long(现货买) / close_long(现货卖) / open_short(永续卖) / close_short(永续买, reduceOnly)。"""
+def order_payload(symbol: str, market: str, action: str, qty: float, price: float, spec: dict | None = None,
+                  pos_mode: str = "net_mode") -> dict:
+    """action: open_long(现货买) / close_long(现货卖) / open_short(永续卖) / close_short(永续买, reduceOnly)。
+    pos_mode：OKX 账户持仓模式。开平仓模式（long_short_mode）下永续单必须带 posSide（本系统只做空 → "short"），
+    且 reduceOnly 只适用于买卖模式（net_mode），不带；否则交易所会拒单（posSide 参数错误）。"""
     base = symbol[:-4]
     if market == "spot":
         # 2026-11-13：按数量下单（币数量，已按 lotSz 向下取整，见 qtw/lots.py）；买卖都用 base_ccy
@@ -72,7 +75,9 @@ def order_payload(symbol: str, market: str, action: str, qty: float, price: floa
     lots = math.floor(qty / spec["ct_val"] / spec["lot_sz"] + 1e-9) * spec["lot_sz"]
     p = {"instId": f"{base}-USDT-SWAP", "tdMode": "isolated", "ordType": "market",
          "side": "sell" if action == "open_short" else "buy", "sz": f"{lots:.10g}"}
-    if action == "close_short":
+    if pos_mode == "long_short_mode":
+        p["posSide"] = "short"
+    elif action == "close_short":
         p["reduceOnly"] = True
     return p
 
@@ -80,6 +85,14 @@ def order_payload(symbol: str, market: str, action: str, qty: float, price: floa
 class OkxTrader:
     def __init__(self, keys: dict, demo: bool = True):
         self.keys, self.demo = keys, demo
+        self._pos_mode: str | None = None
+
+    def pos_mode(self) -> str:
+        """只读：账户持仓模式 posMode（net_mode 买卖模式 / long_short_mode 开平仓模式），进程内缓存。"""
+        if self._pos_mode is None:
+            j = _send(build(self.keys, "GET", "/api/v5/account/config", None, self.demo))
+            self._pos_mode = str(((j.get("data") or [{}])[0] or {}).get("posMode") or "net_mode")
+        return self._pos_mode
 
     def preview_order(self, symbol, market, action, qty, price, spec=None) -> dict:
         return redacted(build(self.keys, "POST", "/api/v5/trade/order",
@@ -88,11 +101,14 @@ class OkxTrader:
     def place_order(self, cfg: dict, symbol, market, action, qty, price, spec=None) -> dict:
         from .guard import require
         require(cfg, "okx")
+        mode = self.pos_mode() if market == "perp" else "net_mode"
         if market == "perp" and action == "open_short":
-            _send(build(self.keys, "POST", "/api/v5/account/set-leverage",
-                        {"instId": f"{symbol[:-4]}-USDT-SWAP", "lever": "1", "mgnMode": "isolated"}, self.demo))
+            lev = {"instId": f"{symbol[:-4]}-USDT-SWAP", "lever": "1", "mgnMode": "isolated"}
+            if mode == "long_short_mode":
+                lev["posSide"] = "short"  # 开平仓模式下逐仓设杠杆必须指定持仓方向
+            _send(build(self.keys, "POST", "/api/v5/account/set-leverage", lev, self.demo))
         return _send(build(self.keys, "POST", "/api/v5/trade/order",
-                           order_payload(symbol, market, action, qty, price, spec), self.demo))
+                           order_payload(symbol, market, action, qty, price, spec, mode), self.demo))
 
     def balance(self) -> dict:
         """只读：查询余额（不下单）。"""
