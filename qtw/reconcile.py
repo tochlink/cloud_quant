@@ -52,8 +52,13 @@ def load_fills(path: str | pathlib.Path) -> pd.DataFrame:
     return df.sort_values("fill_time").reset_index(drop=True)
 
 
-def round_trips(fills: pd.DataFrame) -> pd.DataFrame:
-    """同 symbol+side 内：从无仓到有仓的 open 开启一笔，数量回到 0 的 close 结束。"""
+DUST_FRAC = 0.005  # 现货买入手续费从到手币里扣（约 0.10%）+ 卖出按步长向下取整，平仓后会剩一点币
+
+
+def round_trips(fills: pd.DataFrame, dust_frac: float = DUST_FRAC) -> pd.DataFrame:
+    """同 symbol+side 内：从无仓到有仓的 open 开启一笔，数量回到 0 的 close 结束。
+    剩余数量 ≤ dust_frac × 本笔开仓数量 视为已平（尘埃）：OKX / Gate 现货市价买入手续费默认从币里扣，
+    成交记录里买入数量是毛数量，能卖出的只有约 99.9%，否则这笔永远不会结束、下一笔开仓会被并进来。"""
     out = []
     for (sym, side), g in fills.groupby(["symbol", "side"], sort=False):
         cur, pos = None, 0.0
@@ -67,7 +72,7 @@ def round_trips(fills: pd.DataFrame) -> pd.DataFrame:
                 q = min(r["qty"], pos)
                 cur["xq"] += q; cur["xn"] += q * r["fill_price"]; cur["fees"] += r["fee_usdt"]; pos -= q
                 cur["exit_time"] = r["fill_time"]
-                if pos <= 1e-12 * max(1.0, cur["eq"]):
+                if pos <= max(1e-12 * max(1.0, cur["eq"]), dust_frac * cur["eq"]):
                     out.append(cur); cur, pos = None, 0.0
         if cur is not None:
             out.append(cur)
@@ -80,7 +85,7 @@ def round_trips(fills: pd.DataFrame) -> pd.DataFrame:
         rows.append({"symbol": c["symbol"], "side": c["side"], "venue": c["venue"], "mode": c["mode"],
                      "user_entry_time": c["entry_time"], "user_entry_price": ep, "user_qty": c["eq"],
                      "user_exit_time": c["exit_time"], "user_exit_price": xp, "user_fees_usdt": c["fees"],
-                     "user_pnl_usdt": pnl, "user_status": "closed" if c["xq"] >= c["eq"] - 1e-12 * max(1.0, c["eq"]) else "open"})
+                     "user_pnl_usdt": pnl, "user_status": "closed" if c["eq"] - c["xq"] <= max(1e-12 * max(1.0, c["eq"]), dust_frac * c["eq"]) else "open"})
     return pd.DataFrame(rows)
 
 

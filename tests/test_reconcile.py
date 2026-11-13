@@ -55,3 +55,24 @@ def test_bad_rows(tmp_path):
     p.write_text("venue,symbol,side,action,fill_time,fill_price,qty\nokx,BTCUSDT,buy,open,2026-11-01T00:00:00Z,1,1\n")
     with pytest.raises(ValueError):
         load_fills(p)
+
+
+def test_spot_fee_dust_closes_round_trip(tmp_path):
+    """现货买入手续费从币里扣：买 1、只卖得出 0.999，这笔应结束，下一次开仓是新的一笔。"""
+    p = tmp_path / "d.csv"
+    p.write_text(
+        "venue,mode,symbol,market,side,action,fill_time,fill_price,qty,fee_usdt,order_id,reason\n"
+        "okx,live,BTC-USDT,spot,long,open,2026-11-01T04:00:30Z,100.5,1,0.1,a,\n"
+        "okx,live,BTC-USDT,spot,long,close,2026-11-02T08:00:40Z,109.0,0.999,0.11,c,\n"
+        "okx,live,BTC-USDT,spot,long,open,2026-11-05T00:00:30Z,120.2,1,0.12,d,\n")
+    ut = round_trips(load_fills(p))
+    assert len(ut) == 2
+    assert list(ut["user_status"]) == ["closed", "open"]
+    assert ut["user_entry_price"].iloc[1] == 120.2
+    # 真正的部分减仓（剩 40%）不能被当成尘埃
+    p.write_text(
+        "venue,mode,symbol,market,side,action,fill_time,fill_price,qty,fee_usdt,order_id,reason\n"
+        "okx,live,BTC-USDT,spot,long,open,2026-11-01T04:00:30Z,100.5,1,0.1,a,\n"
+        "okx,live,BTC-USDT,spot,long,close,2026-11-02T08:00:40Z,109.0,0.6,0.11,c,\n")
+    ut = round_trips(load_fills(p))
+    assert list(ut["user_status"]) == ["open"]

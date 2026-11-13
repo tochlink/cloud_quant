@@ -4358,3 +4358,9 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 修复：`qtw/engine.py` 新增 `clamp_spot_sell`，只在实盘闸门全开、现货 `close_long`（信号离场、止损、调仓减仓、手动平仓都走 `_route`）时生效：先只读查询该币可用余额（OKX `GET /api/v5/account/balance?ccy=…` 的 `availBal`；Gate `GET /spot/accounts?currency=…` 的 `available`），卖出数量 = `floor_qty(min(账本数量, 可用余额))`（按交易所步长 / 最小量 / 最小金额向下取整）；余额足够时原样发单；查询失败时按原数量发并在订单日志写明；夹完低于最小下单量时不发单、记为 error。夹量说明写进订单日志 detail。`OkxTrader.spot_available`、`GateTrader.spot_available` 为只读接口，不下单。
 - 测试：`tests/test_spot_sell_clamp.py`（夹量、余额足够 / 查询失败 / 无接口不夹、低于最小量返回 0、两所余额解析与 OKX 带查询串签名），全套 253 个测试通过。
 - 未改：策略默认、回测、纸面账本。买入后的实际到手数量与账本的差（约 0.1%）仍由账本按 USDT 手续费口径计；实盘对账以交易所余额为准。
+
+### 对账：现货手续费尘埃导致往返交易不结束（`qtw/reconcile.py`，2026-11-13 09:20 PST，含代码修复）
+
+- 问题：同一原因（现货市价买入手续费从到手币里扣），你导出的成交里买入是毛数量 Q，能卖出的只有约 0.999Q。`round_trips` 原来要求剩余数量回到 0 才结束一笔，结果这笔永远是「持仓中」，下一次开仓的成交会被并进同一笔，入场均价、滑点与盈亏全部算错。
+- 修复：剩余数量 ≤ `dust_frac × 本笔开仓数量`（默认 `DUST_FRAC = 0.005`，覆盖 0.10% 手续费加步长取整）视为已平，`user_status` 同口径。默认调仓带宽 0.1 下真正的减仓至少约 10%，不会被误判为尘埃。
+- 测试：`tests/test_reconcile.py::test_spot_fee_dust_closes_round_trip`（卖 0.999 后结束、下一笔单独成笔；剩 40% 仍为持仓中），全套 255 个测试通过。
