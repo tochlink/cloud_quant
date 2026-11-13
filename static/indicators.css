@@ -27,11 +27,11 @@
 .isc-cap .info{margin-left:2px}
 .isc-big{display:flex;align-items:center;flex-wrap:wrap;gap:0 4px;font-size:26px;font-weight:800;line-height:32px;font-variant-numeric:tabular-nums;color:var(--ink)}
 .isc-big em{font-style:normal;font-size:13px;font-weight:700;margin-left:4px}
-.isc-big .ref-tag{margin-left:6px;padding:1px 7px;font-size:10px}
+.isc-cnt .ref-tag{padding:0 7px;font-size:10px;line-height:16px}
 .isc-big.pos{color:#138a5c}.isc-big.neg{color:#d23c57}
 .isc-gauge{position:relative;height:6px;border-radius:6px;background:linear-gradient(90deg,#e5536b,#eeedf6 40%,#eeedf6 60%,#25b07a);margin:4px 0 6px}
 .isc-gauge i{position:absolute;top:-3px;width:4px;height:12px;margin-left:-2px;border-radius:2px;background:var(--ink)}
-.isc-cnt{display:flex;flex-wrap:wrap;gap:2px 8px;font-size:11px;font-weight:600;color:var(--ink-2)}
+.isc-cnt{display:flex;flex-wrap:wrap;align-items:center;gap:2px 8px;font-size:11px;font-weight:600;color:var(--ink-2)}
 .isc-r{display:grid;grid-template-columns:minmax(0,1fr);gap:2px;align-items:center;font-size:11.5px}
 .isc-r .isc-v+.isc-k{margin-top:5px}
 .isc-k{color:var(--muted);white-space:nowrap}

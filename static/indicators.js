@@ -215,9 +215,9 @@ function indRenderScore() {
   host.innerHTML = `
     <div class="isc-top">
       <div class="isc-l"><div class="isc-cap">多空证据 · ${esc(d ? d.interval_cn : "")}<span class="info ind-i" tabindex="0" data-tip="${esc(tip.replace(/<br>/g, "\n").replace(/<[^>]+>/g, ""))}" aria-label="证据分说明">${ic("info")}</span></div>
-        <div class="isc-big ${sm ? scoreCls(sm.score) : ""}">${sm ? sc2(sm.score) : "—"}<em>${sm ? esc(sm.label) : ""}</em><span class="pill info ref-tag">参考证据</span></div>
+        <div class="isc-big ${sm ? scoreCls(sm.score) : ""}">${sm ? sc2(sm.score) : "—"}<em>${sm ? esc(sm.label) : ""}</em></div>
         <div class="isc-gauge"><i style="left:${pctPos}%"></i></div>
-        <div class="isc-cnt">${sm ? `<span class="pos">偏多 ${sm.bull}</span><span class="neg">偏空 ${sm.bear}</span><span>中性 ${sm.neutral}</span><span class="muted">共 ${sm.n} 项</span>` : ""}</div>
+        <div class="isc-cnt">${sm ? `<span class="pos">偏多 ${sm.bull}</span><span class="neg">偏空 ${sm.bear}</span><span>中性 ${sm.neutral}</span><span class="muted">共 ${sm.n} 项</span>` : ""}<span class="pill info ref-tag">参考证据</span></div>
       </div>
       <div class="isc-r">
         <div class="isc-k">当前策略</div><div class="isc-v">${strat.html}</div>
