@@ -1101,3 +1101,11 @@ body.theme-term .d5-lh,body.theme-term .d5-lr{grid-template-columns:74px 30px mi
 .d5-lh>span.rsn,.d5-lr>span.rsn{text-align:left;font-size:10px}
 .d5-lr>span.rsn.neg{color:var(--red,#e5536b)}.d5-lr>span.rsn.pos{color:var(--green,#25b07a)}.d5-lr>span.rsn.warn{color:#b36b00}.d5-lr>span.rsn.muted{color:var(--muted)}
 @media (max-width:1440px){.d5-lh,.d5-lr{grid-template-columns:60px 30px minmax(30px,.8fr) minmax(40px,.8fr) minmax(50px,1.1fr) 38px 36px;gap:3px}body.theme-term .d5-lh,body.theme-term .d5-lr{grid-template-columns:70px 30px minmax(28px,.6fr) minmax(44px,.9fr) minmax(50px,1.1fr) 36px 36px;gap:2px}body.theme-term .d5-lr>span.rsn{font-size:9.5px}}
+/* v7 杠杆警示（>20 倍 / 放大敞口） */
+.lev-warn{display:flex;gap:10px;align-items:flex-start;margin-top:12px;padding:10px 12px;border-radius:10px;border:1px solid rgba(239,68,68,.45);background:rgba(239,68,68,.08);color:var(--neg,#ef4444);font-size:12px;line-height:1.55}
+.lev-warn[hidden]{display:none}
+.lev-warn svg{flex:0 0 16px;width:16px;height:16px;margin-top:1px}
+
+.lev-title .info .pop{left:-14px;transform:translate(0,4px);max-width:min(520px,62vw)}
+.lev-title .info:hover .pop,.lev-title .info:focus .pop,.lev-title .info:focus-within .pop{transform:none}
+.lev-title .info .pop::before{left:21px}

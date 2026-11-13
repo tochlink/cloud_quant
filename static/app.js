@@ -49,7 +49,7 @@ function hydrateIcons(root = document) {
   });
 }
 const NAV = [
-  ["dashboard", "home", "总览", "总览"], ["signals", "signals", "信号", "信号 / 进出场"], ["indicators", "indicators", "指标", "指标 / 多空证据"], ["backtest", "backtest", "回测", "回测"], ["strategies", "strategies", "策略", "多策略 / 影子盘"], ["positions", "positions", "持仓", "持仓"],
+  ["dashboard", "home", "总览", "总览"], ["signals", "signals", "信号", "信号 / 进出场"], ["indicators", "indicators", "指标", "指标 / 多空证据"], ["backtest", "backtest", "回测", "回测"], ["positions", "positions", "持仓", "持仓"],
   ["trades", "trades", "成交", "成交"], ["risk", "risk", "风控", "风控 / 自动交易"], ["settings", "settings", "设置", "行情源 / API / 实盘"], ["help", "help", "帮助", "帮助"],
 ];
 const COIN = { BTC: "#f7931a", ETH: "#627eea", BNB: "#e0a800", SOL: "linear-gradient(135deg,#9945ff,#14f195)", XRP: "#23292f", ADA: "#0033ad", DOGE: "#c2a633", AVAX: "#e84142", LTC: "#345d9d", LINK: "#2a5ada", TRX: "#d8222a", DOT: "#e6007a" };
@@ -470,6 +470,7 @@ function fmtStopBlock(r) {
 }
 
 /* 带感叹号的说明：鼠标悬停 / 键盘聚焦时展开格式化说明 */
+const LEV_TIP = "杠杆只决定占用多少保证金（逐仓：保证金 = 名义 ÷ 杠杆）。默认仓位仍按单笔风险 ≤ 5%、单币 ≤ 20%、总敞口 ≤ 1 倍权益计算：10 倍时只占约 1/10 的资金，止损亏损与 1 倍相同。<br>每笔仓位的实际杠杆 = min(设置, 交易所该币上限, 止损先于强平的安全倍数)，加仓 / 调仓后重算；仍被强平时损失该仓全部保证金。永续多空都计资金费。<br>「杠杆放大敞口」会把仓位 × 杠杆：历史回测 10 倍最大回撤约 −67%，去掉组合波动率目标时几个月内爆仓，默认关闭。";
 const infoTip = (html, label = "说明") => `<span class="info" tabindex="0" role="button" aria-label="${label}">${ic("info")}<span class="pop" role="tooltip">${html}</span></span>`;
 
 /* ---------- 外壳 ---------- */
@@ -591,7 +592,7 @@ function renderRight() {
       const tp = pxOk(p.tp_price) ? fp(p.tp_price) : "—";
       const tpTitle = p.tp_done ? (p.be_moved ? "已分批止盈，余仓止损在保本价" : "已分批止盈") : (p.tp_enabled ? `${fp(p.tp_r, 3)}R 分批止盈（平 ${Math.round((p.tp_frac || 0.5) * 100)}%）` : `参考 ${fp(p.tp_r, 3)}R（未启用分批止盈）`);
       return `<div class="r-row r-pos"><button type="button" class="r-row-main" data-sym="${p.symbol}" data-mkt="${p.market}" title="查看 ${base(p.symbol)} 的信号与 K 线">${coin(p.symbol)}
-        <span class="rp-l1"><b>${base(p.symbol)}</b><span class="side-tag ${p.side}">${p.side === "short" ? "空" : "多"}·${p.market === "perp" ? "永续" : "现货"}</span>${bookTag(p)}${p.halted ? '<span class="pill flat rp-halt">已停</span>' : ""}
+        <span class="rp-l1"><b>${base(p.symbol)}</b><span class="side-tag ${p.side}">${p.side === "short" ? "空" : "多"}${p.market === "perp" ? `${fp(p.leverage || 1, 3)}x` : "·现货"}</span>${bookTag(p)}${p.halted ? '<span class="pill flat rp-halt">已停</span>' : ""}
           <span class="rp-pnl num ${cls(pnl.usdt)}" data-live="pnl" data-stacked="c" ${live} title="浮动盈亏（已扣手续费）"><span data-live-pnl-txt>${fmtPnl(pnl, "c")}</span></span></span>
         <span class="rp-l2"><span class="num rp-qty" title="数量 ${fp(p.qty, 10)} ${base(p.symbol)}">${fp(p.qty, 5)}</span><span class="rp-kv num" title="当前价（${p.market === "perp" ? "永续标记价" : "现货最新价"}）"><em>现</em><b data-live="px" ${live}>${fpPx(mark)}</b></span><span class="rp-kv num" title="入仓价"><em>入</em>${fpPx(p.entry_price)}</span></span>
         <span class="rp-l3" title="止损 ${fpPx(p.stop_price)} · 止盈 ${tp}（${esc(tpTitle)}）· ${esc(p.exit_rule_cn || "")}"><span class="rp-chip sl num"><em>损</em>${fpPx(p.stop_price)}${p.be_moved ? "<i>保本</i>" : ""}</span><span class="rp-chip tp num"><em>盈</em>${tp}${p.tp_done ? "<i>已</i>" : ""}</span><span class="rp-w num" data-live="weight" ${live} title="仓位权重">${pct(p.weight, 1)}</span></span>
@@ -856,7 +857,7 @@ async function pageSignals() {
       <div class="chart-box" id="candleChart"><div class="empty">加载中…</div></div>
       <div class="chart-legend" id="chartLegend"><span><i style="background:#2cc4c9"></i>快线 ${s.fast_ma} 均线</span><span><i style="background:#6c5ce7"></i>慢线 ${s.slow_ma} 均线</span><span>▲▼ 收盘确认的均线交叉</span><span class="muted">时间为北京时间 · 图表 TradingView Lightweight Charts™</span></div>
     </div>
-    <div class="sec-title sig-title"><div><h3>当前信号与进出场建议（${(S.signals && S.signals.rows) ? S.signals.rows.length : (S.status.settings.symbols || []).length}）</h3><div class="note">策略 ${esc(s.rule_id)}：${s.interval} 已收盘 K 线上 SMA${s.fast_ma} / SMA${s.slow_ma} 判断方向。做多用现货，做空用 USDT 永续（1 倍）。点击一行在上方图表查看，并打开进出场详情。</div><div class="sig-cycle" id="sigCycle"></div></div></div>
+    <div class="sec-title sig-title"><div><h3>当前信号与进出场建议（${(S.signals && S.signals.rows) ? S.signals.rows.length : (S.status.settings.symbols || []).length}）</h3><div class="note">策略 ${esc(s.rule_id)}：${s.interval} 已收盘 K 线上 SMA${s.fast_ma} / SMA${s.slow_ma} 判断方向。${(S.status.settings.risk.trade_mode || "perp_both") === "perp_both" ? "做多、做空都用 USDT 永续" : "做多用现货，做空用 USDT 永续"}（逐仓 ${S.status.settings.risk.perp_leverage ?? 1} 倍，仓位按风险计算）。点击一行在上方图表查看，并打开进出场详情。</div><div class="sig-cycle" id="sigCycle"></div></div></div>
     <div class="panel sig-panel"><div class="sig-list" id="sigList"><div class="empty">正在从 ${VN[S.status.settings.venue]} 公共行情计算信号…</div></div><div id="sigPager"></div></div>
     </div>`;
   document.querySelectorAll("#mktSeg [data-m]").forEach((b) => (b.onclick = () => { S.chartMkt = b.dataset.m; loadCandles(); }));
@@ -1215,11 +1216,11 @@ async function renderShortLayer() {
 function pagePositions() {
   const d = S.dash;
   $("#page").innerHTML = `<div class="fit pos-page">
-  <div class="metrics"><div class="metric feature"><small>纸面权益</small><b class="num">${f2(d.equity)}</b></div><div class="metric"><small>可用现金</small><b class="num">${f2(d.cash_free)}</b></div><div class="metric"><small>总敞口 / 净敞口</small><b class="num">${f2(d.gross, 0)} / ${sgn(d.net, 0)}</b></div><div class="metric"><small>未实现盈亏</small><b class="num ${cls(d.unrealized)}">${sgn(d.unrealized)}</b></div></div>
+  <div class="metrics"><div class="metric feature"><small>纸面权益</small><b class="num">${f2(d.equity)}</b></div><div class="metric" title="可用资金 = 权益 − 占用（现货买入名义 + 永续逐仓保证金）"><small>可用资金 / 占用保证金</small><b class="num">${f2(d.cash_free)} / ${f2(d.margin_used_usdt ?? 0)}</b></div><div class="metric"><small>总敞口 / 净敞口</small><b class="num">${f2(d.gross, 0)} / ${sgn(d.net, 0)}</b></div><div class="metric"><small>未实现盈亏</small><b class="num ${cls(d.unrealized)}">${sgn(d.unrealized)}</b></div></div>
   <div class="panel pos-panel featured"><div class="sec-title"><h3>当前纸面持仓（${d.positions.length}）</h3>${d.positions.length ? `<button type="button" class="btn danger" id="flattenAll">${ic("alert")}一键清仓</button>` : ""}</div>
   <div id="posTable"></div>
   <div id="posPager"></div>
-  <div class="note">纸面账本持久化保存在 data/qtw.sqlite（重启不丢失；CSV 仅为导出）。永续空头按 1 倍保证金计，占用等额现金。手动平仓为市价，按该市场吃单（taker）费率记账；「停止」后不再按信号自动开平，ATR 止损与止盈仍生效。</div></div></div>`;
+  <div class="note">纸面账本持久化保存在 data/qtw.sqlite（重启不丢失；CSV 仅为导出）。永续多空都按逐仓保证金计（名义 ÷ 杠杆），资金费计入已实现。手动平仓为市价，按该市场吃单（taker）费率记账；「停止」后不再按信号自动开平，ATR 止损与止盈仍生效。</div></div></div>`;
   renderPosTable();
   const fl = $("#flattenAll"); if (fl) fl.onclick = flattenAll;
 }
@@ -1228,16 +1229,16 @@ function renderPosTable() {
   if (!d.positions.length) { host.innerHTML = '<div class="empty">当前空仓。开启自动交易或点击右上角「跑一轮」执行一次系统化周期。</div>'; const pg = $("#posPager"); if (pg) pg.innerHTML = ""; return; }
   const st = pgState("positions", d.positions.length, fitRows(host, 66, 36, 3));
   const slice = d.positions.slice(st.start, st.end);
-  host.innerHTML = `<div class="tbl-wrap"><table class="tbl pos-tbl"><thead><tr><th>标的</th><th>数量</th><th>入场价</th><th>最新价</th><th>止损</th><th>止盈 · 离场</th><th>未实现</th><th class="col-weight">权重</th><th class="col-acts">操作</th></tr></thead><tbody>
+  host.innerHTML = `<div class="tbl-wrap"><table class="tbl pos-tbl"><thead><tr><th>标的</th><th>数量</th><th>入场价</th><th>最新价</th><th>止损 · 强平</th><th>止盈 · 离场</th><th>未实现</th><th class="col-weight">权重</th><th class="col-acts">操作</th></tr></thead><tbody>
   ${slice.map((p) => {
     const mark = posMark(p), pnl = posUpnl(p, mark);
     const live = `data-sym="${p.symbol}" data-mkt="${p.market}" data-entry="${p.entry_price}" data-qty="${p.qty}" data-side="${p.side}" data-mark="${p.mark_price ?? ""}" data-mark-time="${esc(p.mark_time || "")}"`;
     const ti = tpInfo({ symbol: p.symbol, side: p.side });
-    return `<tr><td><div class="pt-sym">${coin(p.symbol)}<div><b>${base(p.symbol)}</b><div class="pt-tags"><span class="side-tag ${p.side}">${p.side === "short" ? "空" : "多"}·${p.market === "perp" ? "永续" : "现货"}</span>${bookTag(p)}${p.halted ? '<span class="pill flat rp-halt">已停止</span>' : ""}</div></div></div></td>
-      <td class="num" title="${fp(p.qty, 10)} ${base(p.symbol)}">${fp(p.qty, 6)} <small class="muted">${base(p.symbol)}</small><br><small class="muted">≈${mark != null ? f2(p.qty * mark, 0) : "—"} U</small></td>
+    return `<tr><td><div class="pt-sym">${coin(p.symbol)}<div><b>${base(p.symbol)}</b><div class="pt-tags"><span class="side-tag ${p.side}">${p.side === "short" ? "做空" : "做多"}·${p.market === "perp" ? `永续 ${fp(p.leverage || 1, 3)}x` : "现货"}</span>${bookTag(p)}${p.halted ? '<span class="pill flat rp-halt">已停止</span>' : ""}</div></div></div></td>
+      <td class="num" title="${fp(p.qty, 10)} ${base(p.symbol)}">${fp(p.qty, 6)} <small class="muted">${base(p.symbol)}</small><br><small class="muted">≈${mark != null ? f2(p.qty * mark, 0) : "—"} U${p.market === "perp" && p.margin_usdt ? ` · 保证金 ${f2(p.margin_usdt)}` : ""}</small></td>
       <td class="num" title="入场 ${tFull(p.entry_time)} · ${esc((p.venue || S.status.settings.venue || "").toUpperCase())}">${fpPx(p.entry_price)}<br><small class="muted">${tCompact(p.entry_time)}</small></td>
       <td class="num"><span data-live="px" ${live}>${fpPx(mark)}</span><br><small class="muted">${esc(p.mark_source || "—")}</small></td>
-      <td class="num">${fpPx(p.stop_price)}${p.be_moved ? ' <small class="muted">保本</small>' : ""}${stopRisk(p)}</td>
+      <td class="num" title="${p.liq_price ? `逐仓强平价 ${fpPx(p.liq_price)}（距标记价 ${pct(p.liq_distance_pct, 1)}）；止损距 ${pct(p.stop_distance_pct, 1)}${p.lev_reason ? "｜" + esc(p.lev_reason) : ""}` : "现货无强平"}">${fpPx(p.stop_price)}${p.be_moved ? ' <small class="muted">保本</small>' : ""}${stopRisk(p)}${p.liq_price ? `<br><small class="${p.stop_before_liq === false ? "neg" : "muted"}">强平 ${fpPx(p.liq_price)} · 距 ${pct(p.liq_distance_pct, 1)}</small>` : ""}</td>
       <td class="num" title="${esc(ti.title || "")}"><span class="pos">${ti.main}</span> <small class="muted">${esc(ti.tag || "")}</small><br><small class="muted">${esc(ti.sub || "")}</small></td>
       <td class="num col-pnl ${cls(pnl.usdt)}" data-live="pnl" data-stacked="1" ${live}><span data-live-pnl-txt>${fmtPnl(pnl, true)}</span></td>
       <td class="num col-weight"><span data-live="weight" ${live}>${pct(p.weight, 1)}</span></td>
@@ -1368,10 +1369,17 @@ function pageRisk() {
             ${feeInput("rFeePerpMaker", "合约挂单 (maker)", s.fees.perp_maker_bps)}
           </div>
           <div style="display:flex;gap:28px;margin-top:16px;flex-wrap:wrap;align-items:center">
-            <label class="toggle"><input type="checkbox" id="rSpot" ${s.risk.allow_spot_long ? "checked" : ""}/><span class="tr"></span>允许现货做多</label>
-            <label class="toggle"><input type="checkbox" id="rPerp" ${s.risk.allow_perp_short ? "checked" : ""}/><span class="tr"></span>允许永续做空</label>
-            <span class="note">固定：永续 1 倍杠杆 · 总敞口 ≤ 1× 权益</span>
+            <label class="toggle"><input type="checkbox" id="rSpot" ${s.risk.allow_spot_long ? "checked" : ""}/><span class="tr"></span>允许做多</label>
+            <label class="toggle"><input type="checkbox" id="rPerp" ${s.risk.allow_perp_short ? "checked" : ""}/><span class="tr"></span>允许做空</label>
+            <span class="note">总敞口 ≤ 1× 权益（打开「杠杆放大敞口」时 × 杠杆）</span>
           </div>
+          <div class="sec-title fee-title lev-title"><h4>交易方式与杠杆 ${infoTip(LEV_TIP, "杠杆说明")}</h4><span class="note">逐仓：保证金 = 名义 ÷ 杠杆；止损一定先于强平</span></div>
+          <div class="grid form4">
+            <label class="field">交易方式<select id="rMode"><option value="perp_both" ${(s.risk.trade_mode || "perp_both") === "perp_both" ? "selected" : ""}>多空都用 USDT 永续</option><option value="spot_perp" ${s.risk.trade_mode === "spot_perp" ? "selected" : ""}>现货做多 + 永续做空</option></select><span class="hint">默认多空都用永续</span></label>
+            <label class="field">杠杆倍数<input id="rLev" type="number" min="1" max="100" step="1" value="${s.risk.perp_leverage ?? 10}"/><span class="hint">1–100 倍，默认 10；还受交易所该币上限约束</span></label>
+            <label class="toggle field-toggle" title="默认关闭：仓位仍按风险计算，杠杆只少占保证金。打开后单笔风险、单币权重、总敞口都 × 杠杆倍数"><input id="rLevX" type="checkbox" ${s.risk.leverage_scales_exposure ? "checked" : ""}/><span class="tr"></span>杠杆放大敞口</label>
+          </div>
+          <div class="lev-warn" id="levWarn" role="alert" hidden></div>
         </section>
         <section class="set-pane panel" data-pane="strategy" role="tabpanel">
           <div class="sec-title"><h3>策略参数 · ${esc(s.strategy.rule_id)}</h3></div>
@@ -1406,6 +1414,14 @@ function pageRisk() {
     </div>
   </div>`;
   bindTabs("riskTab", "#riskPage", S.riskTab || "auto");
+  const levWarn = () => {
+    const L = Math.round(+$("#rLev").value || 1), X = $("#rLevX").checked, el = $("#levWarn"); if (!el) return;
+    const msg = [];
+    if (L > 20) msg.push(`杠杆 ${L} 倍：强平距离只有约 ${(100 / L).toFixed(1)}%。系统会把每笔仓位自动降到「止损先于强平」的倍数（历史上 20 倍以上大部分仓位都会被降），交易所该币上限更低时按上限。`);
+    if (X) msg.push(`已打开「杠杆放大敞口」：仓位 × ${L}。历史回测（2025-01 → 2026-11）5 倍最大回撤约 −40%，10 倍约 −67%，20 倍以上 −69% ～ −99% 或爆仓；关闭组合波动率目标时 10 倍 4 个月内爆仓。`);
+    el.hidden = !msg.length; el.innerHTML = msg.length ? `${ic("alert")}<div>${msg.map(esc).join("<br>")}</div>` : "";
+  };
+  levWarn(); ["#rLev", "#rLevX"].forEach((q) => $(q) && $(q).addEventListener("input", levWarn));
   let syms = [...s.symbols];
   const dirty = () => { $("#saveBar").classList.add("dirty"); $("#saveHint").textContent = "有未保存的修改"; };
   const chips = () => { $("#chips").innerHTML = syms.map((x) => `<span class="c">${coin(x)}${x}<button data-rm="${x}" title="移除 ${x}" aria-label="移除 ${x}">×</button></span>`).join(""); document.querySelectorAll("[data-rm]").forEach((b) => (b.onclick = () => { syms = syms.filter((x) => x !== b.dataset.rm); chips(); dirty(); })); };
@@ -1417,7 +1433,8 @@ function pageRisk() {
     const b = $("#saveRisk"); b.disabled = true;
     try {
       await api("/api/settings", { method: "PUT", body: { symbols: syms, worker: {},
-        risk: { starting_equity_usdt: +$("#rEq").value, max_risk_per_trade: +$("#rRisk").value, max_weight_per_name: +$("#rW").value, allow_spot_long: $("#rSpot").checked, allow_perp_short: $("#rPerp").checked },
+        risk: { starting_equity_usdt: +$("#rEq").value, max_risk_per_trade: +$("#rRisk").value, max_weight_per_name: +$("#rW").value, allow_spot_long: $("#rSpot").checked, allow_perp_short: $("#rPerp").checked,
+          trade_mode: $("#rMode").value, perp_leverage: Math.round(+$("#rLev").value || 1), leverage_scales_exposure: $("#rLevX").checked },
         fees: { spot_taker_bps: +$("#rFeeSpotTaker").value, spot_maker_bps: +$("#rFeeSpotMaker").value, perp_taker_bps: +$("#rFeePerpTaker").value, perp_maker_bps: +$("#rFeePerpMaker").value },
         strategy: { interval: $("#sInt").value, fast_ma: +$("#sFast").value, slow_ma: +$("#sSlow").value, atr_period: +$("#sAtrP").value, atr_stop_mult: +$("#sAtr").value, confirm_bars: +$("#sConf").value, trend_ma: +$("#sTrend").value, short_breaker_bars: +$("#sSB").value, pyramid_r: +$("#sPyrR").value, pyramid_frac: +$("#sPyrF").value, tp_r: +$("#sTpR").value, tp_reentry: $("#sTpRe").checked,
           tp_partial: $("#sPtp").checked, tp_partial_r: +$("#sPtpR").value, tp_frac: +$("#sPtpF").value, tp_breakeven: $("#sBe").checked, tp_be_fees: $("#sBeFee").checked,
@@ -1535,7 +1552,7 @@ function pageHelp() {
   <li>趋势过滤：${s.trend_ma ? `新开多仓需收盘价在 SMA${s.trend_ma} 之上、新开空仓需在其下，否则显示「逆趋势·暂缓」；已有持仓不受影响。` : "已关闭。"}</li>
   <li>空头熔断：${s.short_breaker_bars ? `同一规则的「只做空」影子账本在最近 ${s.short_breaker_bars} 根 K 线内已平仓合计亏损时，暂停新开空单，显示「空头熔断·暂缓」；转正后自动恢复，已有持仓不受影响。` : "已关闭。"}</li>
   <li>浮盈加仓（仅回测）：${s.pyramid_r ? `持仓前一根收盘浮盈 ≥ ${s.pyramid_r}×R（R = 入场价到止损的距离）时，下一根开盘加仓一次，规模 = ${s.pyramid_frac}× 原名义（受单币与总敞口上限约束），止损不动；模拟盘 / 实盘暂不执行。` : "已关闭。"}</li>
-  <li>现货看多且永续不看空 → <b>做多·现货</b>；永续看空且现货不看多 → <b>做空·USDT 永续</b>（1 倍）；两者冲突或无信号 → 空仓。</li>
+  <li>现货看多且永续不看空 → <b>做多</b>；永续看空且现货不看多 → <b>做空</b>；两者冲突或无信号 → 空仓。默认多空都在 USDT 永续成交（逐仓 10 倍，可设 1–100 倍；仓位仍按风险计算，杠杆只决定占用多少保证金；每笔仓位自动降到「止损先于强平」的倍数）；也可在风控页改成「现货做多 + 永续做空」。</li>
   <li>离场：收盘出现反向或归零信号，或价格触及 <b>${s.atr_stop_mult}×ATR${s.atr_period}</b> 止损${s.tp_r ? `，或触及止盈（入场价 ± ${s.tp_r}×R，R = 入场价到止损的距离；止盈后${s.tp_reentry ? '若信号仍在则重新入场' : '锁定，须等信号改变再入场'}）` : '（固定止盈已关闭）'}；止损后等信号方向改变才再入场。</li>
   <li>分批止盈 + 保本：${s.tp_partial ? `已开启：价格触及 <b>入场价 ± ${s.tp_partial_r}×R0</b>（R0 = 入场价到<b>初始</b>止损的距离）时按吃单费率平掉 <b>${pct(s.tp_frac, 0)}</b>，${s.tp_breakeven ? `剩余仓位止损移到保本价（入场价 ${s.tp_be_fees ? '± 2×吃单费率' : ''}），之后触及记为「保本止损」` : '剩余仓位止损不动'}；剩余仓位不再被调仓加回，信号离场照常。` : '已关闭（默认）。'}长历史回测里开启后收益约减半、回撤加深，详见文档。</li>
   <li>快速判断层：${s.fast_exit_tf && s.fast_exit_tf !== 'off' ? `已开启：${s.fast_exit_tf} 收盘价连续 ${s.fast_exit_confirm} 根逆持仓方向破 EMA${s.fast_exit_n} → 「快速离场」，并像止损一样锁定到 4h 信号改变。` : '快速离场已关闭（默认）。'}模拟盘的止损 / 止盈始终用实时公共报价（WS 1m / 标记价）盘中判定；回测可用官方 1m / 5m（10m 由 1m 聚合）逐根判定盘中先后。</li></ul></section>
@@ -1624,7 +1641,9 @@ function applyLive() {
   if (S.dash && L.paper) {
     Object.assign(S.dash, { equity: L.paper.equity, unrealized: L.paper.unrealized, gross: L.paper.gross, net: L.paper.net,
       total_pnl: L.paper.total_pnl, total_return: L.paper.total_pnl / S.dash.starting_equity });
-    S.dash.cash_free = Math.abs(L.paper.equity - L.paper.gross) < 0.005 ? 0 : L.paper.equity - L.paper.gross;
+    const mu = L.paper.margin_used != null ? L.paper.margin_used : L.paper.gross;
+    S.dash.cash_free = Math.abs(L.paper.equity - mu) < 0.005 ? 0 : L.paper.equity - mu;
+    if (L.paper.margin_used != null) S.dash.margin_used_usdt = L.paper.margin_used;
     const syms = [];
     S.dash.positions.forEach((p) => {
       const q = L.paper.positions[p.symbol];
@@ -1684,7 +1703,7 @@ $("#livePill").onclick = () => {
 };
 
 /* ---------- 路由与刷新 ---------- */
-const PAGES = { dashboard: pageDashboard, signals: pageSignals, indicators: pageIndicators, backtest: pageBacktest, strategies: (...a) => window.pageStrategies(...a), positions: pagePositions, trades: pageTrades, risk: pageRisk, settings: pageSettings, help: pageHelp };
+const PAGES = { dashboard: pageDashboard, signals: pageSignals, indicators: pageIndicators, backtest: pageBacktest, positions: pagePositions, trades: pageTrades, risk: pageRisk, settings: pageSettings, help: pageHelp };
 const SUBS = { dashboard: "系统化纸面 / 研究工具 · 不构成投资建议", signals: "实时 K 线与每个币的进出场建议", indicators: "更多技术指标与多空证据（参考证据，不参与下单）", backtest: "真实公共历史 K 线 · 无前视回测", strategies: "多套策略的回测验证、判定与影子盘（默认策略不变）", positions: "纸面持仓 · 可平仓或停止自动管理", trades: "开平配对的成交记录", risk: "自动交易、紧急停止与风控参数", settings: "行情源、API 密钥（加密保存）与实盘闸门", help: "使用说明与风险提示" };
 async function refreshStatus() { S.status = await api("/api/status"); renderMode(); }
 async function refreshDash() {

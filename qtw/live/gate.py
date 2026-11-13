@@ -61,13 +61,14 @@ def order_request(symbol: str, market: str, action: str, qty: float, price: floa
         step = float(spec.get("lot_sz") or 1.0)
         n = math.floor(qty / spec["ct_val"] / step + 1e-9) * step
         s = f"{n:.10g}"
-        p = {"contract": pair, "price": "0", "tif": "ioc", "size": f"-{s}" if action == "open_short" else s}
-        if action == "close_short":
+        p = {"contract": pair, "price": "0", "tif": "ioc", "size": f"-{s}" if action in ("open_short", "close_long") else s}
+        if action in ("close_short", "close_long"):
             p["reduce_only"] = True
         return "/futures/usdt/orders", p
     n = int(math.floor(qty / spec["ct_val"] + 1e-9))
-    p = {"contract": pair, "price": "0", "tif": "ioc", "size": -n if action == "open_short" else n}
-    if action == "close_short":
+    # 永续 size 正 = 买、负 = 卖：open_long / close_short 为正，open_short / close_long 为负
+    p = {"contract": pair, "price": "0", "tif": "ioc", "size": -n if action in ("open_short", "close_long") else n}
+    if action in ("close_short", "close_long"):
         p["reduce_only"] = True
     return "/futures/usdt/orders", p
 
@@ -91,15 +92,17 @@ class GateTrader:
         hdr = {"X-Gate-Size-Decimal": "1"} if isinstance(p.get("size"), str) else None
         return redacted(build(self.keys, "POST", path, p, testnet=self.testnet and market == "perp", extra_headers=hdr))
 
-    def place_order(self, cfg: dict, symbol, market, action, qty, price, spec=None):
+    def place_order(self, cfg: dict, symbol, market, action, qty, price, spec=None, leverage: int | None = None):
         from .guard import require
         require(cfg, "gate")
         if market == "spot" and self.testnet:
             raise RuntimeError("Gate 现货没有测试网；请关闭“测试网”后再用实盘，或只做永续测试")
-        if market == "perp" and action == "open_short":
+        if market == "perp" and action in ("open_short", "open_long"):
+            L = leverage if leverage is not None else ((cfg or {}).get("risk") or {}).get("perp_leverage", 1)
+            L = max(1, min(100, int(L or 1)))
             lev_path = (f"/futures/usdt/dual_comp/positions/{symbol[:-4]}_USDT/leverage" if self.dual_mode()
                         else f"/futures/usdt/positions/{symbol[:-4]}_USDT/leverage")
-            _send(build(self.keys, "POST", lev_path, None, query="leverage=1", testnet=self.testnet))
+            _send(build(self.keys, "POST", lev_path, None, query=f"leverage={L}", testnet=self.testnet))
         path, p = order_request(symbol, market, action, qty, price, spec)
         hdr = {"X-Gate-Size-Decimal": "1"} if isinstance(p.get("size"), str) else None
         return _send(build(self.keys, "POST", path, p, testnet=self.testnet and market == "perp", extra_headers=hdr))
