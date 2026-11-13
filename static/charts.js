@@ -291,6 +291,28 @@
       c._candle = s;
       c._last = d.candles.length ? d.candles[d.candles.length - 1].time : 0;
       c._lastClosed = c._last; // 已收盘最后一根；未收盘跳动只更新 c._last
+      c._lastBar = d.candles.length ? { ...d.candles[d.candles.length - 1] } : null;
+      return c;
+    },
+    /* 同比叠加：横轴 = 参考年 2000 的同月同日（UTC），刻度只显示 月-日 */
+    yoy(el, d, colors) {
+      el.innerHTML = "";
+      const md = (ts) => { const x = new Date(ts * 1000); return `${String(x.getUTCMonth() + 1).padStart(2, "0")}-${String(x.getUTCDate()).padStart(2, "0")}`; };
+      const c = LightweightCharts.createChart(el, { ...base, width: el.clientWidth, height: el.clientHeight,
+        timeScale: { borderColor: "#ece8fd", timeVisible: false, tickMarkFormatter: (ts) => md(ts) },
+        localization: { locale: "zh-CN", timeFormatter: (ts) => md(ts), priceFormatter: (v) => d.mode === "pct" ? (v >= 0 ? "+" : "") + v.toFixed(1) + "%" : (Math.abs(v) >= 100 ? v.toFixed(2) : v.toPrecision(5)) } });
+      const ro = new ResizeObserver(() => { if (!el.isConnected) { ro.disconnect(); return; } c.applyOptions({ width: el.clientWidth, height: el.clientHeight }); });
+      ro.observe(el);
+      const n = d.series.length;
+      d.series.forEach((sr, i) => {
+        if (!sr.points.length) return;
+        const col = colors[(i + colors.length - n) % colors.length];
+        const ln = c.addLineSeries({ color: col, lineWidth: i === n - 1 ? 3 : 2, title: String(sr.year), priceLineVisible: false });
+        const seen = new Set();
+        ln.setData(sr.points.filter((p) => (seen.has(p.time) ? false : (seen.add(p.time), true))).map((p) => ({ time: p.time, value: p.value })));
+      });
+      c.timeScale().fitContent();
+      c._n = 0;
       return c;
     },
     equity(el, pts, extra) {
