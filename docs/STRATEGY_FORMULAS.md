@@ -4915,3 +4915,11 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 台阶成因（Gate，1150 vs 1200 逐笔对比，`scratch/pba/diff.py`）：1150 多出的 8 笔全部来自 2026-05-06 ～ 05-11 这一段。BTC 短暂站上 SMA1150、但没站上 SMA1200，8 个币同时开多，全部 ATR 止损，合计 −79.2 U。也就是说 1200 相对更短线的优势，基本就是这一次事件。
 - 结论：不改默认。稳健的部分是「有 BTC 体制拦新多」本身：900–1800 都比关闭（−68 点）好得多。1200 落在 1175–1250 的小平台上，但相对更短线的那十几个点来自单一事件，不应解读为 1200 精确最优。上侧缓降、下侧单事件台阶，所以如果以后要动，只考虑往上（1225–1300），不往下。新数据进来后继续复查。
 - CSV：`output/research_btc_regime_fine_neighborhood_perp_both_10x.csv`、`output/research_btc_regime_fine_neighborhood_perp_both_10x_summary.csv`（不入库）；脚本 `scratch/pba/bfn.py`、`scratch/pba/diff.py`。
+
+### 2026-11-13 13:15 PST — BTC 体制过滤滞回（解封确认）· 已否决
+- 家族：现有默认门（btc_regime_ma）的状态机改造，非新增指标门。默认：BTC 现货收盘 < SMA_N 即拦新开多，收盘回到 SMA 上方立刻解封。
+- 变体（只改解封侧，拦截侧不变）：band x：收盘 > SMA×(1+x) 才解封，x ∈ {0.5%,1%,2%,3%,5%}；sym x：收盘 < SMA×(1−x) 才拦、> SMA×(1+x) 才解封，x ∈ {1%,2%}；persist k：连续 k 根收盘 ≥ SMA 才解封，k ∈ {2,3,6,12,24}。在 N ∈ {1150,1200,1250} 各跑一遍（邻域即安慰剂：只修 2026-05 单一事件的改动在不同 N 上会不一致）。
+- 设置：官方 8 币 4h，perp_both 10x 逐仓 + 官方资金费，窗口 2025-01-17→2026-11-13 PT，真实/压力手续费，Gate/OKX。
+- 结果（真实费，相对同 N 基线）：N=1200（默认）只有 persist2 微正 +0.90/+0.85 pt，Sharpe ±0.00，回撤不变，post-2026-03 只有 2/8 个月更好；band/sym 全部 −0.9 到 −8.8 pt；persist≥6 −10.8 到 −27.4 pt。N=1250 全部为负（−0.9 到 −42 pt）。N=1150 hysteresis 能补回 2026-05 单一事件的大部分落差（band1%/sym1% +15.4 pt，Sharpe +0.10），但这正是上次已定位的唯一事件，邻域其余位置不成立。
+- 结论：否决，不进观察名单，默认不变（btc_regime_ma 1200、即时解封）。persist2 在默认处 Sharpe 未提高，未达到月度 walk-forward 门槛。
+- CSV：output/research_btc_regime_hysteresis_perp_both_10x.csv、_summary.csv（不推送）；脚本 scratch/pba/bhy.py。
