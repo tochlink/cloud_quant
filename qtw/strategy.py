@@ -170,7 +170,16 @@ def bar_close_equity(ledger: list[dict], interval_ms: int) -> list[float]:
         if not v > 0:
             continue
         out[int(t.timestamp() * 1000) // int(interval_ms)] = v
-    return [out[k] for k in sorted(out)]
+    keys = sorted(out)
+    res: list[float] = []
+    for i, k in enumerate(keys):
+        if i and k - keys[i - 1] > 1:
+            # 停机 / 暂停漏掉的周期：按几何插值补齐中间各根，把跨 n 根的收益均摊成 n 个单根收益。
+            # 否则一个跨多根的收益被当成一根，组合波动率被高估、仓位被无故缩小（重启后仍持续 lookback 根）。
+            a, b, n = res[-1], out[k], k - keys[i - 1]
+            res.extend(a * (b / a) ** (j / n) for j in range(1, n))
+        res.append(out[k])
+    return res
 
 
 def side_of(sig: int) -> str:

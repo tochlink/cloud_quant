@@ -35,6 +35,17 @@ def test_bar_close_equity_buckets_last_per_bar():
     assert bar_close_equity(led, H) == [101.0, 102.0]
 
 
+def test_bar_close_equity_fills_missed_bars_geometrically():
+    """停机漏掉的 K 线按几何插值补齐：桶数 = 跨越的根数，跨多根的收益均摊，不被当成一根收益抬高波动率。"""
+    from qtw.strategy import bar_close_equity
+    H = 4 * 3600 * 1000
+    led = [{"time": "2026-01-01T03:00:00Z", "equity_usdt": 100}, {"time": "2026-01-01T15:00:00Z", "equity_usdt": 133.1},
+           {"time": "2026-01-01T19:00:00Z", "equity_usdt": 140}]
+    out = bar_close_equity(led, H)
+    assert len(out) == 5
+    assert [round(x, 6) for x in out[:4]] == [100.0, 110.0, 121.0, 133.1] and out[4] == 140.0
+
+
 def test_vol_scaled_cfg_scales_caps_only_when_enabled():
     from qtw import engine as E
 
