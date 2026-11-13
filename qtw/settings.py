@@ -325,6 +325,10 @@ def validate(s: dict) -> dict:
     st["rebalance_mode"] = str(st.get("rebalance_mode", "stop") or "stop")
     if st["rebalance_mode"] not in ("stop", "atr"):
         raise ValueError("调仓模式只能是 stop 或 atr")
+    rk["starting_equity_usdt"] = float(rk.get("starting_equity_usdt", 1000.0))
+    if not 10 <= rk["starting_equity_usdt"] <= 1e9:  # 0 / 负数 / 空输入（前端 +"" = 0）会让纸面账本与回测权益为 0，收益率除零、仓位全为 0
+        raise ValueError("起始纸面资金需在 10–1,000,000,000 USDT 之间")
+    rk["allow_spot_long"], rk["allow_perp_short"] = bool(rk.get("allow_spot_long", True)), bool(rk.get("allow_perp_short", True))
     rk["max_risk_per_trade"] = float(rk["max_risk_per_trade"])
     rk["max_weight_per_name"] = float(rk["max_weight_per_name"])
     if not 0 < rk["max_risk_per_trade"] <= 0.05:
