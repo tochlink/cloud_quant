@@ -184,11 +184,25 @@ def test_hover_fields_and_chinese_intervals_in_frontend():
     root = Path(__file__).resolve().parents[1] / "static"
     ch = (root / "charts.js").read_text(encoding="utf-8")
     app = (root / "app.js").read_text(encoding="utf-8")
-    k_bar = ch[ch.index('bar.className = "k-ohlc"'):ch.index("c._ohlcShow")]
+    k_card = ch[ch.index("// 悬停卡片（跟随鼠标"):ch.index("/* 同比叠加")]
     for f in ("时间", "开盘", "最高", "最低", "收盘", "涨跌额", "涨跌幅", "振幅"):
-        assert f"<em>{f}</em>" in k_bar
-    yoy_head = ch[ch.index("<th>年份</th>"):ch.index("<th>年内</th>")]
-    assert "<th>涨跌额</th>" in yoy_head and "<th>振幅</th>" in yoy_head
+        assert f"<em>{f}</em>" in k_card
+    yoy_card = ch[ch.index("// ---- 悬停卡片：每年一列"):ch.index("c._yoyTip = tip;")]
+    for f in ("收盘", "开", "高", "低", "涨跌额", "涨跌幅", "振幅", "年内", "收盘差", "差幅", "年内涨跌差"):
+        assert f"<em>{f}</em>" in yoy_card
+    assert "function hoverCard" in ch and "x = pt.x - GAP - tw" in ch  # 跟随鼠标、靠边翻转
     for lab in ("1分", "5分", "10分", "15分", "1时", "4时", "日线", "周线", "月线", "年线"):
         assert f'"{lab}"' in app
     assert "TradingView" in app and "pickCoins" in app and "bookTag" in app
+
+
+def test_period_pnl_uses_real_snapshots_beijing_days():
+    from qtw.app import _period_pnl
+    ledger = [{"time": "2026-11-12T10:00:00Z", "equity_usdt": 1010.0},   # 北京 11-12 18:00
+              {"time": "2026-11-12T17:00:00Z", "equity_usdt": 1020.0},   # 北京 11-13 01:00
+              {"time": "2026-11-13T15:00:00Z", "equity_usdt": 1030.0}]   # 北京 11-13 23:00
+    p = _period_pnl(ledger, 1030.0, 1000.0, [{"realized_pnl_usdt": 6}, {"realized_pnl_usdt": -2}, {"realized_pnl_usdt": 4}])
+    d = {r["period"]: round(r["pnl"], 6) for r in p["daily"]}
+    assert d["2026-11-12"] == 10.0 and d["2026-11-13"] == 20.0
+    assert abs(p["payoff_ratio"] - 2.5) < 1e-9          # 平均盈利 5 / 平均亏损 2
+    assert p["monthly"][0]["period"] == "2026-11" and p["tz"] == "北京时间"

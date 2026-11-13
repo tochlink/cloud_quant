@@ -279,6 +279,46 @@ def _nan_none(x):
         return None
 
 
+def _period_pnl(ledger: list, eq_now: float, starting: float, closed: list) -> dict:
+    """总览用的分期盈亏：按北京时间自然日 / 月，用真实账本快照（该期最后一个快照 − 上一期最后一个快照）。
+    当期以当前权益收尾；没有快照的日子不补点（不插值、不造数）。盈亏比 = 平均盈利 / |平均亏损|（已平仓）。"""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    bj = _tz(_td(hours=8))
+    def key(t, n):
+        try:
+            return _dt.fromisoformat(str(t).replace("Z", "+00:00")).astimezone(bj).isoformat()[:n]
+        except Exception:
+            return None
+    now_bj = utcnow().astimezone(bj)
+    out = {}
+    for name, n in (("daily", 10), ("monthly", 7)):
+        last: dict = {}
+        for r in ledger:
+            k = key(r["time"], n)
+            if k:
+                last[k] = float(r["equity_usdt"])
+        cur = now_bj.isoformat()[:n]
+        last[cur] = float(eq_now)
+        ks = sorted(last)
+        rows, prev = [], float(starting)
+        for k in ks:
+            rows.append({"period": k, "pnl": last[k] - prev, "ret": (last[k] / prev - 1) if prev else None, "equity": last[k]})
+            prev = last[k]
+        out[name] = rows[-31:] if name == "daily" else rows[-12:]
+    d = out["daily"]
+    out["today"] = d[-1] if d else None
+    yk = (now_bj - _td(days=1)).isoformat()[:10]
+    out["yesterday"] = next((r for r in d if r["period"] == yk), None)
+    m = out["monthly"]
+    out["this_month"] = m[-1] if m else None
+    out["last_month"] = m[-2] if len(m) > 1 else None
+    pnl = [float(f["realized_pnl_usdt"]) for f in closed]
+    w = [x for x in pnl if x > 0]; l = [x for x in pnl if x <= 0]
+    out["payoff_ratio"] = (sum(w) / len(w)) / abs(sum(l) / len(l)) if w and l and sum(l) != 0 else None
+    out["tz"] = "北京时间"
+    return out
+
+
 def _dashboard_data() -> dict:
     """Shared paper-book snapshot used by /api/dashboard and thin monitoring aliases."""
     cfg = S.load()
@@ -327,6 +367,7 @@ def _dashboard_data() -> dict:
         "drawdown": dd[-300:], "max_drawdown": min(dd) if dd else 0, "closed_trades": len(closed),
         "win_rate": (len(wins) / len(closed)) if closed else None, "worker": worker.status(),
         "pnl_by_trade": [float(f["realized_pnl_usdt"]) for f in closed[-30:]],
+        "periods": _period_pnl(ledger, eq, bk.starting, closed),
     }
 
 
