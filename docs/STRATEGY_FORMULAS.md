@@ -2840,3 +2840,15 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
   - 安慰剂分散很大：dirP +115…+169%、invP +123…+207%，真实最好格落在安慰剂区间内。
 - 结论：不改默认。offS L240–480 T1（USDT 溢价时不开新空）列入弱观察，等 2026-03 后出现更多稳定币溢价波动再复测；其余变体拒绝。
 - CSV：`output/research_stablecoin_premium_gate_long_history.csv`、`output/research_stablecoin_premium_gate_monthly.csv`（不入库）。脚本 `scratch/usdc_long.py`、`scratch/usdc_month.py`。
+
+## 轮换：黄金 / BTC 相对强弱（官方 XAUT/USDT）风险偏好门控（2026-11-12 22:10 PST，研究，不改默认；不进观察名单）
+
+- 查重：轮换日志里没有用黄金代币作为跨资产信息源的测试。数据：Gate / OKX 官方 `XAUTUSDT` 现货 4h K 线（两个交易所都有 4500 根，2024-10-24 → 2026-11-13；PAXG 历史不够长未用）+ 同交易所官方 BTCUSDT 现货。
+- 公式（同交易所、同一根 4h 收盘，因果；组合层同一个值作用于所有币，只拦新开 / 反手）：`g = ln(XAUT) − ln(BTC)`，`r = g_t − g_{t−M}`，`x = z_360(r)`，M = 30 / 90 / 180（月度对比另测 240）。
+  offL T：x > T（黄金跑赢 BTC，避险）拦新多；offS T：x < −T（BTC 跑赢黄金）拦新空；dir：两者；inv：反向（x < −T 拦新多、x > T 拦新空）。T = 1 / 1.5。安慰剂：x 序列按币种确定性循环时移（seed 1–3）。
+- 结果（基线 Gate +162.2% / −18.8% / 1.69，OKX +164.9% / −18.9% / 1.70）：
+  - 「避险」方向（offL / offS / dir）M30 ≈ 基线（±1.5 个点），M90 / M180 全部变差（+142…+163%），offL M180 回撤加深到 −22%。
+  - 反向 inv M180 T1.5 单格领先：Gate +169.4% / 1.73、OKX +173.2% / 1.75，压力费率 +151.9% / +155.2%（基线 +145.2 / +147.6%）；但邻格 M180 T1.0、M240 T1.5 压力费率低于基线，按月 2026-03 后 Gate 0 好 2 差、OKX 1 好 2 差，M240 2026-03 后合计 −4.3 / −4.4 个点；inv M30 崩到 +76…+95%。
+  - 安慰剂 invP 最高 Gate +179.0%、OKX +183.9%，超过真实最好格。
+- 结论：拒绝，不改默认、不进观察名单。黄金 / BTC 相对强弱对这套 4h 趋势组合没有增量信息。
+- CSV：`output/research_gold_btc_relative_gate_long_history.csv`、`output/research_gold_btc_relative_gate_monthly.csv`（不入库）。脚本 `scratch/gold_long.py`、`scratch/gold_month.py`。
