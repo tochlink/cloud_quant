@@ -4382,3 +4382,9 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 问题：OKX 账户有两种持仓模式。默认「买卖模式」（`net_mode`）下现有永续单（`side` + `reduceOnly`）没问题；但账户若设成「开平仓模式」（`long_short_mode`），永续下单和逐仓设杠杆都必须带 `posSide`，而 `reduceOnly` 只适用于买卖模式。原代码不带 `posSide`，在开平仓模式下每笔开空 / 平空都会被拒。
 - 修复：`OkxTrader.pos_mode()` 只读查询 `GET /api/v5/account/config` 的 `posMode`（实例内缓存）；`order_payload(..., pos_mode)` 在 `long_short_mode` 下给永续单加 `posSide: "short"`（本系统永续只做空），不带 `reduceOnly`；开空前的 `set-leverage`（逐仓 1 倍）同样加 `posSide: "short"`。买卖模式与现货单完全不变。Gate 未改。
 - 测试：`tests/test_okx_pos_mode.py`，全套 260 个测试通过。
+
+### 执行层：Gate 双向持仓模式下调杠杆接口（2026-11-13 09:40 PST，含代码修复）
+
+- 核对（Gate APIv4 官方文档）：双向持仓模式下，开空 = 负 `size`、`reduce_only=false`；部分平空 = 正 `size` + `reduce_only=true`，与本系统现有下单参数一致（全平才需要 `size=0` + `auto_size=close_short`，本系统按数量平，不用）。唯一不同是调杠杆：双向模式必须调用 `POST /futures/usdt/dual_comp/positions/{contract}/leverage`，原代码只调单向接口 `/positions/{contract}/leverage`，在双向模式下开空前一步就会失败、整笔开空发不出去。
+- 修复：`GateTrader.dual_mode()` 只读查询 `GET /futures/usdt/accounts` 的 `in_dual_mode`（实例内缓存），双向模式下开空前调 `dual_comp` 杠杆接口（仍为 1 倍），单向模式不变，下单参数不变。
+- 测试：`tests/test_gate_dual_mode.py`，全套 262 个测试通过。

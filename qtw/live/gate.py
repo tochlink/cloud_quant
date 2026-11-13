@@ -75,6 +75,16 @@ def order_request(symbol: str, market: str, action: str, qty: float, price: floa
 class GateTrader:
     def __init__(self, keys: dict, testnet: bool = True):
         self.keys, self.testnet = keys, testnet
+        self._dual: bool | None = None
+
+    def dual_mode(self) -> bool:
+        """只读：USDT 永续账户是否双向持仓模式（GET /futures/usdt/accounts 的 in_dual_mode），实例内缓存。
+        双向模式下开空（负 size）/ 平空（正 size + reduce_only）的下单参数与单向模式相同，
+        但调杠杆必须走 /futures/usdt/dual_comp/positions/{contract}/leverage。"""
+        if self._dual is None:
+            j = _send(build(self.keys, "GET", "/futures/usdt/accounts", None, testnet=self.testnet))
+            self._dual = bool((j or {}).get("in_dual_mode")) if isinstance(j, dict) else False
+        return self._dual
 
     def preview_order(self, symbol, market, action, qty, price, spec=None) -> dict:
         path, p = order_request(symbol, market, action, qty, price, spec)
@@ -87,8 +97,9 @@ class GateTrader:
         if market == "spot" and self.testnet:
             raise RuntimeError("Gate 现货没有测试网；请关闭“测试网”后再用实盘，或只做永续测试")
         if market == "perp" and action == "open_short":
-            _send(build(self.keys, "POST", f"/futures/usdt/positions/{symbol[:-4]}_USDT/leverage",
-                        None, query="leverage=1", testnet=self.testnet))
+            lev_path = (f"/futures/usdt/dual_comp/positions/{symbol[:-4]}_USDT/leverage" if self.dual_mode()
+                        else f"/futures/usdt/positions/{symbol[:-4]}_USDT/leverage")
+            _send(build(self.keys, "POST", lev_path, None, query="leverage=1", testnet=self.testnet))
         path, p = order_request(symbol, market, action, qty, price, spec)
         hdr = {"X-Gate-Size-Decimal": "1"} if isinstance(p.get("size"), str) else None
         return _send(build(self.keys, "POST", path, p, testnet=self.testnet and market == "perp", extra_headers=hdr))
