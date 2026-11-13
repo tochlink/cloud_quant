@@ -77,7 +77,7 @@ def short_breaker(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         return {"mask": {}, "blocked_now": False, "trailing_pnl": 0.0, "bars": 0}
     # 影子账本固定用标准仓位口径（与账户实际仓位上限无关）：否则熔断判断依赖 USDT 盈亏的正负号，
     # 改动单笔风险 / 单币权重会让影子盈亏在 0 附近翻号，整段回测结果跳变（2026-11-10 诊断，见 docs）。
-    c = {**cfg, "strategy": {**cfg["strategy"], "short_breaker_bars": 0, "sar_hold_bars": 0},
+    c = {**cfg, "strategy": {**cfg["strategy"], "short_breaker_bars": 0, "sar_hold_bars": 0, "staged_entry_f1": 0},
          "risk": {**cfg["risk"], **SHADOW_SIZING, "allow_spot_long": False, "allow_perp_short": True}}
     res = run_backtest(data, c)
     tr, keys = res["trades"], res["bar_open_times"]
@@ -214,6 +214,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     be_on, be_fee = bool(st.get("tp_breakeven", False)), bool(st.get("tp_be_fees", True))
     FX = fast or {}  # 可选快速层：{(market, symbol): fastlayer.FastSeries}，盘中按快周期逐根判定止损 / 止盈 / 快速离场
     fx_stats = {"fast_exits": 0, "fast_bars_resolved": 0}
+    xs_stats = {"topups": 0}
     entry_i: dict[str, int] = {}
     blocked: dict[str, int] = {}
     # 可选止损反手（stop-and-reverse，默认关闭 sar_hold_bars = 0）：第 i 根 ATR 止损后，第 i+1 根开盘开反向仓，
@@ -222,6 +223,10 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     sar_h, sar_k, sar_m = int(st.get("sar_hold_bars", 0) or 0), float(st.get("sar_risk_mult", 1.0) or 1.0), float(st.get("sar_atr_mult", 2.0) or 2.0)
     sarf: dict[str, int] = {}  # 反手仓 → 原锁定方向
     sarq: dict[str, int] = {}  # 本根止损、下一根待开的反手方向
+    # 可选跨根分批入场（staged_entry_f1，0 = 关闭）：新确认的入场（反手仓除外）在第 i 根开盘只开计划名义的 f1，
+    # 第 i+1 根开盘无条件补到第 i 根的计划名义（受单币权重 / 总敞口余量约束），止损保持首笔的 ATR 止损；补仓那根不参与调仓带。
+    xs_f1 = float(st.get("staged_entry_f1", 0) or 0)
+    xs_full: dict[str, tuple[float, int]] = {}  # 待补仓：symbol → (计划名义, 入场根)
     trades: list[Trade] = []
     curve = []
     prev_eq = start_eq
@@ -390,6 +395,9 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
             alloc = {s: v * free_m / need_m for s, v in alloc.items()} if need_m > 0 else alloc
         for s, (sg, z) in want.items():
             notional = alloc[s]
+            full_n = notional
+            if xs_f1 > 0 and s not in sarnew:
+                notional = notional * xs_f1
             if notional < 1.0:
                 continue
             px = P(side_of(sg), "open", s)[i]
@@ -407,6 +415,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
             else:
                 pos[s].margin_usdt = notional
             entry_i[s] = i
+            if xs_f1 > 0 and s not in sarnew:
+                xs_full[s] = (full_n, i)
             if s in sarnew:
                 sarf[s] = -sg
         # 2b) 可选：浮盈加仓（默认关闭，pyramid_r = 0）。前一根收盘浮盈 ≥ k×R（R = |入场价 − 止损|）
@@ -440,8 +450,35 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         #         "atr" ：max(上式, atr_stop_mult×ATR / 开盘价)（随最新波动缩放，且仍不超过现有止损下的风险上限）
         #       所有已有仓的目标再按「总敞口额度 − 本根新开仓名义」等比缩放；
         #       |当前名义 − 目标| / 目标 > rebalance_band 才调整；先减后加，加仓受剩余总敞口限制；止损价不变。
+        # 2b') 可选：跨根分批入场的补仓（见 staged_entry_f1）。只在入场后的下一根开盘补一次；仓位已平 / 已换新仓则取消。
+        xs_ex: set[str] = set()
+        if xs_full:
+            g_x = sum(abs(x.qty) * P(x.side, "open", y)[i] for y, x in pos.items())
+            for q in list(xs_full):
+                full_, i0_ = xs_full[q]
+                if i0_ == i:
+                    continue
+                xs_full.pop(q)
+                if q not in pos or entry_i[q] != i0_ or i - i0_ != 1:
+                    continue
+                t = pos[q]
+                xs_ex.add(q)
+                px = float(P(t.side, "open", q)[i])
+                cur = abs(t.qty) * px
+                add_n = min(full_ - cur, eq_prev * float(rk["max_gross_exposure"]) * XS - g_x, eq_prev * w_now - cur)
+                if add_n < 1.0:
+                    continue
+                aq = add_n / px
+                realized -= add_n * FEE[t.market]
+                t.entry_price = (t.qty * t.entry_price + aq * px) / (t.qty + aq)
+                t.qty += aq
+                t.notional_usdt += add_n
+                t.fees_usdt += add_n * FEE[t.market]
+                t.margin_usdt += add_n / (t.leverage or 1.0)
+                g_x += add_n
+                xs_stats["topups"] += 1
         if rb_band > 0 and pos:
-            held = {q: pos[q] for q in pos if entry_i[q] != i and q not in sarf and not pos[q].tp_done}
+            held = {q: pos[q] for q in pos if entry_i[q] != i and q not in sarf and not pos[q].tp_done and q not in xs_ex}
             new_n = sum(abs(pos[q].qty) * P(pos[q].side, "open", q)[i] for q in pos if entry_i[q] == i)
             g_now = sum(abs(x.qty) * P(x.side, "open", y)[i] for y, x in pos.items())
             rb_plan = RB.plan(held, {q: float(P(t.side, "open", q)[i]) for q, t in held.items()},
@@ -608,7 +645,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "take_profit_exits": sum(1 for t in closed if t.exit_reason == "止盈"),
         "partial_tp_trades": sum(1 for t in closed + open_trades if t.tp_done),
         "breakeven_exits": sum(1 for t in closed if t.exit_reason == "保本止损"),
-        "fast_exits": fx_stats["fast_exits"], "fast_bars_resolved": fx_stats["fast_bars_resolved"],
+        "fast_exits": fx_stats["fast_exits"], "fast_bars_resolved": fx_stats["fast_bars_resolved"], "staged_topups": xs_stats["topups"],
         "tp_partial": ptp_on, "tp_partial_r": ptp_r, "tp_frac": ptp_f, "tp_breakeven": be_on, "tp_be_fees": be_fee,
         "avg_gross_exposure_pct": float((ec["gross_exposure"] / ec["equity"]).mean()),
         "benchmark": f"{btc} 现货买入持有", "benchmark_return": bh,
@@ -619,7 +656,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": round(FEE["spot"] * 10_000, 4), "spot_taker_bps": round(FEE["spot"] * 10_000, 4), "perp_taker_bps": round(FEE["perp"] * 10_000, 4), "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
-        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_band_down": float(st.get("rebalance_band_down", 0) or 0), "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l, "name_vol_target": nv_t, "name_vol_lookback": nv_l, "chop_n": int(st.get("chop_n", 0) or 0), "chop_max": float(st.get("chop_max", 50) or 50), "elder_short_gate_n": el_n, "elder_short_gate_x": el_x, "sar_hold_bars": sar_h, "sar_risk_mult": sar_k, "sar_atr_mult": sar_m, "ls_parity_cap": lsp_c,
+        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_band_down": float(st.get("rebalance_band_down", 0) or 0), "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l, "name_vol_target": nv_t, "name_vol_lookback": nv_l, "chop_n": int(st.get("chop_n", 0) or 0), "chop_max": float(st.get("chop_max", 50) or 50), "elder_short_gate_n": el_n, "elder_short_gate_x": el_x, "sar_hold_bars": sar_h, "sar_risk_mult": sar_k, "sar_atr_mult": sar_m, "ls_parity_cap": lsp_c, "staged_entry_f1": xs_f1,
         "resizes": int(sum(t.resizes for t in closed + open_trades)), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
         "trade_mode": t_mode, "perp_leverage": L_req, "leverage_scales_exposure": XS != 1.0, "exposure_mult": XS,

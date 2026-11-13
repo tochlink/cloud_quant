@@ -70,6 +70,11 @@ DEFAULTS: dict[str, Any] = {
         # C3 Gate +228.7% / OKX +235.8%（基线 +163.3% / +165.4%），Sharpe 2.01 / 2.04，回撤 −16.0%，2026-03 后两所 6/9 月更好；
         # C 越大越好、无内部最优，超额集中在 2025-10，未改默认。0=关闭，建议试用 2–3
         "ls_parity_cap": 0.0,
+        # 2026-11-13：可选跨根分批入场（默认关闭，仅回测生效）。新确认入场在第 i 根开盘只开计划名义的 f1，第 i+1 根开盘补满到计划名义，
+        # 止损保持首笔；反手仓不分批。研究（scratch/xse_*.py、scratch/phc4–6）：多空永续 10× 下 f1 0.10–0.35 在 4 个 4h 相位 × 两所 × 真实 / 压力费率
+        # 全部不输（f1 0.10 平均 +4.8 点，Sharpe +0.06），固定 f1 0.10 月度样本外 32/32 胜；但 2026-03 后逐月只约 5/8 更好，未改默认。
+        # 「仅推迟入场一根」对照被否定（2026-03 后 8/8 落后）。0=关闭，建议试用 0.10–0.25
+        "staged_entry_f1": 0.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -262,6 +267,9 @@ def validate(s: dict) -> dict:
     st["ls_parity_cap"] = float(st.get("ls_parity_cap", 0) or 0)
     if st["ls_parity_cap"] and not 1 <= st["ls_parity_cap"] <= 10:
         raise ValueError("多空风险平价放大上限需为 0（关闭）或 1–10")
+    st["staged_entry_f1"] = float(st.get("staged_entry_f1", 0) or 0)
+    if st["staged_entry_f1"] and not 0.05 <= st["staged_entry_f1"] <= 0.95:
+        raise ValueError("分批入场首笔比例需为 0（关闭）或 0.05–0.95")
     st["pyramid_r"] = float(st.get("pyramid_r", 0) or 0)
     st["pyramid_frac"] = float(st.get("pyramid_frac", 0.5) or 0)
     if st["pyramid_r"] and not 0.5 <= st["pyramid_r"] <= 5:
