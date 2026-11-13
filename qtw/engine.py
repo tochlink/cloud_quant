@@ -625,6 +625,19 @@ def clamp_spot_sell(tr, venue: str, sym: str, qty: float, price: float) -> tuple
     return q, f"可用余额 {avail:.12g} 小于账本数量 {qty:.12g}（买入手续费从币里扣），卖出 {q:.12g}"
 
 
+def _halt_after_live_error(sym: str) -> str:
+    """实盘发单失败时，纸面账本已经按成交记账（平仓已平 / 开仓已开），与交易所不再一致。
+    自动暂停该币的信号自动开平（与界面「暂停」同一开关，持久化），避免在账本与交易所不一致时继续反手 / 重新开仓；
+    ATR 止损仍按账本执行。核对交易所持仓后在界面恢复。返回写进订单日志的说明。"""
+    try:
+        bk = book()
+        bk.halts.add(sym)
+        bk.save()
+        return "｜已自动暂停该币自动开平，请核对交易所持仓后恢复"
+    except Exception as e:  # noqa: BLE001
+        return f"｜自动暂停失败：{e}"[:60]
+
+
 def _route(cfg, sym, market, action, qty, price):
     """纸面执行之外，若实盘闸门全部通过才会发单；否则只记录被拦截原因。"""
     mode = "live" if S.live_armed(cfg) else "paper"
@@ -644,7 +657,7 @@ def _route(cfg, sym, market, action, qty, price):
             qty, note = clamp_spot_sell(tr, cfg["venue"], sym, qty, price)
             if qty <= 0:
                 _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=0,
-                           ref_price=price, status="error", detail=note[:300])
+                           ref_price=price, status="error", detail=(note[:240] + _halt_after_live_error(sym)))
                 return "error"
         else:
             note = ""
@@ -654,7 +667,7 @@ def _route(cfg, sym, market, action, qty, price):
         return "sent"
     except Exception as e:  # noqa: BLE001
         _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,
-                   ref_price=price, status="error", detail=str(e)[:300])
+                   ref_price=price, status="error", detail=str(e)[:240] + _halt_after_live_error(sym))
         return "error"
 
 

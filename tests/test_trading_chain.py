@@ -270,3 +270,27 @@ def test_run_cycle_atr_exits_orphan_without_signal_row(tmp_path, monkeypatch):
     ev = engine.run_cycle(cfg)
     assert "ADAUSDT" not in b.positions
     assert any("ATR止损" in x for x in ev["events"])
+
+
+def test_live_send_error_auto_halts_symbol(tmp_path, monkeypatch):
+    """实盘发单失败：账本已记账、交易所没成交，该币自动暂停自动开平。"""
+    cfg, b = _book(tmp_path, monkeypatch)
+    cfg = S._merge(cfg, {"live": {"mode": "live", "live_enabled": True, "confirm_phrase": S.LIVE_CONFIRM_PHRASE}})
+    b.open(symbol="BTCUSDT", market="spot", side="long", qty=0.002, price=50000, price_kind="last",
+           stop=45000, signal_bar="x", reason="t", venue="okx")
+    monkeypatch.setattr(engine, "_quote", lambda v, s, m: (51000, "last", _quote(s, m, 51000)))
+    monkeypatch.setattr(engine.guard, "check", lambda cfg, ex: (True, []))
+
+    class Boom:
+        def spot_available(self, base):
+            return 1.0
+
+        def place_order(self, *a, **k):
+            raise RuntimeError("OKX 拒绝: 51008")
+
+    monkeypatch.setattr(engine, "_trader", lambda cfg: Boom())
+    out = engine.close_position("BTCUSDT", cfg)
+    assert out["route_status"] == "error"
+    assert "BTCUSDT" in b.halts
+    o = b.orders()[-1]
+    assert o["status"] == "error" and "自动暂停" in o["detail"] and "51008" in o["detail"]
