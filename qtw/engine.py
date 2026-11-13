@@ -939,7 +939,13 @@ def _rebalance(cfg, bk, rows: dict, opened: set, errors: dict) -> list[str]:
         s, px = it["symbol"], it["price"]
         p = bk.positions[s]
         kind, q = kinds[s]
-        new_qty = rebalance_new_qty(p.qty, max(0.0, p.qty + it["delta_usdt"] / px),
+        delta = float(it["delta_usdt"])
+        if delta > 0 and cfg.get("_exposure_mult", 1.0) != 1.0:  # 放大敞口时：调仓加仓所需保证金不能超过可用保证金（与回测一致）
+            free_m = bk.equity() - bk.margin_used()
+            delta = min(delta, max(0.0, free_m) * max(1.0, float(p.leverage or 1.0)) / (1 + bk.fee))
+            if delta < 1.0:
+                continue
+        new_qty = rebalance_new_qty(p.qty, max(0.0, p.qty + delta / px),
                                     lambda x, _s=s, _m=p.market, _px=px: lot_floor(cfg, _s, _m, x, _px))
         if new_qty is None:
             continue  # 差额低于最小下单量，或减仓后剩余低于最小下单量（尘埃仓）

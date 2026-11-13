@@ -102,3 +102,30 @@ def test_rebalance_new_qty_rounds_and_never_leaves_dust():
     assert rebalance_new_qty(1.0, 0.98, f) is None           # 差额 0.2 币 = 2 U < 3 U：不动
     assert rebalance_new_qty(1.0, 0.25, f) is None           # 差额够但剩余 0.25 币 = 2.5 U < 3 U：不留尘埃仓
     assert rebalance_new_qty(1.0, 0.0, f) is None            # 目标 0 由信号 / 止损离场处理，调仓不清仓
+
+
+def test_engine_rebalance_add_capped_by_free_margin_when_leverage_scales_exposure(tmp_path, monkeypatch):
+    """放大敞口时引擎调仓加仓与回测一致：加仓所需保证金不超过可用保证金（权益 − 已占用保证金）。"""
+    import datetime as dt
+    from qtw import engine as E
+    conn = db.connect(tmp_path / "t.sqlite")
+    bk = PaperBook(1000, 0, conn=conn, fee_by_market={"spot": 0.001, "perp": 0.00051})
+    bk.open(symbol="X", market="perp", side="short", qty=2.0, price=100, price_kind="mark", stop=110,
+            signal_bar="b", reason="t", venue="okx")
+    bk.set_leverage("X", 3.0, 130.0, "")
+    q = types.SimpleNamespace(data_source="t", ts=dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc))
+    monkeypatch.setattr(E, "_quote", lambda v, s, m: (100.0, "mark", q))
+    monkeypatch.setattr(E, "_route", lambda *a, **k: None)
+    monkeypatch.setattr(E, "relever", lambda *a, **k: None)
+    monkeypatch.setattr(E, "lot_floor", lambda cfg, s, m, x, px=None: x)
+    monkeypatch.setattr(RB, "last_bar", lambda conn: None)
+    monkeypatch.setattr(RB, "set_last_bar", lambda conn, bar: None)
+    monkeypatch.setattr(RB, "plan", lambda *a, **k: [{"symbol": "X", "price": 100.0, "delta_usdt": 10_000.0, "target_usdt": 10_200.0}])
+    rows = {"X": {"as_of": "b", "side": "short", "atr": 1.0}}
+    cfg = {"venue": "okx", "strategy": {"rebalance_band": 0.1}, "risk": {}, "_exposure_mult": 3.0}
+    eq0, free0 = bk.equity(), bk.equity() - bk.margin_used()
+    E._rebalance(cfg, bk, rows, set(), {})
+    p = bk.positions["X"]
+    assert p.qty > 2.0
+    assert bk.margin_used() <= eq0 + 1e-6  # 未放大敞口时 delta 照单全收会让保证金远超权益
+    assert p.qty == pytest.approx(2.0 + free0 * 3 / (1 + bk.fee) / 100, rel=1e-6)
