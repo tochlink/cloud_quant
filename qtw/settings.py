@@ -181,7 +181,9 @@ def load() -> dict:
                 data = yaml.safe_load(PATH.read_text(encoding="utf-8")) or {}
                 _write_db(_merge(DEFAULTS, data))
                 PATH.rename(PATH.with_suffix(".yaml.migrated"))
-        return _merge(DEFAULTS, data)
+        out = _merge(DEFAULTS, data)
+        out["strategy"]["fast_exit_tf"] = "off"  # 已存的旧值（5m / 10m / 1d）也不生效，见 validate() 注释
+        return out
 
 
 def taker_rate(cfg: dict, market: str) -> float:
@@ -263,6 +265,10 @@ def validate(s: dict) -> dict:
     st["fast_exit_tf"] = str(st.get("fast_exit_tf", "off") or "off")
     if st["fast_exit_tf"] not in ("off", "5m", "10m", "1d"):
         raise ValueError("快速离场周期只能是 off / 5m / 10m / 1d")
+    # 2026-11-14：模拟盘 / 实盘禁用快速离场。研究（docs/STRATEGY_FORMULAS.md）里 5m / 10m / 1D 每一组都显著劣于不离场
+    # （5m EMA50：+160% → 约 −8%），而且回测基线从未启用它；旧版页面能把它存成 5m，导致长线单在 4h 收盘之间被 5m 破位逐个平掉、
+    # 再锁到信号改变（kean 本地 11-14 01:35–02:15 北京时间 8 笔亏损平仓）。保存的旧值一律按 off 处理；研究只能在脚本里显式传 fast=。
+    st["fast_exit_tf"] = "off"
     st["fast_exit_n"] = int(st.get("fast_exit_n", 50) or 50)
     if not 5 <= st["fast_exit_n"] <= 500:
         raise ValueError("快速离场 EMA 周期需在 5–500 之间")

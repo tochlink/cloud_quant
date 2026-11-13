@@ -445,7 +445,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             row["stop_source"] = "suggested"
             row["stop_side"] = side
         elif blocked:
-            entry = "已止损，观望中：等待信号方向改变后再入场"
+            entry = "已离场（止损 / 止盈 / 手动平仓），观望中：等待信号方向改变后再入场"
             exit_, state = "—", "blocked"
             row["stop_source"] = "suggested"
             row["stop_side"] = side
@@ -852,7 +852,9 @@ def fast_exit_now(cfg: dict, sym: str, p) -> bool:
     from . import fastlayer
     st = cfg.get("strategy") or {}
     tf = str(st.get("fast_exit_tf", "off") or "off")
-    if tf == "off":
+    if tf == "off" or not st.get("_fast_exit_research"):
+        # 2026-11-14：模拟盘 / 实盘不再做快速离场（研究全面劣于不离场，回测基线也从未启用）。只有研究脚本显式置
+        # strategy._fast_exit_research=True 才会走下面的判定；盘中离场只剩真实触及的 ATR / 保本止损与（可选）止盈。
         return False
     n, k = int(st.get("fast_exit_n", 50) or 50), int(st.get("fast_exit_confirm", 2) or 1)
     try:
@@ -902,6 +904,9 @@ def _close_one(cfg, bk, symbol: str, reason: str) -> dict:
         return {"ok": False, "error": "无官方报价，未平仓（不会编造价格）", "symbol": symbol}
     side, mkt, qty = p.side, p.market, p.qty
     fee_rate = bk.fee_for(mkt)
+    # 手动平仓 / 一键清仓后像止损一样锁定同向再入场，直到信号方向改变：否则自动交易的下一轮（开始交易、机器恢复唤醒、
+    # 下一根 4h 收盘）会按同一个旧信号立刻按市价重新开回去（kean 本地 11-13 23:32 同一分钟「买平 + 卖开」8 个币）。
+    bk.blocks[symbol] = p.direction
     pnl = bk.close(symbol, px, kind, reason, cfg["venue"], data_source=src, price_time=pt)
     route_status = _route(cfg, symbol, mkt, "close_long" if side == "long" else "close_short", qty, px)
     return {
@@ -985,6 +990,7 @@ def kill_switch(cfg: dict | None = None) -> dict:
                 # 拿不到新报价时使用该持仓最后一次真实公共标记价（明确标注时间），不编造价格
                 px, kind, src, pt = p.mark_price, f"last_real_mark@{p.mark_time}", p.mark_source, p.mark_time
             qty, side, mkt = p.qty, p.side, p.market
+            bk.blocks[s] = p.direction  # 重新「开始交易」后不按旧信号立刻开回去，等信号改变（与手动平仓同一规则）
             pnl = bk.close(s, px, kind, "紧急停止(Kill Switch)", cfg["venue"], data_source=src, price_time=pt)
             events.append(f"{s} 已平仓 @ {px:g}（{kind}），盈亏 {pnl:+.2f}")
             if was_live:
