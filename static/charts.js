@@ -252,11 +252,11 @@
       const tot = parts.reduce((a, p) => a + Math.max(0, p.v), 0);
       if (tot <= 0) return `<svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="34" stroke="#ece8fd" stroke-width="22" fill="none"/></svg>`;
       let a0 = -Math.PI / 2, out = "";
-      parts.forEach((p) => {
+      parts.forEach((p, pi) => {
         const f = Math.max(0, p.v) / tot; if (f <= 0) return;
         const a1 = a0 + f * Math.PI * 2 - (f < 1 ? 0.0001 : 0.001), r = 34, large = f > 0.5 ? 1 : 0;
         const x0 = 50 + r * Math.cos(a0), y0 = 50 + r * Math.sin(a0), x1 = 50 + r * Math.cos(a1), y1 = 50 + r * Math.sin(a1);
-        out += `<path d="M${x0} ${y0} A${r} ${r} 0 ${large} 1 ${x1} ${y1}" stroke="${p.c}" stroke-width="${p.w || 22}" fill="none" stroke-linecap="butt"/>`;
+        out += `<path data-i="${pi}" d="M${x0} ${y0} A${r} ${r} 0 ${large} 1 ${x1} ${y1}" stroke="${p.c}" stroke-width="${p.w || 22}" fill="none" stroke-linecap="butt"/>`;
         a0 = a1;
       });
       const hole = Math.max(15, 34 - Math.max(...parts.map((p) => p.w || 22)) / 2 - 1);
@@ -305,6 +305,51 @@
   }
   window.BigCharts = {
     retheme() {},
+    /* 总览权益曲线：Lightweight Charts 面积图（保留渐变），带价格轴 / 北京时间时间轴 / 十字线悬停卡片；
+       成交事件按时间桶聚合为小圆点（每桶一个，不重叠），颜色取该桶最重要的事件类型 */
+    dashEquity(el, opts) {
+      el.innerHTML = "";
+      const raw = (opts.points || []).map((p) => ({ t: toUnix(p.time), p })).filter((x) => x.t != null).sort((a, b) => a.t - b.t);
+      const pts = []; raw.forEach((x) => { if (pts.length && pts[pts.length - 1].t === x.t) pts[pts.length - 1] = x; else pts.push(x); });
+      if (pts.length < 2) { el.innerHTML = '<div class="empty">跑几轮后生成权益曲线</div>'; return null; }
+      const term = isTerm(), col = term ? "#00e68a" : (opts.color || "#6c5ce7");
+      const c = LightweightCharts.createChart(el, { ...opts0(), width: el.clientWidth, height: el.clientHeight,
+        layout: { ...opts0().layout, background: { type: "solid", color: term ? "#03060d" : "rgba(0,0,0,0)" }, fontSize: 10.5 },
+        grid: { vertLines: { visible: false }, horzLines: { color: term ? "#0c1324" : "#f4f2fb" } },
+        rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.12, bottom: 0.06 } },
+        timeScale: { ...base.timeScale, borderVisible: false, timeVisible: true, secondsVisible: false, fixLeftEdge: true, fixRightEdge: true },
+        crosshair: { mode: 0, vertLine: { color: hexA(col, 0.5), width: 1, style: 2, labelVisible: false }, horzLine: { visible: false, labelVisible: false } },
+        handleScroll: false, handleScale: false });
+      const ro = new ResizeObserver(() => { if (!el.isConnected) { ro.disconnect(); return; } c.applyOptions({ width: el.clientWidth, height: el.clientHeight }); });
+      ro.observe(el);
+      const s = c.addAreaSeries({ lineColor: col, lineWidth: 2, topColor: hexA(col, 0.28), bottomColor: hexA(col, 0.01), priceLineVisible: false, lastValueVisible: true,
+        crosshairMarkerRadius: 4, priceFormat: { type: "price", precision: 2, minMove: 0.01 } });
+      s.setData(pts.map((x) => ({ time: x.t, value: x.p.equity })));
+      const MK = { "开仓": "#2cc4c9", "平仓": "#8a7cf0", "调仓": "#5b9bf0", "止损": "#e5536b", "止盈": "#f2a541", "手动平仓": "#e58fb0", "一键清仓": "#f0743e" };
+      const idxOf = new Map(pts.map((x, i) => [x.t, i]));
+      const setMarkers = (from, to) => {
+        const span = Math.max(3600, to - from), bucket = Math.max(900, Math.floor(span / 36));
+        const b = new Map();
+        pts.forEach((x) => { if (x.t < from || !x.p.events || !x.p.events.length) return; const k = Math.floor(x.t / bucket); const e = b.get(k) || { t: x.t, evs: [] }; e.evs.push(...x.p.events); b.set(k, e); });
+        s.setMarkers([...b.values()].sort((a, z) => a.t - z.t).map((e) => ({ time: e.t, position: "belowBar", shape: "circle", size: 0.35, color: MK[primaryKind(e.evs)] || col })));
+      };
+      const last = pts[pts.length - 1].t, first = pts[0].t;
+      c.setRange = (r) => {
+        const sec = { "1d": 86400, "7d": 7 * 86400 }[r];
+        const from = sec ? Math.max(first, last - sec) : first;
+        if (sec) c.timeScale().setVisibleRange({ from, to: last }); else c.timeScale().fitContent();
+        setMarkers(from, last);
+      };
+      c.setRange(opts.range || "all");
+      const card = hoverCard(el, "eq");
+      const P = pts.map((x) => x.p);
+      c.subscribeCrosshairMove((pr) => {
+        if (!pr || pr.time == null || !pr.point) { card.hide(); return; }
+        const i = idxOf.get(Number(pr.time)); if (i == null) { card.hide(); return; }
+        card.show(`<div class="hc-eq">${tipHtml(P, i, opts.starting)}</div>`, pr.point);
+      });
+      return c;
+    },
     make(el, h) {
       el.innerHTML = "";
       const c = LightweightCharts.createChart(el, { ...opts0(), width: el.clientWidth, height: h || el.clientHeight });

@@ -518,7 +518,7 @@ async function setVenue(v) {
     S.signals = null; S.chart = null;
     await refreshAll();
     if (!["dashboard", "positions"].includes(S.page)) await PAGES[S.page]();
-    api("/api/signals").then((r) => { S.signals = r; renderRight(); if (S.page === "dashboard") pageDashboard(); }).catch(() => {});
+    api("/api/signals").then((r) => { S.signals = r; renderRight(); if (S.page === "dashboard" && !dashHover()) pageDashboard(); }).catch(() => {});
   } catch (e) { toast("切换失败：" + e.message, true); }
 }
 document.querySelectorAll("[data-venue]").forEach((b) => (b.onclick = () => setVenue(b.dataset.venue)));
@@ -683,25 +683,24 @@ function pageDashboard() {
     const ch = (cur.pnl - prev.pnl) / Math.abs(prev.pnl);
     return `<span class="${ch >= 0 ? "pos" : "neg"}">${Math.abs(ch * 100).toFixed(0)}%${ch >= 0 ? "↑" : "↓"}</span>`;
   };
-  const byCoin = {};
-  d.positions.forEach((p) => { byCoin[base(p.symbol)] = (byCoin[base(p.symbol)] || 0) + Math.abs(p.notional); });
-  const COIN_PAL = ["#6c5ce7", "#2cc4c9", "#f2a541", "#e5536b", "#5b9bf0", "#25b07a", "#b07ae5", "#8a8aa8"];
-  const coins = Object.entries(byCoin).sort((x, y) => y[1] - x[1]);
-  const top = coins.slice(0, 5), rest = coins.slice(5).reduce((x, c) => x + c[1], 0);
-  const parts = top.map(([k, v], i) => ({ k, v, c: COIN_PAL[i] })).concat(rest > 0 ? [{ k: "其他", v: rest, c: COIN_PAL[7] }] : []);
+  const COIN_PAL = ["#6c5ce7", "#2cc4c9", "#f2a541", "#e5536b", "#5b9bf0", "#25b07a", "#b07ae5", "#e58fb0", "#8a8aa8"];
+  const posS = d.positions.slice().sort((x, y) => Math.abs(y.notional) - Math.abs(x.notional));
+  const coins = posS.map((p) => base(p.symbol));
+  const MAXP = 8;
+  const parts = posS.slice(0, posS.length <= MAXP ? MAXP : MAXP - 1).map((p, i) => ({ k: base(p.symbol), side: p.side, mkt: p.market, v: Math.abs(p.notional), c: COIN_PAL[i] }));
+  if (posS.length > MAXP) parts.push({ k: "其他", side: "", v: posS.slice(MAXP - 1).reduce((x, p) => x + Math.abs(p.notional), 0), c: COIN_PAL[8] });
   const expPct = d.equity ? d.gross / d.equity : 0;
-  const daily = (P.daily || []).slice(-14);
-  const dmax = Math.max(1e-9, ...daily.map((x) => Math.abs(x.pnl)));
   const ring = (v, lbl, sub, col) => {
     const f = v == null ? 0 : Math.max(0, Math.min(1, v)), C = 2 * Math.PI * 26;
-    return `<div class="d5-ring"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="26" stroke="#eeebfa" stroke-width="6" fill="none"/><circle cx="32" cy="32" r="26" stroke="${col}" stroke-width="6" fill="none" stroke-linecap="round" stroke-dasharray="${(f * C).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 32 32)"/></svg><b class="num">${v == null ? "—" : Math.round(v * 100) + "%"}</b><div><div class="d5-rl">${lbl}</div><div class="d5-rs">${sub}</div></div></div>`;
+    return `<div class="d5-ring"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="26" stroke="#eeebfa" stroke-width="6" fill="none" class="ring-bg"/><circle cx="32" cy="32" r="26" stroke="${col}" stroke-width="6" fill="none" stroke-linecap="round" stroke-dasharray="${(f * C).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 32 32)"/></svg><b class="num">${v == null ? "—" : Math.round(v * 100) + "%"}</b><div class="d5-rx"><div class="d5-rl">${lbl}</div><div class="d5-rs">${sub}</div></div></div>`;
   };
   const tileI = (icon, g, lbl, val, sub, c = "") => `<div class="d5-tile"><span class="d5-ic ${g}">${ic(icon)}</span><div class="d5-tt"><div class="d5-tl">${lbl}</div><div class="d5-tv num ${c}">${val}</div><div class="d5-ts">${sub}</div></div></div>`;
-  const fx = d.recent_fills.slice(0, 10), nmax = Math.max(1e-9, ...fx.map((f) => Math.abs(f.notional_usdt || 0)));
+  const head5 = (title, sub, link) => `<div class="t5"><span class="t5-h">${title}<i>›</i></span>${sub ? `<span class="t5-sub">${sub}</span>` : ""}${link || ""}</div>`;
   const ticker = d.positions.map((p) => `<span class="tk"><b>${base(p.symbol)}</b><span class="num" data-live="px" data-sym="${p.symbol}" data-mkt="${p.market}" data-mark="${p.mark_price ?? ""}" data-mark-time="${esc(p.mark_time || "")}">${fpPx(posMark(p))}</span></span>`).join("");
+  const rng = S.eqRange || "all";
   $("#page").innerHTML = `
   <div class="fit dash d5">
-    ${ticker ? `<div class="d5-ticker" title="持仓币种实时价（${VN[v]} 官方公共 WS，变动时闪烁）">${ticker}</div>` : ""}
+    ${ticker ? `<div class="d5-ticker" title="持仓币种实时价（${VN[v]} 官方公共 WS，变动时文字闪绿 / 红）">${ticker}</div>` : ""}
     <section class="d5-top">
       <div class="card5 featured d5-hero">
         <div class="d5-hl">
@@ -710,7 +709,11 @@ function pageDashboard() {
           <div class="d5-chg"><span class="chg5 ${d.total_pnl >= 0 ? "pos" : "neg"}">${sgn(d.total_pnl)} · ${d.total_return >= 0 ? "+" : ""}${pct(d.total_return)}</span><span class="muted">相对起始 ${f2(d.starting_equity, 0)}</span></div>
           <div class="d5-today"><div><span class="d5-tl">今日盈亏</span><b class="num ${cls(today && today.pnl)}">${today ? sgn(today.pnl) : "—"}</b></div><div class="d5-vs">对比昨日 ${cmp(today, yday)}</div></div>
         </div>
-        <div class="hero-spark d5-spark"><div class="eq-hover" id="heroEq"></div><div class="cap">账本权益走势 · ${eqPts.length} 个真实快照点</div></div>
+        <div class="d5-eqw">
+          <div class="d5-eqh"><span class="t5-sub">账本权益 · 北京时间 · ${eqPts.length} 个真实快照</span><span class="eq-lg"><i class="k-open"></i>开仓<i class="k-close"></i>平仓<i class="k-stop"></i>止损<i class="k-tp"></i>止盈</span>
+            <div class="seg seg5" id="eqRange" role="group" aria-label="权益范围">${[["1d", "1日"], ["7d", "7日"], ["all", "全部"]].map(([k, l]) => `<button type="button" data-r="${k}" class="${k === rng ? "on" : ""}">${l}</button>`).join("")}</div></div>
+          <div class="d5-eqc" id="heroEq"></div>
+        </div>
       </div>
     </section>
     <section class="d5-tiles">
@@ -721,31 +724,90 @@ function pageDashboard() {
     </section>
     <section class="d5-grid">
       <div class="card5 d5-donut">
-        <div class="t5">敞口构成 <i>›</i></div>
-        <div class="d5-dw"><div class="d5-dc">${MiniCharts.donut(parts.length ? parts.map((x) => ({ v: x.v, c: x.c, w: 9 })) : [])}<div class="d5-dt"><b class="num">${f2(d.gross, 0)}</b><span>USDT</span></div></div>
-          <table class="d5-lt">${parts.map((x) => `<tr><td><i style="background:${x.c}"></i>${esc(x.k)}</td><td class="num">${f2(x.v, 0)}</td><td class="num muted">${pct(d.gross ? x.v / d.gross : 0, 0)}</td></tr>`).join("") || '<tr><td class="muted">空仓</td></tr>'}</table></div>
+        ${head5("敞口构成", `${parts.length} 个币 · 名义 USDT`)}
+        <div class="d5-dw"><div class="d5-dc" id="dnut">${MiniCharts.donut(parts.length ? parts.map((x) => ({ v: x.v, c: x.c, w: 12 })) : [])}<div class="d5-dt"><b class="num" id="dnutV">${f2(d.gross, 0)}</b><span id="dnutL">总敞口 U</span></div></div>
+          <div class="d5-ltw"><table class="d5-lt">${parts.map((x, i) => `<tr data-i="${i}"><td><i style="background:${x.c}"></i>${esc(x.k)}</td><td>${x.side ? `<span class="side-tag ${x.side}">${x.side === "short" ? "空" : "多"}</span>` : ""}</td><td class="num">${f2(x.v, 0)}</td><td class="num muted">${pct(d.gross ? x.v / d.gross : 0, 1)}</td></tr>`).join("") || '<tr><td class="muted">空仓</td></tr>'}</table></div></div>
       </div>
       <div class="card5 d5-perf">
-        <div class="t5">表现 <i>›</i><span class="t5-r">${esc(P.tz || "北京时间")} · 每日权益变化</span></div>
-        <div class="d5-rings">${ring(expPct, "敞口 / 权益", `${f2(d.gross, 0)} / ${f2(d.equity, 0)}`, "#6c5ce7")}${ring(d.win_rate, "胜率", d.closed_trades ? `${d.closed_trades} 笔` : "尚无平仓", "#2cc4c9")}</div>
-        <div class="d5-strip" title="每根 = 一个北京时间自然日的权益变化（真实账本快照）">${daily.map((x) => `<span class="${x.pnl >= 0 ? "up" : "dn"}" style="height:${Math.max(6, Math.abs(x.pnl) / dmax * 100).toFixed(0)}%" title="${x.period} · ${sgn(x.pnl)} U"></span>`).join("")}</div>
-        <div class="d5-mon"><span>本月 <b class="num ${cls(mon && mon.pnl)}">${mon ? sgn(mon.pnl) : "—"}</b></span><span class="muted">Compared to 上月 ${lmon ? `${sgn(lmon.pnl)} · ${cmp(mon, lmon)}` : "—（首月）"}</span></div>
+        ${head5("表现", "每日权益变化 · 北京时间")}
+        <div class="d5-rings">${ring(expPct, "敞口 / 权益", `${f2(d.gross, 0)} / ${f2(d.equity, 0)}`, "#6c5ce7")}${ring(d.win_rate, "胜率", d.closed_trades ? `${d.closed_trades} 笔已平仓` : "尚无平仓", "#2cc4c9")}</div>
+        <div class="d5-bars" id="pnlBars">${pnlBarsHtml((P.daily || []).slice(-21))}</div>
+        <div class="d5-mon"><span>本月 <b class="num ${cls(mon && mon.pnl)}">${mon ? sgn(mon.pnl) : "—"}</b></span><span class="muted">对比上月 ${lmon ? `${sgn(lmon.pnl)} · ${cmp(mon, lmon)}` : "—（首月）"}</span></div>
       </div>
       <div class="card5 d5-log">
-        <div class="t5">成交记录 <i>›</i><button class="link t5-r" data-go="trades">全部 →</button></div>
+        ${head5("成交记录", "", `<span class="d5-pg" id="logPg"></span><button type="button" class="lnk5" data-go="trades">全部 →</button>`)}
         <div class="d5-lh"><span>时间</span><span>方向</span><span>币种</span><span>数量</span><span>价格</span><span>盈亏</span></div>
-        <div class="d5-lb" id="dashTx">${fx.length ? fx.map((f) => { const pnl = Number(f.realized_pnl_usdt), buy = f.side === "buy"; return `<button class="d5-lr tx" data-sym="${f.symbol}" data-mkt="${f.market}" title="${esc(t(f.time) + " · " + ptText(f.reason))}"><i class="flow ${buy ? "b" : "s"}" style="width:${(Math.abs(f.notional_usdt || 0) / nmax * 100).toFixed(0)}%"></i><span class="num">${esc(String(t(f.time)).split(" ").slice(0, 2).join(" "))}</span><span class="${buy ? "pos" : "neg"}">${buy ? "买" : "卖"}·${f.action === "open" ? "开" : f.action === "add" ? "加" : f.action === "reduce" ? "减" : "平"}</span><span>${base(f.symbol)}</span><span class="num">${fp(f.qty, 4)}</span><span class="num">${fpPx(f.price)}</span><span class="num ${cls(pnl)}">${pnl ? sgn(pnl) : "—"}</span></button>`; }).join("") : '<div class="empty">尚无纸面成交</div>'}</div>
+        <div class="d5-lb" id="dashTx"></div>
       </div>
     </section>
     <div class="note foot">系统化纸面 / 研究工具，不构成投资建议。数据来自 ${VN[v]} 官方公共行情 · 自动交易${w.running ? "运行中（事件驱动）" : "未开启"} · 更新于 ${tFull(d.time)}。</div>
   </div>`;
   bindGo();
-  document.querySelectorAll("#page .tx[data-sym]").forEach((el) => (el.onclick = () => goSignal(el.dataset.sym, el.dataset.mkt)));
   const heroEq = $("#heroEq");
-  if (heroEq) MiniCharts.equityHover(heroEq, { points: eqPts, starting: eqStart, color: "#6c5ce7" });
-  const lb = $("#dashTx"); // 成交记录：放不下的行直接不显示（不出现半行），全部成交见「成交」页
-  if (lb) while (lb.scrollHeight > lb.clientHeight + 1 && lb.children.length > 1) lb.lastElementChild.remove();
+  if (heroEq) {
+    const ch = BigCharts.dashEquity(heroEq, { points: eqPts, starting: eqStart, range: rng });
+    document.querySelectorAll("#eqRange [data-r]").forEach((b) => (b.onclick = () => {
+      S.eqRange = b.dataset.r; document.querySelectorAll("#eqRange [data-r]").forEach((x) => x.classList.toggle("on", x === b));
+      if (ch) ch.setRange(S.eqRange);
+    }));
+  }
+  // 环形图悬停：中心显示该币；图例行同步高亮
+  const dn = $("#dnut"), dv = $("#dnutV"), dl = $("#dnutL");
+  const hl = (i) => {
+    document.querySelectorAll("#page .d5-lt tr[data-i]").forEach((r) => r.classList.toggle("hl", r.dataset.i === String(i)));
+    document.querySelectorAll("#dnut path[data-i]").forEach((pth) => pth.classList.toggle("dim", i != null && pth.dataset.i !== String(i)));
+    if (i == null || !parts[i]) { dv.textContent = f2(d.gross, 0); dl.textContent = "总敞口 U"; return; }
+    dv.textContent = f2(parts[i].v, 0); dl.textContent = `${parts[i].k} · ${pct(d.gross ? parts[i].v / d.gross : 0, 1)}`;
+  };
+  if (dn) {
+    dn.querySelectorAll("path[data-i]").forEach((pth) => { pth.onmouseenter = () => hl(+pth.dataset.i); pth.onmouseleave = () => hl(null); });
+    document.querySelectorAll("#page .d5-lt tr[data-i]").forEach((r) => { r.onmouseenter = () => hl(+r.dataset.i); r.onmouseleave = () => hl(null); });
+  }
+  renderDashLog();
 }
+/* 每日盈亏柱状图（HTML）：零轴、y 轴刻度、MM-DD 日期、柱顶数值；柱宽固定上限，天数少时不会变成巨柱 */
+function pnlBarsHtml(daily) {
+  if (!daily.length) return '<div class="empty">暂无账本快照</div>';
+  const vals = daily.map((x) => x.pnl);
+  let hi = Math.max(0, ...vals), lo = Math.min(0, ...vals);
+  if (hi === lo) hi = 1;
+  const pad = (hi - lo) * 0.18; hi += hi > 0 ? pad : 0; lo -= lo < 0 ? pad : 0;
+  const R = hi - lo, z = (hi / R) * 100; // 零轴距顶部百分比
+  const tk = [hi, 0, lo].filter((x, i, a) => a.indexOf(x) === i);
+  const yLab = tk.map((x) => `<span style="top:${((hi - x) / R) * 100}%">${x === 0 ? "0" : (x > 0 ? "+" : "") + x.toFixed(Math.abs(x) >= 100 ? 0 : 1)}</span>`).join("");
+  const few = daily.length < 5, showV = daily.length <= 10;
+  const cols = daily.map((x) => {
+    const h = Math.abs(x.pnl) / R * 100, up = x.pnl >= 0;
+    const pos = up ? `bottom:${100 - z}%` : `top:${z}%`;
+    return `<div class="pb-c" title="${x.period} · ${sgn(x.pnl)} U（${x.ret != null ? (x.ret >= 0 ? "+" : "") + (x.ret * 100).toFixed(2) + "%" : "—"}）">
+      <i class="pb ${up ? "up" : "dn"}" style="${pos};height:${Math.max(1.5, h).toFixed(1)}%"></i>
+      ${showV ? `<em class="pv ${up ? "pos" : "neg"}" style="${up ? `bottom:calc(${100 - z + h}% + 2px)` : `top:calc(${z + h}% + 2px)`}">${(up ? "+" : "") + x.pnl.toFixed(Math.abs(x.pnl) >= 100 ? 0 : 1)}</em>` : ""}
+      <span class="pd">${x.period.slice(5)}</span></div>`;
+  }).join("");
+  return `<div class="pb-y">${yLab}</div><div class="pb-plot ${few ? "few" : ""}"><div class="pb-zero" style="top:${z}%"></div>${cols}</div>${few ? `<div class="pb-hint">账本只有 ${daily.length} 天，满 14 天后显示完整两周</div>` : ""}`;
+}
+function fillTag(f) {
+  const buy = f.side === "buy", a = f.action;
+  const k = a === "open" ? "开" : a === "add" ? "加" : a === "reduce" ? "减" : "平";
+  return `<span class="ftag ${buy ? "b" : "s"}">${buy ? "买" : "卖"}${k}</span>`;
+}
+function renderDashLog() {
+  const lb = $("#dashTx"); if (!lb || !S.dash) return;
+  const all = S.dash.recent_fills || [];
+  if (!all.length) { lb.innerHTML = '<div class="empty">尚无纸面成交</div>'; return; }
+  const per = Math.max(3, Math.floor((lb.clientHeight || 160) / 27));
+  const st = pgState("dashLog", all.length, per);
+  const fx = all.slice(st.start, st.end), nmax = Math.max(1e-9, ...all.map((f) => Math.abs(f.notional_usdt || 0)));
+  lb.innerHTML = fx.map((f) => { const pnl = Number(f.realized_pnl_usdt), buy = f.side === "buy";
+    return `<button class="d5-lr" data-sym="${f.symbol}" data-mkt="${f.market}" title="${esc(tFull(f.time) + " · " + ptText(f.reason) + " · 名义 " + f2(f.notional_usdt) + " U")}"><i class="flow ${buy ? "b" : "s"}" style="width:${(Math.abs(f.notional_usdt || 0) / nmax * 100).toFixed(0)}%"></i><span class="num">${esc(tCompact(f.time))}</span><span>${fillTag(f)}</span><span class="lc">${base(f.symbol)}${bookTag(f)}</span><span class="num">${fp(f.qty, 4)}</span><span class="num">${fpPx(f.price)}</span><span class="num ${cls(pnl)}">${pnl ? sgn(pnl) : "—"}</span></button>`; }).join("");
+  lb.querySelectorAll(".d5-lr[data-sym]").forEach((el) => (el.onclick = () => goSignal(el.dataset.sym, el.dataset.mkt)));
+  const pg = $("#logPg");
+  if (pg) {
+    pg.innerHTML = st.pages > 1 ? `<button type="button" class="pg5" data-d="-1" ${st.i <= 0 ? "disabled" : ""} aria-label="上一页">‹</button><span class="num">${st.i + 1}/${st.pages}</span><button type="button" class="pg5" data-d="1" ${st.i >= st.pages - 1 ? "disabled" : ""} aria-label="下一页">›</button>` : "";
+    pg.querySelectorAll("[data-d]").forEach((b) => (b.onclick = () => { S.pg.dashLog.i += +b.dataset.d; renderDashLog(); }));
+  }
+}
+const dashHover = () => !!document.querySelector("#page :is(.d5-eqc,.d5-dc,.d5-lt,.d5-bars,.d5-lb):hover");
 function bindGo() { document.querySelectorAll("#page [data-go]").forEach((el) => (el.onclick = () => (location.hash = "#/" + el.dataset.go))); }
 
 /* ---------- 信号 / 进出场 ---------- */
@@ -1563,7 +1625,7 @@ function applyLive() {
   applyForming();
   applyMarkCandles();
   const now = Date.now();
-  if (S.page === "dashboard" && now - (S._lastLiveRender || 0) > 5000 && !$("#modal:not(.hidden)") && !document.querySelector("#page :hover:is(button,a)")) {
+  if (S.page === "dashboard" && now - (S._lastLiveRender || 0) > 5000 && !$("#modal:not(.hidden)") && !document.querySelector("#page :hover:is(button,a)") && !dashHover()) { // 悬停图表 / 图例时不重绘，避免悬停卡片被打断
     S._lastLiveRender = now; pageDashboard();
   }
 }
@@ -1621,7 +1683,7 @@ async function refreshDash() {
 async function refreshAll() {
   try { await Promise.all([refreshStatus(), refreshDash()]); } catch (e) { toast("无法连接后端：" + e.message, true); return; }
   renderRight();
-  if (["dashboard", "positions"].includes(S.page)) PAGES[S.page]();
+  if (S.page === "positions" || (S.page === "dashboard" && !dashHover())) PAGES[S.page]();
 }
 async function route() {
   S.page = (location.hash.replace("#/", "") || "dashboard").split("?")[0];
@@ -1651,7 +1713,7 @@ function renderBtTrades() {
 window.addEventListener("hashchange", route);
 greet(); setInterval(greet, 60000);
 hydrateIcons();
-route().then(() => api("/api/signals").then((r) => { S.signals = r; renderRight(); if (S.page === "dashboard") pageDashboard(); }).catch(() => {}));
+route().then(() => api("/api/signals").then((r) => { S.signals = r; renderRight(); if (S.page === "dashboard" && !dashHover()) pageDashboard(); }).catch(() => {}));
 if (!new URLSearchParams(location.search).has("nolive")) connectLive(); // nolive 仅用于无头截图
 setInterval(renderLivePill, 5000);
 setInterval(() => { if (S.page === "signals") renderChartSrc(); }, 1000);
