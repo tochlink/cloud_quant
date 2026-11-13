@@ -4754,3 +4754,19 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 结论不写进 `multi_strategy_research.json`（那是 spot_perp 口径的多策略对比），在代码里 `VERDICTS.setdefault("ma_trend_lsp", 观察)`。因信号与 #1 相同，不进影子子账本（`shadow.active_ids` 只收 signal 非空的策略）。
 - 复核（官方 4h、8 币、perp_both 10× + 官方资金费，2025-01-18→2026-11-13 UTC）：`run_backtest(data, strategy_cfg(c, "ma_trend_lsp"), funding)` Gate +214.86% / DD −15.05% / Sharpe 2.02 / 2026-03-05 后 +73.42%，OKX +218.80% / −15.16% / 2.05 / +72.53%，与 C3+RB30 研究逐位一致；`R.run("ma_trend_lsp")` 与手工覆盖参数的回测权益逐点相等。默认不变。
 - 测试：`tests/test_strategies_registry.py::test_ma_trend_lsp_variant_overrides_only_sizing`；全套 332 通过。
+
+## 轮换：资金费成本感知仓位（funding-cost-aware sizing，仓位构建，2026-11-13 ~12:05 PT，研究，不改默认）
+
+- 公式：`FUND[s][j]` = (times[j−1], times[j]] 内已结算的官方资金费率和（`leverage.funding_by_bar`）。该侧日化付费
+  `pay_long[j] = Σ_{k=j−L+1..j} FUND[s][k] × 6/L`，`pay_short = −pay_long`。第 i 根开盘用 j = i−1（只用已结算数据）。
+  `NVS[side][s][j] ×= cut  if pay_side > thr；×= boost  if pay_side < −thr；否则 ×1`（同时作用于新开仓与调仓的单币风险 / 权重乘数）。
+- 网格：L ∈ {3, 6, 18}（12h / 24h / 3 天）× thr ∈ {0.02%, 0.05%, 0.1%}/日 × (cut, boost) ∈ {(0.5,1), (0,1), (1,1.5), (0.5,1.5)}。官方 4h、8 币、perp_both 10× + 官方资金费（OKX 早于其公共历史的部分用 Gate 同币官方费率代替），2025-01-18→2026-11-13 UTC。同脚本基线 Gate +163.32% / 1.69 / 后段 +60.79%，OKX +165.43% / 1.71 / +60.36%。
+- 结果：thr 0.02% 全部更差（−10~−30 点）；收到资金费时加仓（boost）基本无效或更差；有效的是「付费过高时该侧仓位归零」(cut 0, thr ≥ 0.05%)：
+  - L18 thr0.05%：Gate +181.63% / DD −15.68% / Sharpe 1.79，OKX +183.70% / −15.56% / 1.80；压力费率 Gate +163.09% / 1.68（基线 +145.92% / 1.59），OKX +164.57% / 1.69（+147.66% / 1.60）。
+  - L6 thr0.1%：Gate +176.30% / 1.76，OKX +177.41% / 1.77。
+  - **2026-03-05 后收益与基线几乎逐位相同**（Gate +60.79%，OKX +60.36%）：后段资金费从未越过阈值，全部增益来自 2025 年的高资金费拥挤期。
+- 安慰剂：资金费时间平移 ±90 天 → 接近或低于基线（L18 thr0.05% −90 天 Gate +150.3%），说明时点有用；换成别的币的费率（+3 轮换）→ L18 仍得到大部分增益（Gate +175.4%），说明有效成分主要是「全市场多头拥挤」而非单币。
+- 月度 walk-forward（训练期日 Sharpe 选，候选池含基线）：3 / 6 个月训练两所、真实与压力费率全胜（Gate 真实 3m +186.0% vs +167.7%），12 个月训练打平（样本外区间不含活跃期）。
+- 结论：两所全段收益与夏普都赢、walk-forward 不输，但 2026-03 后完全未触发，样本外没有证据；列入观察，不改默认，不进引擎。等再出现高资金费阶段后复核。
+- CSV：`output/research_funding_cost_tilt_perp_both_10x.csv`（网格）、`output/research_funding_cost_tilt_placebo_stress_perp_both_10x.csv`（安慰剂 / 压力）、`output/research_funding_cost_tilt_walkforward_perp_both_10x.csv`。脚本 `scratch/ftilt/`。
+- 下一族：尚未覆盖的出场或执行层结构。
