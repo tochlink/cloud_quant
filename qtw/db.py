@@ -99,6 +99,11 @@ def connect(path: Path | str | None = None) -> sqlite3.Connection:
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.executescript(SCHEMA)
+        # 2026-11-13：分批止盈 / 保本字段（旧库就地加列，不动已有数据）
+        have = {r[1] for r in conn.execute("PRAGMA table_info(paper_positions)").fetchall()}
+        for col, ddl in (("init_stop", "REAL DEFAULT 0"), ("tp_done", "INTEGER DEFAULT 0"), ("be_moved", "INTEGER DEFAULT 0")):
+            if col not in have:
+                conn.execute(f"ALTER TABLE paper_positions ADD COLUMN {col} {ddl}")
         conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
         _CONNS[p] = conn
         return conn

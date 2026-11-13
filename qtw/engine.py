@@ -65,13 +65,94 @@ def persist_marks() -> bool:
     return False
 
 
+def _init_stop(p) -> float:
+    v = float(getattr(p, "init_stop", 0) or 0)
+    return v if v > 0 else float(p.stop_price)
+
+
 def take_profit_hit(p, px: float, st: dict) -> bool:
-    """固定止盈（与回测同一公式）：目标价 = 入场价 ± tp_r × |入场价 − 止损价|；tp_r = 0 关闭。"""
+    """固定止盈（与回测同一公式）：目标价 = 入场价 ± tp_r × |入场价 − 初始止损|；tp_r = 0 关闭。"""
     k = float(st.get("tp_r", 0) or 0)
-    R = abs(p.entry_price - p.stop_price)
+    R = abs(p.entry_price - _init_stop(p))
     if k <= 0 or R <= 0:
         return False
     return p.direction * (px - (p.entry_price + p.direction * k * R)) >= 0
+
+
+def partial_tp_price(p, st: dict) -> float:
+    """分批止盈价（与回测 backtest.partial_tp_target 同一公式）：入场价 ± tp_partial_r × R0。未持仓 / R0 = 0 返回 NaN。"""
+    from .backtest import partial_tp_target
+    return partial_tp_target(p.side, p.entry_price, _init_stop(p), float(st.get("tp_partial_r", 2.0) or 2.0))
+
+
+def breakeven_price(p, st: dict, fee_rate: float) -> float:
+    from .backtest import breakeven_stop
+    return breakeven_stop(p.side, p.entry_price, fee_rate, bool(st.get("tp_be_fees", True)))
+
+
+def exit_rule_cn(side: str, st: dict) -> str:
+    """信号离场条件（白话）。"""
+    k = int(st.get("confirm_bars", 1) or 1)
+    iv = st.get("interval", "4h")
+    if side == "long":
+        return f"{iv} 收盘快线下穿慢线即平多（下一根开盘）"
+    if side == "short":
+        return f"{iv} 收盘快线上穿慢线即平空（下一根开盘）"
+    return f"快慢线同向 {k} 根收盘确认后入场" if k > 1 else "快慢线交叉确认后入场"
+
+
+def lot_floor(cfg: dict, sym: str, market: str, qty: float, px: float | None = None) -> float:
+    """按交易所官方下单精度向下取整（qtw/lots.py）。精度拿不到时不下单（返回 0），绝不猜。"""
+    from . import lots
+    try:
+        return lots.floor_qty(qty, lots.spec(cfg["venue"], sym, market), px)
+    except Exception as e:  # noqa: BLE001
+        log.warning("下单精度不可用 %s %s：%s", sym, market, e)
+        return 0.0
+
+
+def _exit_checks(cfg: dict, bk, s: str, p, px: float, kind: str, q, events: list, tag: str = "") -> bool:
+    """CYCLE_LOCK 已持有。止损（ATR止损 / 保本止损）→ 固定止盈 → 分批止盈；与回测第 3 步同一顺序。
+    返回 True 表示整仓已平。分批止盈按官方精度取整数量、吃单费率记账；剩余低于最小下单量时整仓止盈。"""
+    st = cfg.get("strategy") or {}
+    venue = cfg["venue"]
+    side, mkt = p.side, p.market
+    hit = (side == "long" and px <= p.stop_price) or (side == "short" and px >= p.stop_price)
+    if hit or take_profit_hit(p, px, st):
+        why = ("保本止损" if p.be_moved else "ATR止损") if hit else "止盈"
+        if hit or not st.get("tp_reentry", False):
+            bk.blocks[s] = p.direction
+        qty = p.qty
+        pnl = bk.close(s, px, kind, why, venue, data_source=q.data_source, price_time=iso(q.ts))
+        _route(cfg, s, mkt, "close_long" if side == "long" else "close_short", qty, px)
+        events.append(f"{s} 平{('多' if side == 'long' else '空')} {qty:.6g} @ {px:g}（{why}{tag}，盈亏 {pnl:+.2f}）")
+        return True
+    if st.get("tp_partial") and not p.tp_done:
+        pt = partial_tp_price(p, st)
+        if pt == pt and p.direction * (px - pt) >= 0:
+            frac = float(st.get("tp_frac", 0.5) or 0.5)
+            dq = lot_floor(cfg, s, mkt, p.qty * frac, px)
+            rest = lot_floor(cfg, s, mkt, p.qty - dq, px)
+            label = f"止盈（{float(st.get('tp_partial_r', 2.0)):g}R 平 {frac:.0%}）"
+            if dq <= 0 or rest <= 0:  # 拆不开（低于最小下单量）：整仓止盈
+                qty = p.qty
+                pnl = bk.close(s, px, kind, "止盈", venue, data_source=q.data_source, price_time=iso(q.ts))
+                _route(cfg, s, mkt, "close_long" if side == "long" else "close_short", qty, px)
+                bk.blocks[s] = p.direction
+                events.append(f"{s} 平{('多' if side == 'long' else '空')} {qty:.6g} @ {px:g}（止盈·仓位太小无法分批{tag}，盈亏 {pnl:+.2f}）")
+                return True
+            res = bk.resize(s, p.qty - dq, px, kind, label, venue, data_source=q.data_source, price_time=iso(q.ts))
+            _route(cfg, s, mkt, "close_long" if side == "long" else "close_short", res["qty"], px)
+            p.tp_done = 1
+            msg = f"{s} 止盈{('多' if side == 'long' else '空')} {res['qty']:.6g} @ {px:g}（{label}{tag}，已实现 {res['pnl']:+.2f}）"
+            if st.get("tp_breakeven"):
+                be = breakeven_price(p, st, bk.fee_for(mkt))
+                if p.direction * (be - p.stop_price) > 0:
+                    p.stop_price, p.be_moved = be, 1
+                    msg += f"；剩余止损移到保本 {be:.6g}"
+            bk.save()
+            events.append(msg)
+    return False
 
 
 def poll_stops(cfg: dict | None = None) -> list[str]:
@@ -96,19 +177,7 @@ def poll_stops(cfg: dict | None = None) -> list[str]:
                 continue
             bk.mark(s, px, iso(q.ts), q.data_source)
             touched = True
-            hit = (p.side == "long" and px <= p.stop_price) or (p.side == "short" and px >= p.stop_price)
-            tp = not hit and take_profit_hit(p, px, cfg.get("strategy") or {})
-            if not (hit or tp):
-                continue
-            side = p.side
-            qty = p.qty
-            mkt = p.market
-            why = "ATR止损" if hit else "止盈"
-            if hit or not (cfg.get("strategy") or {}).get("tp_reentry", False):
-                bk.blocks[s] = p.direction
-            pnl = bk.close(s, px, kind, why, venue, data_source=q.data_source, price_time=iso(q.ts))
-            _route(cfg, s, mkt, "close_long" if side == "long" else "close_short", qty, px)
-            events.append(f"{s} 平{('多' if side == 'long' else '空')} @ {px:g}（{why}·实时，盈亏 {pnl:+.2f}）")
+            _exit_checks(cfg, bk, s, p, px, kind, q, events, "·实时")
         if events:
             bk.snapshot("；".join(events)[:240])
             export_paper_csv(cfg)
@@ -439,9 +508,54 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
                 entry_notional=p.notional_entry, entry_price=p.entry_price, stop_price=p.stop_price,
                 entry_equity=_equity_near(led, p.entry_time, bk.starting),
                 max_risk=cfg["_pv_base_risk"]["max_risk_per_trade"], max_weight=cfg["_pv_base_risk"]["max_weight_per_name"])
+    _annotate_qty_tp(cfg, bk, rows)
     return {"generated_at": iso(utcnow()), "generated_at_la": la(utcnow()), "generated_at_sh": sh(utcnow()),
             "venue": venue, "equity": eq, "short_breaker": sb, "btc_regime": rg, "port_vol_k": cfg["_pv_k"],
             "rows": rows, "errors": errs}
+
+
+def _annotate_qty_tp(cfg: dict, bk, rows: list[dict]) -> None:
+    """每行补充：按官方精度取整后的下单数量（币 / 张）、分批止盈价、保本状态与信号离场条件（白话）。"""
+    from . import lots
+    from .backtest import partial_tp_target
+    st = cfg["strategy"]
+    k, frac = float(st.get("tp_partial_r", 2.0) or 2.0), float(st.get("tp_frac", 0.5) or 0.5)
+    eq = bk.equity()
+    for r in rows:
+        if r.get("error"):
+            continue
+        p = bk.positions.get(r["symbol"])
+        side = p.side if p else r.get("side")
+        mkt = p.market if p else (r.get("market") if r.get("market") not in (None, "-") else None)
+        r["exit_rule_cn"] = exit_rule_cn(side or "flat", st)
+        r.update(tp_enabled=bool(st.get("tp_partial")), tp_r=k, tp_frac=frac, tp_breakeven=bool(st.get("tp_breakeven")),
+                 tp_done=bool(p.tp_done) if p else False, be_moved=bool(p.be_moved) if p else False, tp_price=None)
+        if side not in ("long", "short") or not mkt:
+            continue
+        if p:
+            tp = partial_tp_target(side, p.entry_price, _init_stop(p), k)
+            r["init_stop"] = _init_stop(p)
+        else:
+            tp = partial_tp_target(side, float(r.get("ref_price") or 0), float(r.get("stop_price") or 0), k)
+        r["tp_price"] = tp if tp == tp else None
+        try:
+            lot = lots.spec(cfg["venue"], r["symbol"], mkt)
+            r.update(lots.describe(lot))
+            if p:
+                q = float(p.qty)
+            else:
+                px = float(r.get("ref_price") or 0)
+                q = lots.floor_qty(float(r.get("target_notional_usdt") or 0) / px, lot, px) if px > 0 else 0.0
+                if r.get("target_notional_usdt") and q <= 0:
+                    r["qty_note"] = "低于最小下单量"
+                r["target_qty"] = q
+                r["target_notional_usdt"] = q * px
+                r["target_weight"] = q * px / eq if eq else 0
+                if r.get("stop_pct"):
+                    r["risk_usdt"] = q * px * float(r["stop_pct"])
+            r["target_contracts"] = lots.contracts(q, lot) if lot.is_contract else None
+        except Exception as e:  # noqa: BLE001 —— 精度拿不到：数量按未取整显示并注明
+            r["qty_note"] = f"下单精度不可用：{e}"[:120]
 
 
 def _equity_near(ledger: list[dict], when: str, fallback: float) -> float:
@@ -540,17 +654,15 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
             row = rows.get(s)
             if row and row.get("side") != p.side and s not in bk.halts:
                 reason = "信号反转" if row.get("side") != "flat" else "信号转空仓"
-            elif (p.side == "long" and px <= p.stop_price) or (p.side == "short" and px >= p.stop_price):
-                reason = "ATR止损"
+            elif _exit_checks(cfg, bk, s, p, px, kind, q, events):
+                continue
+            elif s not in bk.halts and fast_exit_now(cfg, s, p):
+                reason = "快速离场"
                 bk.blocks[s] = p.direction
-            elif take_profit_hit(p, px, st):
-                reason = "止盈"
-                if not st.get("tp_reentry", False):
-                    bk.blocks[s] = p.direction
             if reason:
                 pnl = bk.close(s, px, kind, reason, venue, data_source=q.data_source, price_time=iso(q.ts))
                 _route(cfg, s, p.market, "close_long" if p.side == "long" else "close_short", p.qty, px)
-                events.append(f"{s} 平{('多' if p.side == 'long' else '空')} @ {px:g}（{reason}，盈亏 {pnl:+.2f}）")
+                events.append(f"{s} 平{('多' if p.side == 'long' else '空')} {p.qty:.6g} @ {px:g}（{reason}，盈亏 {pnl:+.2f}）")
         # 解除止损锁
         for s in list(bk.blocks):
             if s in rows and not block_active(bk, s, rows[s]):
@@ -584,7 +696,10 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         for s, (r, px, kind, z, q) in want.items():
             if alloc[s] < 1.0:
                 continue
-            qty = alloc[s] / px
+            qty = lot_floor(cfg, s, r["market"], alloc[s] / px, px)  # 按官方精度向下取整（币数量 / 整张）
+            if qty <= 0:
+                errors[s] = f"建议 {alloc[s]:.2f} U 低于该市场最小下单量，未开仓"
+                continue
             bk.open(symbol=s, market=r["market"], side=r["side"], qty=qty, price=px, price_kind=kind,
                     stop=z.stop_price, signal_bar=r["as_of"], reason=f"{r['advice']}信号（{st['rule_id']}）", venue=venue,
                     data_source=q.data_source, price_time=iso(q.ts))
@@ -623,7 +738,7 @@ def _rebalance(cfg, bk, rows: dict, opened: set, errors: dict) -> list[str]:
     held, prices, kinds, atrs = {}, {}, {}, {}
     for s, p in bk.positions.items():
         r = rows.get(s)
-        if s in opened or s in bk.halts or not r or r.get("side") != p.side:
+        if s in opened or s in bk.halts or not r or r.get("side") != p.side or p.tp_done:  # 已分批止盈的不再调仓（与回测一致）
             continue
         try:
             px, kind, q = _quote(cfg["venue"], s, p.market)
@@ -642,6 +757,12 @@ def _rebalance(cfg, bk, rows: dict, opened: set, errors: dict) -> list[str]:
         p = bk.positions[s]
         kind, q = kinds[s]
         new_qty = max(0.0, p.qty + it["delta_usdt"] / px)
+        dq = lot_floor(cfg, s, p.market, abs(new_qty - p.qty), px)
+        if dq <= 0:
+            continue  # 差额低于最小下单量
+        new_qty = p.qty + (dq if new_qty > p.qty else -dq)
+        if new_qty <= 0:
+            continue
         side, mkt = p.side, p.market
         res = bk.resize(s, new_qty, px, kind, f"调仓（目标 {it['target_usdt']:.2f} USDT，偏离>{float(st['rebalance_band']):.0%}）",
                         cfg["venue"], data_source=q.data_source, price_time=iso(q.ts))
@@ -653,6 +774,40 @@ def _rebalance(cfg, bk, rows: dict, opened: set, errors: dict) -> list[str]:
             events.append(f"{s} 加仓{('多' if side == 'long' else '空')} {res['qty']:.6g} @ {px:g}（调仓，止损不变 {p.stop_price:.6g}）")
     RB.set_last_bar(bk.conn, bar)
     return events
+
+
+_FAST_CACHE: dict = {}
+
+
+def fast_frame(cfg: dict, sym: str, market: str, tf: str, n: int):
+    """快速层 K 线：5m / 1d 用官方原生 K 线；10m 由官方 1m 聚合（qtw/fastlayer.aggregate）。都走 SQLite 缓存。"""
+    from . import fastlayer
+    if tf == "10m":
+        raw = mcache.candles(cfg["venue"], sym, "1m", min(3000, 10 * n + 20), market)
+        return fastlayer.aggregate(raw, 10, 1)
+    return mcache.candles(cfg["venue"], sym, tf, n, market)
+
+
+def fast_exit_now(cfg: dict, sym: str, p) -> bool:
+    """快速离场（strategy.fast_exit_tf ≠ off）：最新已收盘快周期 K 线（收盘晚于入场时间）已逆持仓方向破 EMA(n) 连续 confirm 根。
+    与回测 FastSeries.walk 的 fast 事件同一判定（fastlayer.ema_break_flags）。数据拿不到时不触发。"""
+    from . import fastlayer
+    st = cfg.get("strategy") or {}
+    tf = str(st.get("fast_exit_tf", "off") or "off")
+    if tf == "off":
+        return False
+    n, k = int(st.get("fast_exit_n", 50) or 50), int(st.get("fast_exit_confirm", 2) or 1)
+    try:
+        df = fast_frame(cfg, sym, p.market, tf, max(4 * n, 200))
+        if len(df) < n + k:
+            return False
+        if pd.Timestamp(df["close_time"].iloc[-1]) <= pd.Timestamp(p.entry_time):
+            return False
+        bl, bs = fastlayer.ema_break_flags(df["close"].to_numpy(), n, k)
+        return bool((bl if p.side == "long" else bs)[-1])
+    except Exception as e:  # noqa: BLE001
+        log.warning("快速离场判断失败 %s：%s", sym, e)
+        return False
 
 
 def _px_ok(x) -> bool:

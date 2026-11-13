@@ -37,6 +37,9 @@ class Position:
     signal_bar: str
     venue: str = ""
     mark_source: str = ""
+    init_stop: float = 0.0  # 初始止损（R0 = |入场价 − 初始止损|）；旧持仓加载时用当前止损回填
+    tp_done: int = 0  # 已分批止盈
+    be_moved: int = 0  # 剩余仓位止损已移到保本价
 
     @property
     def direction(self) -> int:
@@ -139,6 +142,9 @@ class PaperBook:
                               self._q("SELECT * FROM paper_positions")}
             for p in self.positions.values():
                 p.venue, p.mark_source = p.venue or "", p.mark_source or ""
+                p.tp_done, p.be_moved = int(p.tp_done or 0), int(p.be_moved or 0)
+                if not (p.init_stop and float(p.init_stop) > 0):
+                    p.init_stop = float(p.stop_price)  # 旧持仓：尚未移动过的止损即初始止损
             healed = self._heal_venues()
             self.blocks = {r["symbol"]: int(r["blocked_signal"]) for r in self._q("SELECT * FROM paper_blocks")}
             self.halts = {r["symbol"] for r in self._q("SELECT symbol FROM paper_halts")}
@@ -213,7 +219,7 @@ class PaperBook:
             self.realized -= fee
             now = iso(utcnow())
             self.positions[symbol] = Position(symbol, market, side, qty, price, now, stop, price, now, notional, fee,
-                                              signal_bar, venue, data_source)
+                                              signal_bar, venue, data_source, init_stop=float(stop))
             _ins(c, "paper_fills", dict(time=now, symbol=symbol, market=market, side="buy" if side == "long" else "sell",
                                         action="open", qty=qty, price=price, price_kind=price_kind, notional_usdt=notional,
                                         fee_usdt=fee, realized_pnl_usdt=-fee, reason=reason, mode=mode, venue=venue,
@@ -278,7 +284,7 @@ class PaperBook:
 
     def last_stop_time(self, symbol: str) -> str:
         """该标的最近一次 ATR 止损或止盈（两者都会锁定同向再入场）平仓的成交时间（UTC ISO）；没有则返回空串。"""
-        r = self._q("SELECT time FROM paper_fills WHERE symbol=? AND action='close' AND reason IN ('ATR止损','止盈') "
+        r = self._q("SELECT time FROM paper_fills WHERE symbol=? AND action='close' AND reason IN ('ATR止损','止盈','保本止损','快速离场') "
                     "ORDER BY fill_id DESC LIMIT 1", (symbol,))
         return r[0]["time"] if r else ""
 
@@ -336,7 +342,11 @@ class PaperBook:
                 "mode": (cl or op or {}).get("mode") or "paper",
                 "venue": (cl or op or {}).get("venue") or "",
                 "mark_price": mark, "mark_source": mark_src, "mark_time": mark_time,
-                "resizes": len(adj),
+                "resizes": len([a for a in adj if not str(a.get("reason") or "").startswith("止盈")]),
+                "exit_qty": float(cl["qty"]) if cl else None,
+                "partial_tp_qty": sum(float(a.get("qty") or 0) for a in adj if str(a.get("reason") or "").startswith("止盈")),
+                "partial_tp_pnl_usdt": sum(float(a.get("realized_pnl_usdt") or 0) for a in adj if str(a.get("reason") or "").startswith("止盈")),
+                "partial_tp": any(str(a.get("reason") or "").startswith("止盈") for a in adj),
             }
 
         pending: dict[str, list] = {}

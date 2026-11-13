@@ -48,6 +48,12 @@ class Trade:
     status: str = "open"
     adj_pnl_usdt: float = 0.0  # 调仓减仓部分已实现的毛盈亏（不含手续费）
     resizes: int = 0  # 调仓次数（rebalance_band > 0 时）
+    init_stop: float = float("nan")  # 初始止损（R0 = |入场价 − 初始止损|；保本后 stop_price 会移动）
+    tp_done: bool = False  # 已分批止盈（tp_partial）
+    be_moved: bool = False  # 剩余仓位止损已移到保本价
+    tp_time: str = ""
+    tp_price: float = float("nan")
+    tp_pnl_usdt: float = 0.0  # 分批止盈那部分的毛盈亏（已含在 adj_pnl_usdt 内）
 
 
 # 空头熔断影子账本的固定仓位口径（= 默认风控参数）
@@ -81,7 +87,21 @@ def short_breaker(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     return {"mask": {t: bool(v < 0) for t, v in trail.items()}, "blocked_now": now < 0, "trailing_pnl": now, "bars": N}
 
 
-def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
+def partial_tp_target(side: str, entry: float, init_stop: float, k: float) -> float:
+    """分批止盈价 = 入场价 ± k × R0，R0 = |入场价 − 初始止损|（回测与引擎同一公式）。"""
+    R = abs(float(entry) - float(init_stop))
+    if not (R > 0 and k > 0):
+        return float("nan")
+    return float(entry) + (1 if side == "long" else -1) * k * R
+
+
+def breakeven_stop(side: str, entry: float, fee_rate: float, with_fees: bool = True) -> float:
+    """保本止损价：入场价；with_fees 时再加两条腿 taker 手续费（多 ×(1+2f)，空 ×(1−2f)）。"""
+    f = 2 * float(fee_rate) if with_fees else 0.0
+    return float(entry) * (1 + f) if side == "long" else float(entry) * (1 - f)
+
+
+def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict | None = None) -> dict:
     st, rk = cfg["strategy"], cfg["risk"]
     # 分市场 taker 费率：多单在现货、空单在永续成交（下一根开盘市价 = taker），每条市价腿各收一次
     FEE = {"spot": taker_rate(cfg, "spot"), "perp": taker_rate(cfg, "perp")}
@@ -140,6 +160,11 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     # 触及即全部平仓。tp_reentry = False 时止盈后与止损一样锁定，直到信号改变才允许再开同向仓。
     tp_r, tp_re = float(st.get("tp_r", 0) or 0), bool(st.get("tp_reentry", False))
     rb_band, rb_mode = float(st.get("rebalance_band", 0) or 0), str(st.get("rebalance_mode", "stop") or "stop")
+    # 可选：分批止盈 + 保本（默认关闭）。见 settings.tp_partial 注释与 partial_tp_target / breakeven_stop
+    ptp_on, ptp_r, ptp_f = bool(st.get("tp_partial", False)), float(st.get("tp_partial_r", 2.0) or 2.0), float(st.get("tp_frac", 0.5) or 0.5)
+    be_on, be_fee = bool(st.get("tp_breakeven", False)), bool(st.get("tp_be_fees", True))
+    FX = fast or {}  # 可选快速层：{(market, symbol): fastlayer.FastSeries}，盘中按快周期逐根判定止损 / 止盈 / 快速离场
+    fx_stats = {"fast_exits": 0, "fast_bars_resolved": 0}
     entry_i: dict[str, int] = {}
     blocked: dict[str, int] = {}
     # 可选止损反手（stop-and-reverse，默认关闭 sar_hold_bars = 0）：第 i 根 ATR 止损后，第 i+1 根开盘开反向仓，
@@ -170,6 +195,26 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         t.return_pct = t.pnl_usdt / t.notional_usdt if t.notional_usdt else 0.0
         t.bars_held, t.status = i - entry_i.pop(s), "closed"
         trades.append(t)
+
+    def _partial(s: str, px: float, when_: str):
+        """分批止盈：按 px 平掉 tp_frac（taker），按加权入场价结算这部分盈亏；可选把剩余止损移到保本价。"""
+        nonlocal realized
+        t = pos[s]
+        d = 1 if t.side == "long" else -1
+        dq = t.qty * ptp_f
+        f = abs(dq * px) * FEE[t.market]
+        g = d * dq * (float(px) - t.entry_price)
+        realized += g - f
+        t.adj_pnl_usdt += g
+        t.tp_pnl_usdt += g
+        t.fees_usdt += f
+        t.notional_usdt -= dq * t.entry_price
+        t.qty -= dq
+        t.tp_done, t.tp_time, t.tp_price = True, str(when_), float(px)
+        if be_on:
+            be = breakeven_stop(t.side, t.entry_price, FEE[t.market], be_fee)
+            if d * (be - t.stop_price) > 0:
+                t.stop_price, t.be_moved = be, True
 
     for i in range(warm + 1, len(times)):
         when = pd.Timestamp(times[i]).isoformat()
@@ -245,7 +290,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
             f = notional * FEE[market_of(sg)]
             realized -= f
             tgt = float(px) + (1 if sg > 0 else -1) * tp_r * abs(float(px) - z.stop_price) if tp_r > 0 else float("nan")
-            pos[s] = Trade(s, market_of(sg), side_of(sg), when, float(px), qty, notional, z.stop_price, tgt, fees_usdt=f)
+            pos[s] = Trade(s, market_of(sg), side_of(sg), when, float(px), qty, notional, z.stop_price, tgt, fees_usdt=f,
+                           init_stop=float(z.stop_price))
             entry_i[s] = i
             if s in sarnew:
                 sarf[s] = -sg
@@ -281,7 +327,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         #       所有已有仓的目标再按「总敞口额度 − 本根新开仓名义」等比缩放；
         #       |当前名义 − 目标| / 目标 > rebalance_band 才调整；先减后加，加仓受剩余总敞口限制；止损价不变。
         if rb_band > 0 and pos:
-            held = {q: pos[q] for q in pos if entry_i[q] != i and q not in sarf}
+            held = {q: pos[q] for q in pos if entry_i[q] != i and q not in sarf and not pos[q].tp_done}
             new_n = sum(abs(pos[q].qty) * P(pos[q].side, "open", q)[i] for q in pos if entry_i[q] == i)
             g_now = sum(abs(x.qty) * P(x.side, "open", y)[i] for y, x in pos.items())
             rb_plan = RB.plan(held, {q: float(P(t.side, "open", q)[i]) for q, t in held.items()},
@@ -311,33 +357,69 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
                     t.fees_usdt += f
                 t.resizes += 1
         # 3) 盘中止损 / 止盈。开盘已越过止盈价 → 按开盘价止盈；否则同一根同时触及时保守地先算止损。
+        #    分批止盈（tp_partial）：开盘越过分批价 → 开盘价平 tp_frac，此后本根剩余时间按保本止损继续检查；
+        #    盘中触及 → 按分批价平 tp_frac，保本止损从下一根起生效（4h 内先后顺序未知）。
+        #    有快速层数据（fast）时改为逐根快周期 K 线按时间顺序判定（见 _walk_fast）。
+        nxt = pd.Timestamp(times[i + 1]) if i + 1 < len(times) else pd.Timestamp(times[i]) + (pd.Timestamp(times[i]) - pd.Timestamp(times[i - 1]))
         for s in list(pos):
             t = pos[s]
             ws = sarf.get(s)
+            fs = FX.get((t.market, s))
+            if fs is not None:
+                ev = fs.walk(t, pd.Timestamp(times[i]), nxt, tp_r=tp_r if s not in sarf else 0.0,
+                             ptp=(ptp_r, ptp_f) if ptp_on and not t.tp_done and s not in sarf else None,
+                             be=breakeven_stop(t.side, t.entry_price, FEE[t.market], be_fee) if be_on else None,
+                             fast_exit=s not in sarf)
+                if ev is not None:
+                    fx_stats["fast_bars_resolved"] += 1
+                    for kind, px, tw in ev:
+                        if kind == "ptp":
+                            _partial(s, px, tw)
+                            continue
+                        reason = {"stop": "保本止损" if t.be_moved else "ATR止损", "tp": "止盈", "fast": "快速离场"}[kind]
+                        close(s, px, when, reason, i)
+                        if kind == "fast":
+                            fx_stats["fast_exits"] += 1
+                        if kind != "tp" or not tp_re:
+                            blocked[s] = 1 if t.side == "long" else -1
+                        if kind == "stop" and ws is not None:
+                            blocked[s] = ws
+                        elif kind == "stop" and sar_h > 0 and not t.be_moved:
+                            sarq[s] = -1 if t.side == "long" else 1
+                        break
+                    continue
             o, h, lo = P(t.side, "open", s)[i], P(t.side, "high", s)[i], P(t.side, "low", s)[i]
             tg = t.target_price
+            if ptp_on and not t.tp_done and s not in sarf:
+                pt = partial_tp_target(t.side, t.entry_price, t.init_stop, ptp_r)
+                if pt == pt and ((t.side == "long" and o >= pt) or (t.side == "short" and o <= pt)):
+                    _partial(s, o, when)
             if tp_r > 0 and ((t.side == "long" and o >= tg) or (t.side == "short" and o <= tg)):
                 close(s, o, when, "止盈", i)
                 if not tp_re:
                     blocked[s] = 1 if t.side == "long" else -1
             elif t.side == "long" and lo <= t.stop_price:
-                close(s, min(o, t.stop_price), when, "ATR止损", i)
+                close(s, min(o, t.stop_price), when, "保本止损" if t.be_moved else "ATR止损", i)
                 blocked[s] = 1
                 if ws is not None:
                     blocked[s] = ws
-                elif sar_h > 0:
+                elif sar_h > 0 and not t.be_moved:
                     sarq[s] = -1
             elif t.side == "short" and h >= t.stop_price:
-                close(s, max(o, t.stop_price), when, "ATR止损", i)
+                close(s, max(o, t.stop_price), when, "保本止损" if t.be_moved else "ATR止损", i)
                 blocked[s] = -1
                 if ws is not None:
                     blocked[s] = ws
-                elif sar_h > 0:
+                elif sar_h > 0 and not t.be_moved:
                     sarq[s] = 1
             elif tp_r > 0 and ((t.side == "long" and h >= tg) or (t.side == "short" and lo <= tg)):
                 close(s, tg, when, "止盈", i)
                 if not tp_re:
                     blocked[s] = 1 if t.side == "long" else -1
+            elif ptp_on and not t.tp_done and s not in sarf:
+                pt = partial_tp_target(t.side, t.entry_price, t.init_stop, ptp_r)
+                if pt == pt and ((t.side == "long" and h >= pt) or (t.side == "short" and lo <= pt)):
+                    _partial(s, pt, when)
         # 4) 收盘计价
         eq = realized + sum(upnl(t, P(t.side, "close", s)[i]) for s, t in pos.items())
         g = sum(abs(t.qty) * P(t.side, "close", s)[i] for s, t in pos.items())
@@ -383,6 +465,10 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         "fees_usdt": sum(t.fees_usdt for t in closed + open_trades),
         "stop_exits": sum(1 for t in closed if t.exit_reason == "ATR止损"),
         "take_profit_exits": sum(1 for t in closed if t.exit_reason == "止盈"),
+        "partial_tp_trades": sum(1 for t in closed + open_trades if t.tp_done),
+        "breakeven_exits": sum(1 for t in closed if t.exit_reason == "保本止损"),
+        "fast_exits": fx_stats["fast_exits"], "fast_bars_resolved": fx_stats["fast_bars_resolved"],
+        "tp_partial": ptp_on, "tp_partial_r": ptp_r, "tp_frac": ptp_f, "tp_breakeven": be_on, "tp_be_fees": be_fee,
         "avg_gross_exposure_pct": float((ec["gross_exposure"] / ec["equity"]).mean()),
         "benchmark": f"{btc} 现货买入持有", "benchmark_return": bh,
         "signal_rule": "combine(spot_sma, perp_sma): 现货多且永续不空→现货多；永续空且现货不多→永续空；冲突→空仓",
