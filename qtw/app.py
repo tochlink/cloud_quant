@@ -361,7 +361,7 @@ def _dashboard_data() -> dict:
                  "gains": sum(float(f["realized_pnl_usdt"]) for f in week_fills if float(f["realized_pnl_usdt"]) > 0),
                  "losses": sum(float(f["realized_pnl_usdt"]) for f in week_fills if float(f["realized_pnl_usdt"]) < 0),
                  "fills": len(week_fills)},
-        "positions": positions, "recent_fills": list(reversed(fills[-12:])),
+        "positions": positions, "recent_fills": list(reversed(fills[-40:])),
         "ledger": [{"time": r["time"], "equity": float(r["equity_usdt"]), "gross": float(r["gross_exposure_usdt"]),
                     "net": float(r["net_exposure_usdt"])} for r in ledger[-300:]],
         "drawdown": dd[-300:], "max_drawdown": min(dd) if dd else 0, "closed_trades": len(closed),
