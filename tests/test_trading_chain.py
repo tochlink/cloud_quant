@@ -294,3 +294,25 @@ def test_live_send_error_auto_halts_symbol(tmp_path, monkeypatch):
     assert "BTCUSDT" in b.halts
     o = b.orders()[-1]
     assert o["status"] == "error" and "自动暂停" in o["detail"] and "51008" in o["detail"]
+
+
+def test_kill_switch_warns_when_live_was_armed(tmp_path, monkeypatch):
+    """紧急停止不发单；停止前实盘已开时要明确提示交易所持仓仍在，并留 not_sent 日志。"""
+    cfg, b = _book(tmp_path, monkeypatch)
+    from qtw import worker
+    monkeypatch.setattr(worker, "stop", lambda *a, **k: None)
+    b.open(symbol="BTCUSDT", market="spot", side="long", qty=0.002, price=50000, price_kind="last",
+           stop=45000, signal_bar="x", reason="t", venue="okx")
+    monkeypatch.setattr(engine, "_quote", lambda v, s, m: (51000, "last", _quote(s, m, 51000)))
+    monkeypatch.setattr(engine, "_trader", lambda cfg: (_ for _ in ()).throw(AssertionError("no send")))
+    armed = S._merge(cfg, {"live": {"mode": "live", "live_enabled": True, "confirm_phrase": S.LIVE_CONFIRM_PHRASE}})
+    out = engine.kill_switch(armed)
+    assert b.positions == {}
+    assert any("交易所上的实盘持仓仍在" in e for e in out["events"])
+    o = b.orders()[-1]
+    assert o["status"] == "not_sent" and o["symbol"] == "BTCUSDT" and o["mode"] == "live"
+    # 未开实盘：不提示
+    b.open(symbol="ETHUSDT", market="perp", side="short", qty=0.05, price=2000, price_kind="mark",
+           stop=2200, signal_bar="x", reason="t", venue="okx")
+    out = engine.kill_switch(cfg)
+    assert not any("实盘持仓仍在" in e for e in out["events"])

@@ -964,7 +964,13 @@ def set_halt(symbol: str, halted: bool, cfg: dict | None = None) -> dict:
         return {"ok": True, "symbol": symbol, "halted": symbol in bk.halts}
 
 def kill_switch(cfg: dict | None = None) -> dict:
-    """紧急停止：关闭自动交易与实盘开关，并按最新公共价平掉全部纸面持仓。"""
+    """紧急停止：关闭自动交易与实盘开关，并按最新公共价平掉全部纸面持仓。
+    不向交易所发任何订单。若停止前实盘闸门是开着的，交易所上的实盘持仓不会被平：逐个写一条 not_sent 订单日志，
+    并在返回的 events 里明确提示到交易所手动处理（否则账本显示已平、交易所仍持仓，容易误以为已经全部离场）。"""
+    try:
+        was_live = S.live_armed(cfg or S.load())
+    except Exception:  # noqa: BLE001
+        was_live = False
     cfg = S.update({"worker": {"enabled": False}, "live": {"mode": "paper", "live_enabled": False, "confirm_phrase": ""}})
     from . import worker
     worker.stop()
@@ -978,8 +984,15 @@ def kill_switch(cfg: dict | None = None) -> dict:
             except MarketDataError:
                 # 拿不到新报价时使用该持仓最后一次真实公共标记价（明确标注时间），不编造价格
                 px, kind, src, pt = p.mark_price, f"last_real_mark@{p.mark_time}", p.mark_source, p.mark_time
+            qty, side, mkt = p.qty, p.side, p.market
             pnl = bk.close(s, px, kind, "紧急停止(Kill Switch)", cfg["venue"], data_source=src, price_time=pt)
             events.append(f"{s} 已平仓 @ {px:g}（{kind}），盈亏 {pnl:+.2f}")
+            if was_live:
+                _log_order(mode="live", venue=cfg["venue"], symbol=s, market=mkt,
+                           action="close_long" if side == "long" else "close_short", qty=qty, ref_price=px,
+                           status="not_sent", detail="紧急停止只平纸面账本，未向交易所发单；请到交易所手动处理该实盘持仓")
+        if was_live and events:
+            events.append("注意：停止前实盘已开启，紧急停止不会向交易所发单，交易所上的实盘持仓仍在，请到交易所手动平仓")
         bk.snapshot("Kill Switch：全部平仓并停止自动交易")
         export_paper_csv(cfg)
     return {"time": iso(utcnow()), "events": events}
