@@ -32,6 +32,7 @@ class Quote:
     source_host: str = ""
     data_source: str = ""
     fetched_at: str = ""
+    recv_at: float = 0.0  # 本进程收到该报价的时间（epoch 秒），用于测「事件 → 决策」延迟
 
 
 class HttpJson:

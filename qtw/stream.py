@@ -252,6 +252,8 @@ def _ensure_cb_dispatcher() -> None:
 
 
 def _put(q: Quote):
+    if not q.recv_at:
+        q.recv_at = time.time()
     with _lock:
         _quotes[(q.venue.lower(), q.symbol, q.market)] = q
         if q.data_source.endswith("_ws"):
@@ -268,6 +270,42 @@ def _put(q: Quote):
             qref.put_nowait((cb, q))
         except Exception:  # noqa: BLE001
             log.exception("quote callback enqueue failed")
+
+
+_on_bar_close = []  # 回调：每个周期 K 线「已收盘确认」事件（经 _cb_queue 旁路）
+# 由官方 1m 收盘确认推导的更慢周期收盘：1m 桶的结束时刻正好落在该周期边界（UTC 对齐）时触发
+DERIVED_BAR_MS = {"5m": 300_000, "10m": 600_000, "1h": 3_600_000, "1d": 86_400_000}
+_BAR_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+
+
+def on_bar_close(cb):
+    if cb not in _on_bar_close:
+        _on_bar_close.append(cb)
+    _ensure_cb_dispatcher()
+
+
+def bar_close_events(venue: str, market: str, symbol: str, interval: str, open_ms: int, recv_at: float) -> list[dict]:
+    """一根官方已收盘 K 线 → 收盘事件列表（本周期 + 由 1m 推导的 5m/10m/1h/1d）。纯函数，便于测试。"""
+    end = int(open_ms) + _BAR_MS.get(interval, 0)
+    evs = [{"venue": venue, "market": market, "symbol": symbol, "tf": interval, "close_ms": end, "recv_at": recv_at}]
+    if interval == "1m":
+        for tf, ms in DERIVED_BAR_MS.items():
+            if end % ms == 0:
+                evs.append({"venue": venue, "market": market, "symbol": symbol, "tf": tf, "close_ms": end,
+                            "recv_at": recv_at, "derived_from": "1m"})
+    return evs
+
+
+def _fire_bar_close(venue, market, symbol, interval, open_ms) -> None:
+    if not _on_bar_close:
+        return
+    _ensure_cb_dispatcher()
+    for ev in bar_close_events(venue, market, symbol, interval, open_ms, time.time()):
+        for cb in list(_on_bar_close):
+            try:
+                _cb_queue.put_nowait((cb, ev))
+            except Exception:  # noqa: BLE001
+                log.exception("bar-close enqueue failed")
 
 
 def on_quote(cb):
@@ -479,6 +517,10 @@ def _store_closed(venue, market, symbol, interval, open_ms, o, h, l, c, v, sourc
     """
     args = (venue, market, symbol, interval, int(open_ms), float(o), float(h), float(l), float(c),
             float(v or 0), source, host, iso(utcnow()))
+    try:
+        _fire_bar_close(venue, market, symbol, interval, open_ms)
+    except Exception:  # noqa: BLE001
+        log.exception("bar-close fire failed")
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
