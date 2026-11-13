@@ -75,5 +75,9 @@ class GatePublic:
         return self._q(Quote(symbol, "perp", float(d["mark_price"]), "mark", now, self.venue))
 
     def perp_spec(self, symbol: str) -> dict:
-        d = self.http.get(f"/futures/usdt/contracts/{pair(symbol)}")
-        return {"ct_val": float(d["quanto_multiplier"]), "lot_sz": 1.0, "min_sz": float(d.get("order_size_min", 1))}
+        """下单用合约规格；与 qtw/lots.gate_perp_lot 同一口径（带 X-Gate-Size-Decimal: 1，小数合约张步长 = 最小张数）。"""
+        from ..lots import GATE_SIZE_DECIMAL, gate_perp_lot
+        d = self.http.get(f"/futures/usdt/contracts/{pair(symbol)}", headers=GATE_SIZE_DECIMAL)
+        lot = gate_perp_lot(symbol, d)
+        return {"ct_val": lot.ct_val, "lot_sz": lot.contract_step, "min_sz": lot.min_qty / lot.ct_val,
+                "decimal": bool(d.get("enable_decimal"))}

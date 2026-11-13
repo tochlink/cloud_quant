@@ -62,25 +62,29 @@ def _fetch(venue: str, symbol: str, market: str) -> Lot:
             prec = int(d.get("amount_precision", 8))
             return Lot("gate", symbol, market, 10.0 ** -prec, float(d.get("min_base_amount") or 0),
                        min_quote=float(d.get("min_quote_amount") or 0), source="gate /spot/currency_pairs")
-        return gate_perp_lot(symbol, h.get(f"/futures/usdt/contracts/{b}_USDT"))
+        return gate_perp_lot(symbol, h.get(f"/futures/usdt/contracts/{b}_USDT", headers=GATE_SIZE_DECIMAL))
     raise ValueError(venue)
 
 
+GATE_SIZE_DECIMAL = {"X-Gate-Size-Decimal": "1"}  # Gate 合约数量字段按字符串（可含小数）返回 / 接收
+
+
 def gate_perp_lot(symbol: str, d: dict) -> Lot:
-    """Gate USDT 永续合约元数据 → Lot。enable_decimal 的合约允许 0.001 张步长，接口返回 order_size_min = 0；
-    0 是有效值（不是缺失），不能用 `or 1` 回退成 1 张——否则 SOL / ETH / XRP 等最小量被放大到 1 张
-    （SOL 1 张 = 1 SOL），小资金开仓被跳过、调仓按整张取整。缺失时才按 1 张；最小量不低于一个步长。"""
+    """Gate USDT 永续合约元数据 → Lot（张步长 / 最小张数 × quanto_multiplier = 币）。
+    元数据必须带请求头 X-Gate-Size-Decimal: 1 取：不带时小数合约（enable_decimal）的 order_size_min 被截断成 0。
+    带头后 SOL / ETH / XRP 实测 order_size_min = 0.1 张（2026-11-13）。小数合约的张步长取 order_size_min；
+    拿不到正数最小量时退回 1 张（宁可最小量偏大不下单，也不发会被拒绝或截断的数量）。"""
     ct = float(d["quanto_multiplier"])
-    cstep = 0.001 if d.get("enable_decimal") else 1.0
     raw = d.get("order_size_min")
-    mn = float(raw) if raw not in (None, "") else 1.0
+    mn = float(raw) if raw not in (None, "") else 0.0
+    cstep = (mn if mn > 0 else 1.0) if d.get("enable_decimal") else 1.0
     mn = max(mn, cstep)
-    return Lot("gate", symbol, "perp", cstep * ct, mn * ct, ct, cstep, source="gate /futures/usdt/contracts")
+    return Lot("gate", symbol, "perp", cstep * ct, mn * ct, ct, cstep, source="gate /futures/usdt/contracts (X-Gate-Size-Decimal: 1)")
 
 
 def spec(venue: str, symbol: str, market: str) -> Lot:
     venue = venue.lower()
-    key = f"lot2:{venue}:{market}:{symbol}"  # lot2：修正 Gate 小数合约最小量后弃用旧缓存
+    key = f"lot3:{venue}:{market}:{symbol}"  # lot3：Gate 合约元数据改带 X-Gate-Size-Decimal 头后弃用旧缓存
     now = time.time()
     with _LOCK:
         x = _MEM.get(key)

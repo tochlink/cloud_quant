@@ -46,12 +46,12 @@ class HttpJson:
         self.s.headers.update({"User-Agent": "qtw/2.0 (+public market data)", "Accept": "application/json"})
         apply_proxy_to_session(self.s)
 
-    def get(self, path: str, params: dict | None = None):
+    def get(self, path: str, params: dict | None = None, headers: dict | None = None):
         errors: list[str] = []
         for base in self.base_urls:
             for attempt in range(self.max_retries):
                 try:
-                    r = self.s.get(base + path, params=params, timeout=self.timeout)
+                    r = self.s.get(base + path, params=params, timeout=self.timeout, headers=headers)
                 except requests.RequestException as e:
                     errors.append(f"{base}: {type(e).__name__}")
                     time.sleep(self.backoff * (attempt + 1))

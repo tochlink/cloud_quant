@@ -26,12 +26,12 @@ def sign(secret: str, method: str, path: str, query: str, body: str, ts: str) ->
 
 
 def build(keys: dict, method: str, path: str, payload: dict | None = None, query: str = "",
-          testnet: bool = False, ts: str | None = None) -> dict:
+          testnet: bool = False, ts: str | None = None, extra_headers: dict | None = None) -> dict:
     body = json.dumps(payload, separators=(",", ":")) if payload else ""
     ts = ts or str(int(time.time()))
     host = TESTNET if testnet else LIVE
     headers = {"KEY": keys["api_key"], "Timestamp": ts, "SIGN": sign(keys["secret"], method, path, query, body, ts),
-               "Content-Type": "application/json", "Accept": "application/json"}
+               "Content-Type": "application/json", "Accept": "application/json", **(extra_headers or {})}
     url = host + PREFIX + path + (f"?{query}" if query else "")
     return {"method": method, "url": url, "headers": headers, "body": body}
 
@@ -57,6 +57,14 @@ def order_request(symbol: str, market: str, action: str, qty: float, price: floa
         return "/spot/orders", {"currency_pair": pair, "side": "sell", "type": "market",
                                 "time_in_force": "ioc", "amount": f"{qty:.12g}"}
     spec = spec or {"ct_val": 1}
+    if spec.get("decimal"):  # 小数合约：张数按步长向下取整，以字符串发送（需请求头 X-Gate-Size-Decimal: 1）
+        step = float(spec.get("lot_sz") or 1.0)
+        n = math.floor(qty / spec["ct_val"] / step + 1e-9) * step
+        s = f"{n:.10g}"
+        p = {"contract": pair, "price": "0", "tif": "ioc", "size": f"-{s}" if action == "open_short" else s}
+        if action == "close_short":
+            p["reduce_only"] = True
+        return "/futures/usdt/orders", p
     n = int(math.floor(qty / spec["ct_val"] + 1e-9))
     p = {"contract": pair, "price": "0", "tif": "ioc", "size": -n if action == "open_short" else n}
     if action == "close_short":
@@ -70,7 +78,8 @@ class GateTrader:
 
     def preview_order(self, symbol, market, action, qty, price, spec=None) -> dict:
         path, p = order_request(symbol, market, action, qty, price, spec)
-        return redacted(build(self.keys, "POST", path, p, testnet=self.testnet and market == "perp"))
+        hdr = {"X-Gate-Size-Decimal": "1"} if isinstance(p.get("size"), str) else None
+        return redacted(build(self.keys, "POST", path, p, testnet=self.testnet and market == "perp", extra_headers=hdr))
 
     def place_order(self, cfg: dict, symbol, market, action, qty, price, spec=None):
         from .guard import require
@@ -81,7 +90,8 @@ class GateTrader:
             _send(build(self.keys, "POST", f"/futures/usdt/positions/{symbol[:-4]}_USDT/leverage",
                         None, query="leverage=1", testnet=self.testnet))
         path, p = order_request(symbol, market, action, qty, price, spec)
-        return _send(build(self.keys, "POST", path, p, testnet=self.testnet and market == "perp"))
+        hdr = {"X-Gate-Size-Decimal": "1"} if isinstance(p.get("size"), str) else None
+        return _send(build(self.keys, "POST", path, p, testnet=self.testnet and market == "perp", extra_headers=hdr))
 
     def balance(self):
         """只读：查询现货账户余额（不下单）。"""
