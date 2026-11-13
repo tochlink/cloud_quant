@@ -4468,3 +4468,16 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 结论：不改默认、不改代码（生产仍 1 倍）。对 kean 要的「默认 10 倍、最高 100 倍」杠杆功能给出硬约束：若用逐仓，**每笔空单的实际杠杆必须按 \(L_{eff}=\min\big(L,\ \lfloor 1/(d+\text{mmr}+\text{缓冲})\rfloor\big)\) 封顶**，\(d=(\text{止损}-\bar P)/\bar P\)，并在每次调仓加仓后重算（补保证金或降杠杆），否则 10 倍会在历史上把 28% 的空单变成「止损之前先强平」、整段少 15–19 点；因为全窗口跳空强平为 0，这样封顶后的结果与基线相同。或者用全仓保证金（总敞口 ≤ 1 倍权益时全仓强平需要账户几乎全部亏光，不会先于止损）。「杠杆放大敞口」模式另当别论，本轮不涉及。
 - 脚本：`scratch/liq_long.py`（补丁 `run_backtest` 源码后 exec，不改仓库代码）；输出：`output/research_isolated_liquidation_leverage_long_history.csv`、`output/research_isolated_liquidation_stop_distance.csv`（不入库）。
 - 下一族建议：把上面的逐仓杠杆封顶写成纯函数 + 测试，供杠杆功能接入引擎时使用（等该功能的工作流落地后再接）；研究侧继续轮换未覆盖的仓位构建 / 执行族。
+
+### 逐仓杠杆封顶纯函数 `qtw/margin.py`（2026-11-13 10:35 PST，引擎 / 风控工程，未接入生产）
+
+- 来源：上一节「逐仓强平 vs 2×ATR 止损」的结论落地为可测试的纯函数，供 kean 要的杠杆功能（默认 10 倍、最高 100 倍）接入引擎 / 实盘时调用。生产仍为 1 倍（`perp_leverage=1`），本次不改任何默认、信号、仓位或回测结果。
+- 公式（线性 USDT 永续逐仓近似，与 `scratch/liq_long.py` 一致）：
+  - 强平价：多 \(liq=\bar P(1-1/L+\text{mmr})\)，空 \(liq=\bar P(1+1/L-\text{mmr})\)。
+  - 止损不利距离（以**加权均价**为锚）：多 \(d=(\bar P-\text{stop})/\bar P\)，空 \(d=(\text{stop}-\bar P)/\bar P\)；锁利止损时 \(d<0\)。
+  - 安全上限：\(L_{safe}=\text{clip}\big(\lfloor 1/(d+\text{mmr}+\text{buffer})\rfloor,\ 1,\ 100\big)\)，默认 mmr 0.5%、buffer 0.5%；\(d+\text{mmr}+\text{buffer}\le 0\) 时取上限 100。
+  - 实际杠杆：\(L_{eff}=\min(\lfloor L_{req}\rfloor, L_{safe})\)；每次加仓 / 调仓 / 移动止损后重算（均价变了上限就变）。
+  - 复核：`stop_precedes_liquidation(side, P̄, stop, L, mmr, buffer)`；逐仓保证金 = |名义| / L。
+- 研究数字对应：止损距离中位 3.9% → 上限 20 倍（请求 10 倍不受限）；加仓后 p90 20.6% → 4 倍；最大 72% → 1 倍。首次 100 开空、止损 108 → 11 倍；在 80 等名义加仓后均价 88.9、止损不动 → 降到 4 倍。
+- 测试：`tests/test_margin.py`（强平价、距离符号、上限公式、请求封顶、参数化验证封顶后止损总先于强平、未封顶 10 倍失败样例、加仓后上限下降、输入校验）；全套 278 项通过。
+- 下一步：等杠杆功能的引擎 / 实盘工作流落地后，在设置杠杆（`live/okx.py` set-leverage、`live/gate.py` leverage 端点）和每次调仓加仓前调用 `effective_isolated_leverage`；研究侧继续轮换未覆盖的仓位构建 / 执行族。
