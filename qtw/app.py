@@ -138,7 +138,11 @@ def _stop_persist(timeout: float = 8.0) -> None:
 async def lifespan(_app: FastAPI):
     """Startup / shutdown via lifespan (replaces deprecated on_event handlers)."""
     db.connect()
-    cfg = S.save(S.load())  # 确保非敏感设置落在 SQLite
+    try:
+        cfg = S.save(S.load())  # 确保非敏感设置落在 SQLite
+    except (ValueError, KeyError, TypeError) as e:  # 旧版已保存的值不满足新加的校验时不能让服务起不来；原样加载并提示去 风控→策略参数 修正
+        log.warning("已保存的设置未通过校验（原样加载，请在 风控→策略参数 修正后保存）：%s", e)
+        cfg = S.load()
     bk = engine.book(cfg)
     if bk.migrated:
         log.info("已把旧版 CSV 纸面账本迁移到 SQLite：%s", bk.migrated)
@@ -975,8 +979,11 @@ def backtest(body: dict = Body(default={})):
             cfg["strategy"][k] = body[k]
     if body.get("symbols"):  # 可选：只回测选中的币种（默认用当前交易币种选择）
         cfg["symbols"] = [str(x).upper() for x in body["symbols"]]
-    cfg = S.validate(cfg)
-    bars = int(body.get("bars", 1500))
+    try:
+        cfg = S.validate(cfg)
+        bars = int(body.get("bars", 1500))
+    except (ValueError, KeyError, TypeError) as e:  # 参数错误返回 400 + 中文原因，而不是 500
+        raise HTTPException(400, str(e)) from e
     bars = max(cfg["strategy"]["slow_ma"] + 50, min(5000, bars))
     if not _bt_lock.acquire(blocking=False):
         raise HTTPException(409, "已有回测在运行")
