@@ -117,7 +117,9 @@ def _trade_quality(closed) -> dict:
             "expectancy_usdt": float(p.mean()), "top10_pnl_share": top / float(p.sum()) if p.sum() > 0 else float("nan")}
 
 
-def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict | None = None) -> dict:
+def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict | None = None, signals=None) -> dict:
+    """signals：可选，多策略注册表（qtw.strategies）用的信号函数 f(ind, idx, syms) -> {symbol: 逐根 {-1,0,1}}，
+    替换默认双均线合成信号；执行、止损、仓位、费用与默认完全同一套。None = 默认策略 #1（逐字节不变）。"""
     st, rk = cfg["strategy"], cfg["risk"]
     # 分市场 taker 费率：多单在现货、空单在永续成交（下一根开盘市价 = taker），每条市价腿各收一次
     FEE = {"spot": taker_rate(cfg, "spot"), "perp": taker_rate(cfg, "perp")}
@@ -149,6 +151,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     NVM = {m: {s: name_vol_mult(PX[m]["close"][s], nv_t, nv_l, BARS_PER_YEAR.get(st["interval"], 2190)) for s in syms} for m in ("spot", "perp")}
     SB = short_breaker(data, cfg)["mask"] if st.get("short_breaker_bars") and rk["allow_perp_short"] else {}
     SIG = {s: combine(PX["spot"]["signal"][s], PX["perp"]["signal"][s]) for s in syms}
+    if signals is not None:
+        SIG = {s: np.asarray(v, dtype=int) for s, v in signals({m: {s: ind[m][s].loc[idx] for s in syms} for m in ind}, idx, syms).items()}
     # 可选 BTC 熊市体制过滤：BTC 现货收盘 < SMA_N（上一根）时不新开多单（不平已有仓）。BTCUSDT 不在数据里则不生效
     rg_n = int(st.get("btc_regime_ma", 0) or 0)
     RGL = np.zeros(len(idx), dtype=bool)
