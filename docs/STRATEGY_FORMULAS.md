@@ -2828,3 +2828,15 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
   - BOP fadeS N14 X0.1 单格领先：Gate +181.1% / −16.7% / 1.78，OKX +184.6% / −16.5% / 1.79，压力费率 +162.8% / +165.1%；但邻格不稳（Gate X0.2 +157.4%、N28 压力费率只有 +150%、N42 X0.1 +153.6…+166.8%），按月 2026-03 后 Gate 4 好 4 差、OKX 1 好 5 差（合计 −0.75 / −0.70 个点），增益全部在 2026-03 前（11/13 个月），还是已知的「做空投降」模式。BOP need / fadeL 全部变差。安慰剂 +153…+164%。
 - 结论：拒绝，不改默认、不进观察名单。Ultimate Oscillator 与 Balance of Power 买压家族已覆盖。
 - CSV：`output/research_ultimate_osc_bop_gate_long_history.csv`、`output/research_ultimate_osc_bop_gate_monthly.csv`（不入库）。
+
+## 轮换：稳定币溢价（官方 USDC/USDT 现货）风险偏好门控（2026-11-12 22:05 PST，研究，不改默认；offS 弱观察）
+
+- 查重：轮换日志里没有用稳定币兑换价作为信息源的测试（只有资金费率、基差、跨所价差、ETH/BTC 等）。新信息源：Gate / OKX 官方 `USDCUSDT` 现货 4h K 线，4500 根，2024-10-24 → 2026-11-13，价格区间 Gate 0.9967–1.0024、OKX 0.9977–1.0035。
+- 公式（同交易所、同一根 4h 收盘，因果；组合层同一个值作用于所有币，只拦新开 / 反手）：`p = ln(USDC/USDT 收盘)`，`z = (p − mean_L(p)) / std_L(p)`，L = 60 / 180 / 360（月度对比另测 240 / 480）。
+  offL T：z > T（USDT 相对走弱 / USDC 溢价）拦新多；offS T：z < −T（USDT 溢价，资金换 USDT 入场）拦新空；dir T：两者；inv T：反方向（z < −T 拦新多、z > T 拦新空）；need：新多需 z < 0、新空需 z > 0。T = 1 / 2。安慰剂：z 序列按币种确定性循环时移（seed 1–3）。
+- 结果（基线 Gate +162.2% / −18.8% / 1.69，OKX +164.9% / −18.9% / 1.70）：
+  - offS / dir L360 T1：Gate +176.2…+177.2% / 1.77–1.78、OKX +171.5…+171.7% / 1.74，回撤 −16.9…−17.4%；offS L240 / L480 T1 压力费率 Gate +147…+161%、OKX +154…+155%（基线 +145.2 / +147.6%），邻域方向一致。但按月 2026-03 后两个交易所都是 1 好 0–1 差、其余持平（2026-03 后稳定币溢价几乎不再越过阈值），增益集中在 2026-03 前；L60 / L180 的 offS 几乎 ≈ 基线。
+  - offL、inv、need 不成立或两个交易所方向相反（offL L60 T1：Gate +140.3%、OKX +164.9%；need L180：Gate +171.5%、OKX +133.4%）。
+  - 安慰剂分散很大：dirP +115…+169%、invP +123…+207%，真实最好格落在安慰剂区间内。
+- 结论：不改默认。offS L240–480 T1（USDT 溢价时不开新空）列入弱观察，等 2026-03 后出现更多稳定币溢价波动再复测；其余变体拒绝。
+- CSV：`output/research_stablecoin_premium_gate_long_history.csv`、`output/research_stablecoin_premium_gate_monthly.csv`（不入库）。脚本 `scratch/usdc_long.py`、`scratch/usdc_month.py`。
