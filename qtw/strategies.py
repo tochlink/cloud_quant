@@ -204,6 +204,12 @@ STRATEGIES: list[dict] = [
     {"id": "funding_carry", "no": 7, "name": "资金费率套利（期现对冲）", "interval": "8h", "kind": "套利",
      "desc": "同币现货多 + 永续空等额对冲（方向中性），最近 9 次（3 天）平均资金费率 > 0.01%/8h 时持有、< 0 时撤出，赚资金费。用 Gate 官方资金费率历史（OKX 公共接口只给约 3 个月）。",
      "params": {"window": 9, "enter_rate": 0.0001, "exit_rate": 0.0}, "signal": None, "overrides": {}, "separate_sim": True},
+    {"id": "ma_trend_lsp", "no": 8, "name": "双均线 + 多空平价 + 风险预算（候选）", "interval": "4h", "kind": "趋势·仓位构建",
+     "desc": "信号、止损、过滤与 #1 完全相同；只改仓位：较小一侧信号书的单币风险 / 权重上限放大到与较大一侧相同（最多 3 倍，ls_parity_cap 3），"
+             "单笔风险 3%、组合波动目标 50%。多空永续 10× 下 walk-forward 12 格全胜 #1，180 天滚动窗口约八成更好、回撤九成不更差；"
+             "2026-03-05 后 5/8 个月更好，尚未改默认（docs/STRATEGY_FORMULAS.md「C3+RB30」）。",
+     "params": {"ls_parity_cap": 3.0, "max_risk_per_trade": 0.03, "port_vol_target": 0.5}, "signal": None,
+     "overrides": {"ls_parity_cap": 3.0, "port_vol_target": 0.5}, "risk_overrides": {"max_risk_per_trade": 0.03}},
 ]
 BY_ID = {s["id"]: s for s in STRATEGIES}
 
@@ -220,13 +226,21 @@ def load_research() -> dict:
 
 
 VERDICTS: dict[str, dict] = load_research().get("verdicts", {})
+# 仓位构建变体的结论来自单独研究（多空永续 10× 口径，与上面 JSON 的多策略对比口径不同），不写进 JSON
+VERDICTS.setdefault("ma_trend_lsp", {"status": "观察", "reason": (
+    "2026-11-13 研究（多空永续 10× + 官方资金费）：整段 Gate +214.9% / OKX +218.8%（#1 同口径 +163.3% / +165.4%），夏普 2.02 / 2.05，"
+    "回撤 −15.1% / −15.2%，2026-03-05 后 +73.4% / +72.5%；按训练期 Sharpe 二选一的 walk-forward 12 格全胜 #1；2026-03 后逐月 5/8 更好，"
+    "未达改默认余量。信号与 #1 相同，只改仓位，不进影子子账本。CSV：output/research_c3_rb30_walkforward_rolling_perp_both_10x.csv")})
 
 
 def strategy_cfg(cfg: dict, sid: str) -> dict:
-    """在默认 cfg 上套该策略的执行层覆盖。#1 原样返回（深拷贝）。"""
+    """在默认 cfg 上套该策略的执行层覆盖。#1 原样返回（深拷贝）；沿用 #1 信号的变体只覆盖仓位参数。"""
     c = copy.deepcopy(cfg)
     spec = BY_ID[sid]
     if spec["signal"] is None:
+        # 沿用 #1 信号的仓位构建变体（如 ma_trend_lsp）：不套 _NEUTRAL，只覆盖仓位参数
+        c["strategy"].update(spec.get("overrides") or {})
+        c["risk"].update(spec.get("risk_overrides") or {})
         return c
     c["strategy"].update(_NEUTRAL)
     c["strategy"].update(spec["overrides"])

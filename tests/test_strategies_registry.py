@@ -150,3 +150,19 @@ def test_shadow_only_observe_or_adopt():
     from qtw import shadow
     for sid in shadow.active_ids():
         assert R.VERDICTS[sid]["status"] in ("采用", "观察") and R.BY_ID[sid]["signal"] is not None
+
+
+def test_ma_trend_lsp_variant_overrides_only_sizing():
+    from qtw import settings as S
+    cfg = S.load()
+    c = R.strategy_cfg(cfg, "ma_trend_lsp")
+    assert R.BY_ID["ma_trend_lsp"]["signal"] is None and R.signal_fn("ma_trend_lsp") is None
+    assert c["strategy"]["ls_parity_cap"] == 3.0 and c["strategy"]["port_vol_target"] == 0.5 and c["risk"]["max_risk_per_trade"] == 0.03
+    for k in ("fast_ma", "slow_ma", "trend_ma", "btc_regime_ma", "confirm_bars", "atr_stop_mult"):
+        assert c["strategy"][k] == cfg["strategy"][k]  # 信号 / 过滤 / 止损与 #1 相同
+    assert cfg["strategy"].get("ls_parity_cap", 0) == S.load()["strategy"].get("ls_parity_cap", 0)  # 不改原 cfg
+    assert R.strategy_cfg(cfg, "ma_trend") == cfg
+    from qtw import shadow
+    assert "ma_trend_lsp" not in shadow.active_ids()
+    assert R.VERDICTS["ma_trend_lsp"]["status"] == "观察"
+    assert any(x["id"] == "ma_trend_lsp" and x["verdict"]["status"] == "观察" for x in R.public_list())
