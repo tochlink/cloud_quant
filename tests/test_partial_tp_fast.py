@@ -216,3 +216,17 @@ def test_api_candles_interval_param(monkeypatch):
     j = r.json()
     assert j["interval"] == "10m" and j.get("aggregated_from") == "1m"
     assert cl.get("/api/candles", params={"symbol": "BTCUSDT", "interval": "3m"}).status_code == 400
+
+
+@pytest.mark.real_lots
+def test_gate_perp_lot_decimal_min_zero_is_not_one_contract():
+    # Gate 接口原样字段：enable_decimal 合约 order_size_min = 0（真实返回值），不能被当成缺失回退到 1 张
+    sol = lots.gate_perp_lot("SOLUSDT", {"quanto_multiplier": "1", "order_size_min": 0, "enable_decimal": True})
+    assert sol.step == pytest.approx(0.001) and sol.min_qty == pytest.approx(0.001)
+    assert lots.floor_qty(0.8765, sol, 80) == pytest.approx(0.876)  # 0.88 SOL ≈ 70 U 不再被 1 SOL 最小量拦掉
+    eth = lots.gate_perp_lot("ETHUSDT", {"quanto_multiplier": "0.01", "order_size_min": 0, "enable_decimal": True})
+    assert eth.min_qty == pytest.approx(0.00001) and lots.floor_qty(0.0052, eth, 1900) == pytest.approx(0.0052)
+    btc = lots.gate_perp_lot("BTCUSDT", {"quanto_multiplier": "0.0001", "order_size_min": 1, "enable_decimal": False})
+    assert btc.step == pytest.approx(0.0001) and btc.min_qty == pytest.approx(0.0001) and btc.contract_step == 1.0
+    miss = lots.gate_perp_lot("ADAUSDT", {"quanto_multiplier": "10"})
+    assert miss.min_qty == pytest.approx(10.0)  # 字段缺失才按 1 张
