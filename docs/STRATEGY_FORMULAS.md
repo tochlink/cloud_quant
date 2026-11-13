@@ -4388,3 +4388,18 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 核对（Gate APIv4 官方文档）：双向持仓模式下，开空 = 负 `size`、`reduce_only=false`；部分平空 = 正 `size` + `reduce_only=true`，与本系统现有下单参数一致（全平才需要 `size=0` + `auto_size=close_short`，本系统按数量平，不用）。唯一不同是调杠杆：双向模式必须调用 `POST /futures/usdt/dual_comp/positions/{contract}/leverage`，原代码只调单向接口 `/positions/{contract}/leverage`，在双向模式下开空前一步就会失败、整笔开空发不出去。
 - 修复：`GateTrader.dual_mode()` 只读查询 `GET /futures/usdt/accounts` 的 `in_dual_mode`（实例内缓存），双向模式下开空前调 `dual_comp` 杠杆接口（仍为 1 倍），单向模式不变，下单参数不变。
 - 测试：`tests/test_gate_dual_mode.py`，全套 262 个测试通过。
+
+### 2026-11-13 研究：多空不对称 ATR 止损倍数（否决，无观察名单，默认不变）
+
+- 想法：现货多头与永续空头的止损宽度分开设：多头止损 = 开盘价 − kL×ATR(i−1)，空头止损 = 开盘价 + kS×ATR(i−1)（默认 kL = kS = atr_stop_mult = 2）。
+  - mode rs：入场按风险定仓也用同一个 k（名义 = 权益×单笔风险 / (k×ATR/价)，再受单币权重上限）；mode so：仓位仍按 2×ATR 定，只改止损价。
+  - 两种 mode 结果几乎一致：单币权重上限通常先于风险定仓生效，所以 k 主要改的是止损宽度。调仓 rebalance_mode = stop 按现有止损，不受 k 影响。
+- 数据与口径：官方 Gate / OKX 8 币 4h，现货 / 永续各用各自 K 线，窗口 2025-01-17 → 2026-11-13（预热 60 天后），真实费率 + 压力费率（20 / 15.1 bps），前后段以 2026-03-05 切分。
+- 同脚本基线（原生 run_backtest，数据比上一轮多一根 K）：Gate +160.67% / 回撤 −18.84% / 日 Sharpe 1.68 / 2026-03 后 +59.72%；OKX +163.32% / −18.85% / 1.69 / +59.54%。补丁版 2/2 与原生逐位一致。
+- 粗网格 kL, kS ∈ {1.5, 2, 2.5, 3, 4}（25 格 × 2 mode × 2 交易所）：2/2 在两个交易所都是收益和 Sharpe 的最高点；kS 偏离 2 代价很大（kS = 1.5 掉 45–55 个点，kS ≥ 2.5 掉 17–22 个点），kL 偏离代价较小。
+- 细网格 1.75–2.25：kL = 1.75 / kS = 2（Gate +163.19% / 1.71，OKX +167.15% / 1.73）和 1.9/2.0、1.9/1.9 在两个交易所收益和 Sharpe 都略高于基线，按规则跑了月度 walk-forward：
+  - 1.75/2.0 的 2026-03 后月份只有 2/8（Gate）、4/8（OKX）更好，后段合计 −1.4 / −1.5 个点；kL = 1.5 时 OKX 掉到 +131%，属于刀锋上的峰。
+  - 候选集 {2/2, 1.75/2, 1.9/2, 1.9/1.9, 1.75/1.9, 1.5/2} 按训练期 Sharpe 选：3 个月窗口两边都输约 22 个点，6 个月窗口赢 7–10 个点，12 个月窗口打平；压力费率同向。
+  - 增益（+2.5 / +3.8 个点）小于已测得的跨交易所信号噪声（约 ±10 个点）。
+- 结论：否决，不进观察名单，默认 atr_stop_mult = 2 不变。附带发现：默认值处在 kS（空头止损）的尖峰上，空头止损从 2 收紧到 1.75 就掉 18–28 个点，说明这一参数对空头很敏感。
+- 脚本：scratch/asl_long.py、asl_fine.py、asl_wf.py；输出：output/research_asymmetric_atr_stop_long_history.csv、output/research_asymmetric_atr_stop_walkforward.csv。
