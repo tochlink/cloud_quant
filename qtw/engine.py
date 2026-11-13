@@ -20,7 +20,7 @@ from .paths import OUTPUT_DIR
 from .backtest import short_breaker
 from .risk import cap_at_entry, scale_to_room, size
 from . import leverage as LV
-from .strategy import bar_close_equity, btc_regime_blocks_long, combine, indicators, last_cross, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
+from .strategy import bar_close_equity, btc_regime_blocks_long, combine, indicators, last_cross, ls_parity_scales, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
 from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
@@ -357,6 +357,35 @@ def listed_symbols(cfg: dict, bk=None) -> list[str]:
     return out
 
 
+def apply_ls_parity(rows: list[dict], cap: float, eq: float, rk: dict, atr_mult: float) -> None:
+    """可选动态多空风险平价 up（strategy.ls_parity_cap，0 / ≤1 = 关闭），与回测同口径：用本根已收盘合成信号，
+    R_L = Σ_{信号=多} name_vol_mult、R_S = Σ_{信号=空} name_vol_mult（只算交易池内、有信号的币），两侧都非空时把较小一侧
+    的单币乘数放大到较大一侧（≤ cap 倍，qtw.strategy.ls_parity_scales）。乘数写回 row["name_vol_mult"]，
+    入场与调仓都读它；未持仓行的建议仓位按新乘数重算。关闭时不改任何字段。"""
+    if not cap or cap <= 1:
+        return
+    live = [r for r in rows if r.get("in_universe") and not r.get("error") and r.get("signal") in (1, -1)
+            and r.get("name_vol_mult") is not None]
+    sig = {r["symbol"]: [int(r["signal"])] for r in live}
+    if not sig:
+        return
+    nvm = {r["symbol"]: [float(r["name_vol_mult"])] for r in live}
+    ls, ss = ls_parity_scales(sig, nvm, nvm, cap)
+    k = {"long": float(ls[0]), "short": float(ss[0])}
+    for r in live:
+        f = k["long"] if r["signal"] == 1 else k["short"]
+        r["ls_parity_scale"] = f
+        if f == 1.0:
+            continue
+        r["name_vol_mult_base"] = r["name_vol_mult"]
+        r["name_vol_mult"] = r["name_vol_mult"] * f
+        if r.get("stop_source") == "suggested" and r.get("ref_price"):
+            z = size(side=r["side"], equity=eq, price=r["ref_price"], atr=r["atr"], max_risk=rk["max_risk_per_trade"] * r["name_vol_mult"],
+                     max_weight=rk["max_weight_per_name"] * r["name_vol_mult"], atr_mult=atr_mult)
+            r.update({"target_notional_usdt": z.notional, "target_qty": z.qty, "target_weight": z.weight,
+                      "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
+
+
 def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     cfg = vol_scaled_cfg(cfg, book(cfg))
     st, rk = cfg["strategy"], cfg["risk"]
@@ -543,6 +572,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         row.update({"entry_timing": entry, "exit_timing": exit_, "state": state,
                     "position_side": pos.side if pos else "flat"})
         rows.append(row)
+    apply_ls_parity(rows, float(st.get("ls_parity_cap", 0) or 0), eq, rk, st["atr_stop_mult"])
     # 待入场标的：按剩余总敞口等比缩放后的建议仓位
     pend = {r["symbol"]: r for r in rows if r.get("state") == "entry_pending"}
     alloc = scale_to_room({s: r["target_notional_usdt"] for s, r in pend.items()},
