@@ -2798,3 +2798,19 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
   - 安慰剂（N9 W6 时移）+131…+165%，覆盖真实格全部取值，门控没有超过随机拦截。
 - 结论：拒绝，不改默认、不进观察名单。TD Sequential setup 衰竭家族已覆盖。
 - CSV：`output/research_td_sequential_gate_long_history.csv`、`output/research_td_sequential_gate_monthly.csv`（不入库）。
+
+## 轮换：随机指标 Stochastic %K/%D 与 CCI 超买超卖入场门控（2026-11-12 21:50 PST，研究，不改默认；CCI fadeS 进观察名单）
+
+- 查重：轮换日志已有 RSI / Connors RSI、STC、Williams VIX Fix、Fisher 变换等，但没有经典随机指标和 CCI（顺势指标）的门控，本轮补测。
+- 公式（官方现货 4h，因果）：
+  - Stochastic：`%K = 100·(C − LL_N)/(HH_N − LL_N)`，`%D = SMA_3(%K)`，`x = (%D − 50)/50`，N = 14 / 42 / 84。
+  - CCI：`TP = (H + L + C)/3`，`CCI = (TP − SMA_N(TP)) / (0.015 · MAD_N(TP))`，`x = CCI/100`，N = 20 / 50 / 100。
+  - 规则：need T 新多需 x > T、新空需 x < −T；fadeS X 当 x < −X（超卖）时拦新空；fadeL X 当 x > X（超买）时拦新多。只拦新开 / 反手。安慰剂：x 序列按币种确定性循环时移（seed 1–3）。
+- 网格：Stochastic need 0 / 0.4、fade 0.6 / 0.9；CCI need 0 / 0.5、fade 1 / 2（即 ±100 / ±200）；Gate 与 OKX；真实 + 压力费率；2026-03-05 前后切分；按月对比。脚本 `scratch/osc_long.py`、`scratch/osc_month.py`。
+- 结果（基线 Gate +162.2% / −18.8% / 1.69，OKX +164.9% / −18.9% / 1.70）：
+  - CCI fadeS（超卖时不开新空）N20–50、X1–2 四格两个交易所都领先：Gate +165.0…+178.6% / Sharpe 1.70–1.78，OKX +169.7…+181.6% / 1.73–1.79；N50 X1 回撤 −15.0% / −15.3%；压力费率 Gate +159…+162% vs +145.2%，OKX +161…+163% vs +147.6%；CCI 安慰剂 +149…+166%，真实格大多高于安慰剂。N100 回落到 +151…+166%。
+  - 但 2026-03 后没有增益：post +58.5…+61.0% vs 基线 +60.8…+61.0%；按月 N50 X1 2026-03 后 Gate 4 好 4 差、OKX 4 好 5 差（合计 −0.3 / −1.5 个点），N20 X2、N50 X2 几乎不触发。增益集中在 2026-03 前，仍是已知的「做空投降」模式。
+  - CCI fadeL 全部变差（+120…+165%）；CCI need 只有 OKX N50 X0 +172.5% 领先，Gate 同格 +152.7%，不成立。
+  - Stochastic：fadeS N14 X0.6 +168…+172%、N84 X0.6 +165…+175%，但 N42 X0.6 +145…+155% 落后，且 fadeS 安慰剂高达 Gate +196.8%、OKX +173.6%，不成立；need N84 X0 +167.2…+167.6% 小胜但安慰剂分散很大（+85…+150%）；fadeL、need 短周期大幅变差。
+- 结论：不改默认。Stochastic 门控拒绝；CCI fadeS N20–50 X1–2 进观察名单（两个交易所、邻域、压力费率都成立，但 2026-03 后无增益），等 2026-03 后数据更多再复测。
+- CSV：`output/research_stoch_cci_gate_long_history.csv`、`output/research_stoch_cci_gate_monthly.csv`（不入库）。
