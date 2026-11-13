@@ -725,6 +725,21 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
 
 
 
+def rebalance_new_qty(cur: float, want: float, floor) -> float | None:
+    """调仓目标数量按官方精度落地：差额向下取整（floor = 按步长 / 最小量 / 最小金额取整，低于最小返回 0）。
+    差额取整为 0 → None（不动）；减仓后剩余持仓若低于最小下单量 / 最小金额也返回 None——
+    否则会留下交易所无法再单独平掉的尘埃仓（分批止盈已有同样的保护）。"""
+    dq = floor(abs(want - cur))
+    if dq <= 0:
+        return None
+    new = cur + (dq if want > cur else -dq)
+    if new <= 0:
+        return None
+    if new < cur and floor(new) <= 0:
+        return None
+    return new
+
+
 def _rebalance(cfg, bk, rows: dict, opened: set, errors: dict) -> list[str]:
     """CYCLE_LOCK 已持有。新收盘 K 线后第一次周期：把已有持仓调向目标名义（见 qtw/rebalance.py）。"""
     from . import rebalance as RB
@@ -758,13 +773,10 @@ def _rebalance(cfg, bk, rows: dict, opened: set, errors: dict) -> list[str]:
         s, px = it["symbol"], it["price"]
         p = bk.positions[s]
         kind, q = kinds[s]
-        new_qty = max(0.0, p.qty + it["delta_usdt"] / px)
-        dq = lot_floor(cfg, s, p.market, abs(new_qty - p.qty), px)
-        if dq <= 0:
-            continue  # 差额低于最小下单量
-        new_qty = p.qty + (dq if new_qty > p.qty else -dq)
-        if new_qty <= 0:
-            continue
+        new_qty = rebalance_new_qty(p.qty, max(0.0, p.qty + it["delta_usdt"] / px),
+                                    lambda x, _s=s, _m=p.market, _px=px: lot_floor(cfg, _s, _m, x, _px))
+        if new_qty is None:
+            continue  # 差额低于最小下单量，或减仓后剩余低于最小下单量（尘埃仓）
         side, mkt = p.side, p.market
         res = bk.resize(s, new_qty, px, kind, f"调仓（目标 {it['target_usdt']:.2f} USDT，偏离>{float(st['rebalance_band']):.0%}）",
                         cfg["venue"], data_source=q.data_source, price_time=iso(q.ts))
