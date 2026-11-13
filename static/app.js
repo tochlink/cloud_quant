@@ -738,7 +738,7 @@ function pageDashboard() {
       </div>
       <div class="card5 d5-log">
         ${head5("成交记录", "", `<span class="d5-pg" id="logPg"></span><button type="button" class="lnk5" data-go="trades">全部 →</button>`)}
-        <div class="d5-lh"><span>时间</span><span>方向</span><span>币种</span><span>数量</span><span>价格</span><span>盈亏</span></div>
+        <div class="d5-lh"><span>时间</span><span>方向</span><span>币种</span><span>数量</span><span>价格</span><span>盈亏</span><span class="rsn">原因</span></div>
         <div class="d5-lb" id="dashTx"></div>
       </div>
     </section>
@@ -788,6 +788,19 @@ function pnlBarsHtml(daily) {
   }).join("");
   return `<div class="pb-y">${yLab}</div><div class="pb-plot ${few ? "few" : ""}"><div class="pb-zero" style="top:${z}%"></div>${cols}</div>${few ? `<div class="pb-hint">账本只有 ${daily.length} 天，满 14 天后显示完整两周</div>` : ""}`;
 }
+/* 成交原因（短）：去掉括号里的细节，完整原因在悬停提示里 */
+function reasonShort(r) {
+  const s = String(r || "").trim();
+  if (!s) return "—";
+  if (s.startsWith("紧急停止")) return "紧急停止";
+  if (s.startsWith("止盈（")) return "分批止盈";
+  if (s === "信号转空仓") return "转空仓";
+  return s.split(/[（(]/)[0] || s;
+}
+function reasonCls(r) {
+  const s = String(r || "");
+  return /止损|快速离场/.test(s) ? "neg" : /止盈/.test(s) ? "pos" : /手动|清仓|紧急/.test(s) ? "warn" : "muted";
+}
 function fillTag(f) {
   const buy = f.side === "buy", a = f.action;
   const k = a === "open" ? "开" : a === "add" ? "加" : a === "reduce" ? "减" : "平";
@@ -801,7 +814,7 @@ function renderDashLog() {
   const st = pgState("dashLog", all.length, per);
   const fx = all.slice(st.start, st.end), nmax = Math.max(1e-9, ...all.map((f) => Math.abs(f.notional_usdt || 0)));
   lb.innerHTML = fx.map((f) => { const pnl = Number(f.realized_pnl_usdt), buy = f.side === "buy";
-    return `<button class="d5-lr" data-sym="${f.symbol}" data-mkt="${f.market}" title="${esc(tFull(f.time) + " · " + ptText(f.reason) + " · 名义 " + f2(f.notional_usdt) + " U")}"><i class="flow ${buy ? "b" : "s"}" style="width:${(Math.abs(f.notional_usdt || 0) / nmax * 100).toFixed(0)}%"></i><span class="num">${esc(tCompact(f.time))}</span><span>${fillTag(f)}</span><span class="lc">${base(f.symbol)}${bookTag(f)}</span><span class="num">${fp(f.qty, 4)}</span><span class="num">${fpPx(f.price)}</span><span class="num ${cls(pnl)}">${pnl ? sgn(pnl) : "—"}</span></button>`; }).join("");
+    return `<button class="d5-lr" data-sym="${f.symbol}" data-mkt="${f.market}" title="${esc(tFull(f.time) + " · " + ptText(f.reason) + " · 名义 " + f2(f.notional_usdt) + " U")}"><i class="flow ${buy ? "b" : "s"}" style="width:${(Math.abs(f.notional_usdt || 0) / nmax * 100).toFixed(0)}%"></i><span class="num">${esc(tCompact(f.time))}</span><span>${fillTag(f)}</span><span class="lc">${base(f.symbol)}${bookTag(f)}</span><span class="num">${fp(f.qty, 4)}</span><span class="num">${fpPx(f.price)}</span><span class="num ${cls(pnl)}">${pnl ? sgn(pnl) : "—"}</span><span class="rsn ${reasonCls(f.reason)}">${esc(reasonShort(f.reason))}</span></button>`; }).join("");
   lb.querySelectorAll(".d5-lr[data-sym]").forEach((el) => (el.onclick = () => goSignal(el.dataset.sym, el.dataset.mkt)));
   const pg = $("#logPg");
   if (pg) {
@@ -1379,9 +1392,7 @@ function pageRisk() {
             <label class="field" title="触及分批止盈价时平掉的比例（按官方下单精度取整）">分批平仓比例<input id="sPtpF" type="number" min="0.05" max="0.95" step="0.05" value="${s.strategy.tp_frac ?? 0.5}"/></label>
             <label class="toggle field-toggle" title="分批止盈后，把剩余仓位的止损移到保本价；之后触及记为「保本止损」"><input id="sBe" type="checkbox" ${s.strategy.tp_breakeven ? "checked" : ""}/><span class="tr"></span>止盈后保本</label>
             <label class="toggle field-toggle" title="保本价再加两条腿的吃单手续费（多：入场价×(1+2×费率)，空：×(1−2×费率)）"><input id="sBeFee" type="checkbox" ${s.strategy.tp_be_fees !== false ? "checked" : ""}/><span class="tr"></span>保本含手续费</label>
-            <label class="field" title="快速离场：所选周期收盘价逆持仓方向跌破 / 升破 EMA(n) 连续若干根即平仓（锁定到 4h 信号改变）。5m 原生、10m 由 1m 聚合、1D 原生。默认关闭">快速离场周期<select id="sFxTf">${[["off", "关闭"], ["5m", "5m"], ["10m", "10m"], ["1d", "1D"]].map(([v, l]) => `<option value="${v}" ${v === (s.strategy.fast_exit_tf || "off") ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-            <label class="field" title="快速离场用的 EMA 周期（按所选周期的根数）">快速离场 EMA<input id="sFxN" type="number" min="5" max="500" step="5" value="${s.strategy.fast_exit_n ?? 50}"/></label>
-            <label class="field" title="连续几根已收盘快周期 K 线逆向才离场">快速离场确认根数<input id="sFxC" type="number" min="1" max="12" step="1" value="${s.strategy.fast_exit_confirm ?? 2}"/></label>
+            <label class="field" title="已停用：研究显示 5m / 10m / 1D 快速离场每一组都显著劣于不离场（5m 会在 4h 收盘之间把长线单逐个平掉），回测基线也从未启用。盘中只按真实触及的止损 / 止盈离场。">快速离场<select id="sFxTf" disabled><option value="off" selected>已停用</option></select><input id="sFxN" type="hidden" value="${s.strategy.fast_exit_n ?? 50}"/><input id="sFxC" type="hidden" value="${s.strategy.fast_exit_confirm ?? 2}"/></label>
           </div>
         </section>
         <section class="set-pane panel" data-pane="universe" role="tabpanel">
@@ -1409,7 +1420,7 @@ function pageRisk() {
         fees: { spot_taker_bps: +$("#rFeeSpotTaker").value, spot_maker_bps: +$("#rFeeSpotMaker").value, perp_taker_bps: +$("#rFeePerpTaker").value, perp_maker_bps: +$("#rFeePerpMaker").value },
         strategy: { interval: $("#sInt").value, fast_ma: +$("#sFast").value, slow_ma: +$("#sSlow").value, atr_period: +$("#sAtrP").value, atr_stop_mult: +$("#sAtr").value, confirm_bars: +$("#sConf").value, trend_ma: +$("#sTrend").value, short_breaker_bars: +$("#sSB").value, pyramid_r: +$("#sPyrR").value, pyramid_frac: +$("#sPyrF").value, tp_r: +$("#sTpR").value, tp_reentry: $("#sTpRe").checked,
           tp_partial: $("#sPtp").checked, tp_partial_r: +$("#sPtpR").value, tp_frac: +$("#sPtpF").value, tp_breakeven: $("#sBe").checked, tp_be_fees: $("#sBeFee").checked,
-          fast_exit_tf: $("#sFxTf").value, fast_exit_n: +$("#sFxN").value, fast_exit_confirm: +$("#sFxC").value } } });
+          fast_exit_tf: "off", fast_exit_n: +$("#sFxN").value, fast_exit_confirm: +$("#sFxC").value } } });
       toast("设置已保存"); S.signals = null; await refreshAll(); pageRisk();
     } catch (e) { toast("保存失败：" + e.message, true); b.disabled = false; }
   };

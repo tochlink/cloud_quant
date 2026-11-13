@@ -1095,3 +1095,9 @@ body.theme-term .hcard .hc-eq .eq-tip-evs{border-color:#1c2742}
 .d5-rl{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pager-ind{white-space:nowrap}
 body.theme-term .pager-ind{font-size:10.5px;letter-spacing:-.4px}
+/* 2026-11-14 成交记录加「原因」列（止损 / 止盈 / 信号 / 调仓 / 手动），完整原因在悬停提示里 */
+.d5-lh,.d5-lr{grid-template-columns:60px 30px minmax(56px,1.25fr) minmax(62px,1.2fr) minmax(48px,1fr) 38px 38px;gap:3px}
+body.theme-term .d5-lh,body.theme-term .d5-lr{grid-template-columns:74px 30px minmax(60px,1fr) minmax(60px,1fr) minmax(48px,1fr) 36px 34px}
+.d5-lh>span.rsn,.d5-lr>span.rsn{text-align:left;font-size:10px}
+.d5-lr>span.rsn.neg{color:var(--red,#e5536b)}.d5-lr>span.rsn.pos{color:var(--green,#25b07a)}.d5-lr>span.rsn.warn{color:#b36b00}.d5-lr>span.rsn.muted{color:var(--muted)}
+@media (max-width:1440px){.d5-lh,.d5-lr{grid-template-columns:60px 30px minmax(30px,.8fr) minmax(40px,.8fr) minmax(50px,1.1fr) 38px 36px;gap:3px}body.theme-term .d5-lh,body.theme-term .d5-lr{grid-template-columns:70px 30px minmax(28px,.6fr) minmax(44px,.9fr) minmax(50px,1.1fr) 36px 36px;gap:2px}body.theme-term .d5-lr>span.rsn{font-size:9.5px}}
