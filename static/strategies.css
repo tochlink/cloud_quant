@@ -1,0 +1,85 @@
+/* 多策略页（v7）。浅色默认 + 深色终端（body.theme-term）。单视口：页内不滚动，卡片按可用高度分页。 */
+.fit.st-page{gap:10px}
+.st-head{flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 18px}
+.st-head-l{min-width:0;display:flex;flex-direction:column;gap:3px}
+.st-head-l h3{margin:0;font-size:15px;display:flex;align-items:center;gap:8px}
+.st-head-l h3 .icon{width:18px;height:18px;fill:var(--violet)}
+.st-head-l .note{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.st-head-r{display:flex;gap:10px;flex:0 0 auto}
+.st-body{flex:1;min-height:0;overflow:hidden}
+.st-grid{display:grid;gap:12px}
+.st-pager{flex:0 0 auto;display:flex;justify-content:flex-end;min-height:0}
+.st-card{display:flex;flex-direction:column;gap:7px;padding:12px 14px;min-height:0;overflow:hidden;cursor:pointer;transition:transform .15s,box-shadow .15s}
+.st-card:hover,.st-card:focus-visible{transform:translateY(-2px);box-shadow:0 22px 40px -24px rgba(60,40,150,.55);outline:none}
+.st-card.st-default{border-color:#cfc6fb}
+.st-card header{display:flex;align-items:center;gap:8px;min-width:0}
+.st-no{display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:22px;padding:0 6px;border-radius:8px;color:#fff;font-size:11.5px;font-weight:800;flex:0 0 auto}
+.st-no.sm{min-width:24px;height:19px;font-size:10.5px;margin-right:6px}
+.st-name{font-size:13.5px;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-tag{flex:0 0 auto;font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px;white-space:nowrap}
+.st-tag.st-adopt{background:#dcf6ec;color:#138a5c}.st-tag.st-watch{background:#fff1dc;color:#b36b00}.st-tag.st-drop{background:#eeedf6;color:#8a88a6}
+.st-sub{display:flex;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--muted)}
+.st-sub>span{background:var(--lav-2);border-radius:6px;padding:1px 7px}
+.st-sub .st-live{background:#e6f7ff;color:#0b78b8}.st-sub .st-live.def{background:#ece8fd;color:var(--violet)}
+.st-ms{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.st-m{min-width:0}.st-m small{display:block;font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st-m b{display:block;font-size:15px;white-space:nowrap}
+.st-ms.sm .st-m b{font-size:12.5px}
+.st-spark{flex:1;min-height:34px;position:relative}
+.st-svg{display:block;width:100%;height:100%}
+.st-svg .st-one{stroke:#d9d5ec;stroke-dasharray:2 3;stroke-width:1}
+.st-svg .st-x{stroke:rgba(108,92,231,.45);stroke-width:1}
+.st-tip{position:absolute;left:0;top:0;pointer-events:none;background:rgba(29,27,58,.94);color:#fff;border-radius:10px;padding:7px 10px;font-size:11.5px;min-width:170px;z-index:5;box-shadow:0 10px 24px -10px rgba(0,0,0,.5)}
+.st-tip b{display:block;margin-bottom:3px}
+.st-tip div{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.st-tip i{width:8px;height:8px;border-radius:2px;display:inline-block}
+.st-tip .num{margin-left:auto;font-weight:700}
+.st-tip em{font-style:normal;font-size:10.5px;opacity:.85}.st-tip em.pos{color:#7ff0c0}.st-tip em.neg{color:#ff9aa9}
+/* 详情弹窗：固定尺寸，内部分页签，不随内容变高 */
+#modalCard.st-modal{width:min(860px,94vw);height:min(560px,88vh);max-width:none;padding:0;display:flex;flex-direction:column;overflow:hidden}
+.st-modal-in{display:flex;flex-direction:column;height:100%;min-height:0}
+.st-mh{display:flex;align-items:center;gap:10px;padding:16px 20px 8px}
+.st-mh h3{margin:0;font-size:16px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st-dtabs{margin:0 20px 6px;align-self:flex-start}
+.st-dbody{flex:1;min-height:0;overflow:auto;padding:4px 20px 16px;overscroll-behavior:contain;scrollbar-width:thin}
+.st-dbody section{display:flex;flex-direction:column;gap:8px;height:100%;min-height:0}
+.st-dbody section[hidden]{display:none}
+.st-dbody h4{margin:8px 0 0;font-size:13px}
+.st-desc{margin:0;font-size:12.5px;color:var(--ink-2);line-height:1.6}
+.st-params{display:flex;flex-wrap:wrap;gap:6px}
+.st-param{background:var(--lav-2);border-radius:8px;padding:3px 8px;font-size:11.5px;font-weight:700}
+.st-param small{color:var(--muted);font-weight:600;margin-right:5px}
+.st-verdict{margin:0;font-size:12px;line-height:1.55;padding:8px 11px;border-radius:10px;background:var(--lav-2)}
+.st-verdict.st-adopt{background:#e9faf3}.st-verdict.st-watch{background:#fff7ea}.st-verdict.st-drop{background:#f3f2f8}
+.st-tw{max-height:none;padding:0}
+table.st-mt{border-spacing:0 3px;font-size:11.5px}
+.st-mt td{padding:5px 9px}.st-mt th{padding:0 9px}
+.st-big{flex:1;min-height:260px;position:relative}
+.st-btbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.st-btbar .note{flex:1;min-width:240px;font-size:11.5px}
+.st-btout{flex:1;min-height:0;display:flex;flex-direction:column;gap:6px}
+.st-btgrid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:12px;flex:1;min-height:250px}
+.st-btchart{position:relative;min-height:240px}
+/* 影子子账本 / 相关性 */
+.st-shadow,.st-corr{display:flex;flex-direction:column;gap:8px}
+.st-shnote{font-size:12px}
+.st-shwrap,.st-cw{flex:1;min-height:0;max-height:none;overflow:auto}
+.st-sht tbody tr{cursor:pointer}
+.st-sht .pill{padding:2px 6px;font-size:10px}
+.st-sht td{white-space:normal}.st-sht td.num{white-space:nowrap}
+.st-sht td:nth-child(5){max-width:330px}
+table.st-ct{border-spacing:3px}
+.st-ct td,.st-ct th{text-align:center;padding:7px 8px;border-radius:8px!important}
+.st-ct td:first-child{text-align:left}
+@media (max-height:800px){.st-card{gap:5px;padding:10px 12px}.st-m b{font-size:13.5px}.st-ms.sm .st-m b{font-size:12px}}
+/* 深色终端 */
+body.theme-term .st-tag.st-adopt{background:rgba(0,230,138,.14);color:#00e68a}
+body.theme-term .st-tag.st-watch{background:rgba(255,183,77,.14);color:#ffb74d}
+body.theme-term .st-tag.st-drop{background:rgba(120,135,170,.16);color:#7f8db0}
+body.theme-term .st-sub>span,body.theme-term .st-param,body.theme-term .st-verdict{background:#0b1222}
+body.theme-term .st-verdict.st-adopt{background:rgba(0,230,138,.08)}body.theme-term .st-verdict.st-watch{background:rgba(255,183,77,.08)}
+body.theme-term .st-sub .st-live{background:rgba(0,184,255,.12);color:#5cc8ff}
+body.theme-term .st-svg .st-one{stroke:#1c2742}
+body.theme-term .st-card.st-default{border-color:#2d4a8a!important}
+body.theme-term .st-tip{background:rgba(3,6,13,.96);border:1px solid #1c2742}
+body.theme-term .st-mt td,body.theme-term .st-sht td{background:#060a14}
