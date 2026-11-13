@@ -4263,3 +4263,11 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
   - OKX：1000 U +162.44%，500 U +168.88%，300 U +158.36%，200 U +157.51%，100 U +156.81%（OKX 现货步长很细，主要损失来自永续张数）。
 - 结论：不改策略默认。1000 U 以上取整影响在 1 点以内；200 U 以下会少 5 ~ 30 点，Gate 更明显。Gate 小数合约最小量 bug 已修复，修复前 Gate 模拟盘 / 实盘的 SOL / ETH / XRP 永续空单会被低配或跳过。需要拉取并重启服务后生效。
 - CSV：`output/research_lot_rounding_small_capital_long_history.csv`（修复后规格）、`output/research_lot_rounding_specs.csv`（不入库）；脚本 `scratch/lots_bt.py`。
+
+### 执行层：调仓减仓后的尘埃仓检查 + 引擎保护（2026-11-13 08:30 PST）
+
+- 查重：上一轮按交易所步长取整的小资金回测只检查了「差额低于最小下单量就跳过」，没检查**减仓之后剩下的持仓**是否还高于最小下单量 / 最小金额。分批止盈已有这道保护（剩余拆不开就整仓止盈），调仓 `_rebalance` 没有。
+- 公式：调仓目标数量 `want = qty + delta_usdt / px`；`dq = floor_lot(|want − qty|)`，为 0 不动；`new = qty ± dq`；**若是减仓且 `floor_lot(new) = 0`（剩余低于最小数量或 Gate 现货最小金额）则不动**，避免留下交易所无法单独平掉的尘埃仓。新函数 `qtw/engine.py::rebalance_new_qty`，`_rebalance` 改为调用它；其它行为不变（目标 0 仍由信号 / 止损离场处理）。
+- 实测（官方 OKX / Gate 4h，8 个标的，2025-01-18 → 2026-11-13 PT，真实费率，按当前官方步长取整，`scratch/dust_bt.py`，`output/research_rebalance_dust_residual_long_history.csv`）：起始 5000 / 1000 / 500 / 300 / 200 / 100 U，两家所调仓减仓 286~569 次，**尘埃剩余 0 次**（rebalance_band 0.1 只在偏离 > 10% 时调，减仓后剩余≈目标名义，远高于最小量）。收益与上一轮取整回测一致（Gate 1000 U +160.17%，OKX +162.44%）。
+- 结论：历史上不会触发，保护只针对极端小仓（例如 Gate 现货最小金额 3 U 附近）；不改任何策略默认，回测数字不变。新增测试 `tests/test_rebalance.py::test_rebalance_new_qty_rounds_and_never_leaves_dust`，全部 247 个测试通过。
+- 下一族建议：执行 / 引擎侧（例如现货买入手续费从到手币里扣时，全平数量与账本数量的一致性）或尚未覆盖的仓位构建。
