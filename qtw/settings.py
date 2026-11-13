@@ -58,6 +58,13 @@ DEFAULTS: dict[str, Any] = {
         # 0=关闭；建议试用 elder_short_gate_n 26–50 / elder_short_gate_x 0–0.5
         "elder_short_gate_n": 0,
         "elder_short_gate_x": 0.0,
+        # 2026-11-12：可选止损反手（stop-and-reverse，默认关闭，仅回测生效）。第 i 根 ATR 止损后第 i+1 根开盘开反向仓：
+        # 风险 / 权重上限 × sar_risk_mult，止损 sar_atr_mult × ATR，持有 sar_hold_bars 根（或自身止损）；信号转向反手方向则转为正常持仓。
+        # 研究（scratch/sar_*.py）：H12 k1 m2 Gate +234% / OKX +232%（基线约 +162% / +165%），Sharpe 2.02 vs 1.69，回撤 −15.7% vs −18.8%，
+        # 胜过全部随机方向安慰剂；但 2026-03 后逐月只 Gate 6/8、OKX 3/8 更好，12 个月 walk-forward 低约 3.5 个百分点，未改默认。0=关闭
+        "sar_hold_bars": 0,
+        "sar_risk_mult": 1.0,
+        "sar_atr_mult": 2.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -204,6 +211,15 @@ def validate(s: dict) -> dict:
     st["elder_short_gate_x"] = float(st.get("elder_short_gate_x", 0) or 0)
     if not 0 <= st["elder_short_gate_x"] <= 5:
         raise ValueError("Elder-Ray 空头闸门 ATR 倍数需在 0–5 之间")
+    st["sar_hold_bars"] = int(st.get("sar_hold_bars", 0) or 0)
+    if not 0 <= st["sar_hold_bars"] <= 100:
+        raise ValueError("止损反手持有根数需为 0（关闭）或 1–100")
+    st["sar_risk_mult"] = float(st.get("sar_risk_mult", 1.0) or 0)
+    if not 0.1 <= st["sar_risk_mult"] <= 3:
+        raise ValueError("止损反手风险倍数需在 0.1–3 之间")
+    st["sar_atr_mult"] = float(st.get("sar_atr_mult", 2.0) or 0)
+    if not 0.5 <= st["sar_atr_mult"] <= 10:
+        raise ValueError("止损反手 ATR 止损倍数需在 0.5–10 之间")
     st["pyramid_r"] = float(st.get("pyramid_r", 0) or 0)
     st["pyramid_frac"] = float(st.get("pyramid_frac", 0.5) or 0)
     if st["pyramid_r"] and not 0.5 <= st["pyramid_r"] <= 5:

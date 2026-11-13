@@ -64,7 +64,7 @@ def short_breaker(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         return {"mask": {}, "blocked_now": False, "trailing_pnl": 0.0, "bars": 0}
     # 影子账本固定用标准仓位口径（与账户实际仓位上限无关）：否则熔断判断依赖 USDT 盈亏的正负号，
     # 改动单笔风险 / 单币权重会让影子盈亏在 0 附近翻号，整段回测结果跳变（2026-11-10 诊断，见 docs）。
-    c = {**cfg, "strategy": {**cfg["strategy"], "short_breaker_bars": 0},
+    c = {**cfg, "strategy": {**cfg["strategy"], "short_breaker_bars": 0, "sar_hold_bars": 0},
          "risk": {**cfg["risk"], **SHADOW_SIZING, "allow_spot_long": False, "allow_perp_short": True}}
     res = run_backtest(data, c)
     tr, keys = res["trades"], res["bar_open_times"]
@@ -142,6 +142,12 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     rb_band, rb_mode = float(st.get("rebalance_band", 0) or 0), str(st.get("rebalance_mode", "stop") or "stop")
     entry_i: dict[str, int] = {}
     blocked: dict[str, int] = {}
+    # 可选止损反手（stop-and-reverse，默认关闭 sar_hold_bars = 0）：第 i 根 ATR 止损后，第 i+1 根开盘开反向仓，
+    # 单笔风险 / 单币权重上限 × sar_risk_mult，止损 = sar_atr_mult × ATR，持有 sar_hold_bars 根后按开盘价平仓（「反手时间」）
+    # 或被自身止损；期间信号转向反手方向则转为正常持仓。原方向锁定照旧；反手仓止损后不再连环反手；反手多单同样受 btc_regime_ma 约束。
+    sar_h, sar_k, sar_m = int(st.get("sar_hold_bars", 0) or 0), float(st.get("sar_risk_mult", 1.0) or 1.0), float(st.get("sar_atr_mult", 2.0) or 2.0)
+    sarf: dict[str, int] = {}  # 反手仓 → 原锁定方向
+    sarq: dict[str, int] = {}  # 本根止损、下一根待开的反手方向
     trades: list[Trade] = []
     curve = []
     prev_eq = start_eq
@@ -153,6 +159,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
     def close(s: str, px: float, when: str, reason: str, i: int):
         nonlocal realized
         t = pos.pop(s)
+        sarf.pop(s, None)
         added.discard(s)
         f = abs(t.qty * px) * FEE[t.market]
         g = upnl(t, px)
@@ -169,6 +176,13 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         # 1) 信号离场（用 i-1 收盘信号，在 i 开盘执行）
         for s in list(pos):
             want = side_of(SIG[s][i - 1])
+            if s in sarf:
+                if want == pos[s].side:
+                    sarf.pop(s)
+                    continue
+                if i - entry_i[s] >= sar_h:
+                    close(s, P(pos[s].side, "open", s)[i], when, "反手时间", i)
+                continue
             if want != pos[s].side:
                 close(s, P(pos[s].side, "open", s)[i], when, "信号反转" if want != "flat" else "信号转空仓", i)
         # 解除止损锁定
@@ -206,6 +220,20 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
                      atr_mult=st["atr_stop_mult"])
             if z.notional > 0:
                 want[s] = (sg, z)
+        sarnew = set()
+        for s, d in list(sarq.items()):
+            if s in pos or s in want:
+                continue
+            if d > 0 and (RGL[i - 1] or not rk["allow_spot_long"]) or d < 0 and not rk["allow_perp_short"]:
+                continue
+            sd = side_of(d)
+            z = size(side=sd, equity=eq_prev, price=P(sd, "open", s)[i], atr=P(sd, "atr", s)[i - 1],
+                     max_risk=risk_now * NVM[MK[sd]][s][i - 1] * sar_k, max_weight=w_now * NVM[MK[sd]][s][i - 1] * sar_k,
+                     atr_mult=sar_m)
+            if z.notional > 0:
+                want[s] = (d, z)
+                sarnew.add(s)
+        sarq.clear()
         room = eq_prev * float(rk["max_gross_exposure"]) - gross
         alloc = scale_to_room({s: z.notional for s, (_, z) in want.items()}, room, fee)
         for s, (sg, z) in want.items():
@@ -219,6 +247,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
             tgt = float(px) + (1 if sg > 0 else -1) * tp_r * abs(float(px) - z.stop_price) if tp_r > 0 else float("nan")
             pos[s] = Trade(s, market_of(sg), side_of(sg), when, float(px), qty, notional, z.stop_price, tgt, fees_usdt=f)
             entry_i[s] = i
+            if s in sarnew:
+                sarf[s] = -sg
         # 2b) 可选：浮盈加仓（默认关闭，pyramid_r = 0）。前一根收盘浮盈 ≥ k×R（R = |入场价 − 止损|）
         #     时在本根开盘加仓一次：名义 = min(f × 原名义, 单币权重余量, 总敞口余量)；入场价改为加权均价，止损不动。
         if pyr_k > 0 and pyr_f > 0:
@@ -251,7 +281,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         #       所有已有仓的目标再按「总敞口额度 − 本根新开仓名义」等比缩放；
         #       |当前名义 − 目标| / 目标 > rebalance_band 才调整；先减后加，加仓受剩余总敞口限制；止损价不变。
         if rb_band > 0 and pos:
-            held = {q: pos[q] for q in pos if entry_i[q] != i}
+            held = {q: pos[q] for q in pos if entry_i[q] != i and q not in sarf}
             new_n = sum(abs(pos[q].qty) * P(pos[q].side, "open", q)[i] for q in pos if entry_i[q] == i)
             g_now = sum(abs(x.qty) * P(x.side, "open", y)[i] for y, x in pos.items())
             rb_plan = RB.plan(held, {q: float(P(t.side, "open", q)[i]) for q, t in held.items()},
@@ -283,6 +313,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         # 3) 盘中止损 / 止盈。开盘已越过止盈价 → 按开盘价止盈；否则同一根同时触及时保守地先算止损。
         for s in list(pos):
             t = pos[s]
+            ws = sarf.get(s)
             o, h, lo = P(t.side, "open", s)[i], P(t.side, "high", s)[i], P(t.side, "low", s)[i]
             tg = t.target_price
             if tp_r > 0 and ((t.side == "long" and o >= tg) or (t.side == "short" and o <= tg)):
@@ -292,9 +323,17 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
             elif t.side == "long" and lo <= t.stop_price:
                 close(s, min(o, t.stop_price), when, "ATR止损", i)
                 blocked[s] = 1
+                if ws is not None:
+                    blocked[s] = ws
+                elif sar_h > 0:
+                    sarq[s] = -1
             elif t.side == "short" and h >= t.stop_price:
                 close(s, max(o, t.stop_price), when, "ATR止损", i)
                 blocked[s] = -1
+                if ws is not None:
+                    blocked[s] = ws
+                elif sar_h > 0:
+                    sarq[s] = 1
             elif tp_r > 0 and ((t.side == "long" and h >= tg) or (t.side == "short" and lo <= tg)):
                 close(s, tg, when, "止盈", i)
                 if not tp_re:
@@ -353,7 +392,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict) -> dict:
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": round(FEE["spot"] * 10_000, 4), "spot_taker_bps": round(FEE["spot"] * 10_000, 4), "perp_taker_bps": round(FEE["perp"] * 10_000, 4), "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
-        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_band_down": float(st.get("rebalance_band_down", 0) or 0), "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l, "name_vol_target": nv_t, "name_vol_lookback": nv_l, "chop_n": int(st.get("chop_n", 0) or 0), "chop_max": float(st.get("chop_max", 50) or 50), "elder_short_gate_n": el_n, "elder_short_gate_x": el_x,
+        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_band_down": float(st.get("rebalance_band_down", 0) or 0), "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l, "name_vol_target": nv_t, "name_vol_lookback": nv_l, "chop_n": int(st.get("chop_n", 0) or 0), "chop_max": float(st.get("chop_max", 50) or 50), "elder_short_gate_n": el_n, "elder_short_gate_x": el_x, "sar_hold_bars": sar_h, "sar_risk_mult": sar_k, "sar_atr_mult": sar_m,
         "resizes": int(sum(t.resizes for t in closed + open_trades)), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
     }
