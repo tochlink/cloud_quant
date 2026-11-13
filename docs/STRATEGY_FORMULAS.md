@@ -2493,3 +2493,16 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
   - TRIX：全部 ≤ 基线或持平，唯一略高的 turnS W120（+158.7% / +161.9%，Sharpe 1.72 / 1.74，post +59.7% / +59.9%）低于其安慰剂（OKX 最高 +181.0%）；slope W15 崩到 +16…+18%。
   - need 类安慰剂普遍 +59…+129%，说明"顺 Coppock / TRIX 符号才开仓"本身就是大幅过滤，真实格的 W60 增益只是窄窗口巧合。
 - 结论：拒绝，不改默认、不进观察名单。Coppock / TRIX 是 MA 交叉的慢速动量重复，作为门控只在单一周期上偶然领先、2026-03 后无增益且被安慰剂追上。Coppock 曲线与 TRIX 动量平滑家族已覆盖。
+
+## 轮换：Chaikin Money Flow / Money Flow Index 量价资金流入场门控（2026-11-12 19:00，研究，不改默认；MFI need 进弱观察名单）
+
+- 查重：轮换日志已有 OBV / VWAP、Elder Force Index、Arms EMV、taker flow、量价相关，但没有 Chaikin Money Flow（收盘位置加权成交量）和 Money Flow Index（典型价资金流 RSI），本轮一起补测。
+- 公式（官方现货 4h，因果；成交量单位在比值中抵消，无需换算 USDT）：cmf_t = Σ_N[((C−L)−(H−C))/(H−L)·V] / Σ_N V ∈ [−1, 1]（H=L 时权重 0）；TP=(H+L+C)/3，正 / 负资金流 = TP·V 按 ΔTP 符号归类，MFI_N = 100 − 100/(1+Σ正/Σ负)，门控用中心化 x = (MFI−50)/50。
+- 门控（只拦新开 / 反手）：need T——新多需 x>T、新空需 x<−T；fadeS X——x<−X（资金流出衰竭）时拦新空；fadeL X——x>X 时拦新多；confS X——x>X（吸筹）时拦新空。P 后缀为确定性循环时移安慰剂。
+- 网格：CMF N 20/60/120，MFI N 14/42/84，need T 0/0.1，fadeS、fadeL、confS 若干阈值；再对 MFI need N30–60 × T0.05–0.15、MFI fadeS N10–20 × X0.3–0.5 做邻域，各 5 个安慰剂种子；真实 + 压力费率；Gate 与 OKX；2026-03-05 前后切分；最后做月度胜负与 3 / 6 / 12 个月滚动选择 walk-forward。脚本 scratch/cmf_long.py、mfi_nb.py、mfi_wf.py；输出 output/research_cmf_mfi_gate_long_history.csv、research_cmf_mfi_gate_neighborhood.csv、research_cmf_mfi_gate_monthly_walkforward.csv（及 _monthly_vs_off.csv，均不入库）。
+- 结果（基线 Gate +156.4% / −18.8% / Sharpe 1.66，OKX +159.0% / −18.9% / 1.67，post +57.4% / +57.2%）：
+  - CMF：need 全部大幅低于基线（N120 T0.1 Gate −1.6%、OKX −18.8%）；fadeS / fadeL / confS 要么几乎不触发（≈ 基线），要么更差（fadeL N20 +131…+137%）。拒绝。
+  - MFI fadeS N14–20 X0.3–0.4：两所都高于基线（Gate 最高 +171.7% / 1.75，OKX 最高 +176.2% / 1.77，回撤 −14.6…−17.3%），邻域平滑；但时移安慰剂最高 Gate +168.5%、OKX +177.7%，与真实格无法区分，post +49.4…+56.3% 低于基线，月度 post 净差为负。与 WVF / EMV / Fisher 同属"空头衰竭"效应，拒绝。
+  - MFI need N30 T0.05：Gate +169.1% / −15.7% / 1.76，OKX +172.5% / −15.9% / 1.76，明显高于 5 个安慰剂（Gate ≤ 1.65、OKX ≤ 1.51 Sharpe），压力费率仍高于基线；N42 T0.1 Gate +172.9% / 1.77、OKX +165.1% / 1.73。但邻域参差（OKX N30 T0.1 +117%、N36 T0.1 +129%，N50 / N60 普遍低于基线），post +52.5…+57.2% 不超过基线，post 月度只赢 3–4/8。
+  - Walk-forward（候选 need N30/N36/N42 + fadeS N14/N20）：3 个月训练窗 Gate 1.81 vs 1.83、OKX 1.89 vs 1.85；6 个月 1.86 vs 1.93 / 1.85 vs 1.95；12 个月 Gate 2.25 vs 2.23、OKX 2.04 vs 2.18；所有窗口 2026-03 后 walk-forward 收益 +50…+58% 低于基线 +58…+59%。未通过。
+- 结论：CMF 拒绝；MFI fadeS 拒绝（被安慰剂追平）；MFI need N30–42 T0.05–0.1 是真实但只在 2026-03 前生效的过滤，放入弱观察名单，待 post 数据积累后再测，不实现为参数、不改默认。CMF / MFI 量价资金流家族已覆盖。
