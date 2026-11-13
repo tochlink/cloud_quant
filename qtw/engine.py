@@ -440,16 +440,24 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         src = ind[use]
         last = src.iloc[-1]
         # 合成信号序列（两市场按开盘时间对齐）→ 信号起始时间
+        # 慢均线预热段（含确认根数）信号恒为 0：预热结束处的 0 → ±1 不是真实交叉。只在两市场都已就绪的行里找信号起点，
+        # 否则当前信号段早于取数窗口时「信号起点」会随窗口滑动（约 need − slow_ma 根后越过止损时间），
+        # block_active 据此误判「止损后出现过不同信号」而提前解锁、同向再入场；回测只在信号真正变化时解锁。
+        cb = max(1, int(st.get("confirm_bars", 1) or 1))
+        for m in ind:
+            ind[m]["_ready"] = ind[m]["sma_slow"].notna().astype(int).rolling(cb, min_periods=cb).sum().eq(cb)
         if "spot" in ind and "perp" in ind:
-            j = ind["spot"][["open_time", "close_time", "signal"]].merge(
-                ind["perp"][["open_time", "signal"]], on="open_time", suffixes=("_s", "_p"))
+            j = ind["spot"][["open_time", "close_time", "signal", "_ready"]].merge(
+                ind["perp"][["open_time", "signal", "_ready"]], on="open_time", suffixes=("_s", "_p"))
             j["signal"] = combine(j["signal_s"], j["signal_p"])
+            j = j[j["_ready_s"] & j["_ready_p"]]
         else:
-            j = src[["open_time", "close_time", "signal"]].copy()
+            j = src[["open_time", "close_time", "signal", "_ready"]].copy()
             if "perp" not in ind:
                 j["signal"] = combine(j["signal"], [0] * len(j))
             else:
                 j["signal"] = combine([0] * len(j), j["signal"])
+            j = j[j["_ready"]]
         cross = last_cross(j)
         prev_sig = None  # 上一段信号（当前信号段开始前的方向），供信号变化日志使用
         if cross is not None:
