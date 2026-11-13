@@ -6,6 +6,7 @@
     目标 = min(权益 × max_risk_per_trade / 止损距离%, 权益 × max_weight_per_name)
 所有已有持仓的目标再按 (权益 × max_gross_exposure − 本周期新开仓名义) 等比缩放（预留 taker 手续费）。
 |当前名义 − 目标| / 目标 > rebalance_band 且差额 ≥ 1 USDT 才调整；先减后加，加仓受剩余总敞口限制。
+可选 rebalance_band_down > 0：减仓（当前 > 目标）改用 (当前 − 目标) / 目标 > rebalance_band_down，加仓仍用 rebalance_band。
 止损价不变（与回测一致：止损在入场时确定）；加仓后入场价为加权均价。
 每根 K 线只评估一次（按最新已收盘 K 线时间记在 paper_state.rebalance_bar），避免盘中价格抖动反复调仓。
 实盘：减仓 = close_long / close_short（永续 reduceOnly）部分数量；加仓 = open_long / open_short 差额数量，
@@ -38,6 +39,7 @@ def plan(positions: dict, prices: dict, atrs: dict, *, equity: float, new_notion
     band = float(st.get("rebalance_band", 0) or 0)
     if band <= 0:
         return []
+    band_dn = float(st.get("rebalance_band_down", 0) or 0) or band
     mode = str(st.get("rebalance_mode", "stop") or "stop")
     tg = {}
     for s, p in positions.items():
@@ -58,7 +60,7 @@ def plan(positions: dict, prices: dict, atrs: dict, *, equity: float, new_notion
     for s, v in tg.items():
         p, px = positions[s], prices[s]
         cur, tgt = abs(p.qty) * px, v * k
-        if tgt > 0 and abs(cur - tgt) / tgt > band and abs(cur - tgt) >= 1.0:
+        if tgt > 0 and abs(cur - tgt) / tgt > (band_dn if cur > tgt else band) and abs(cur - tgt) >= 1.0:
             out.append({"symbol": s, "delta_usdt": tgt - cur, "target_usdt": tgt, "current_usdt": cur, "price": px})
     out.sort(key=lambda r: r["delta_usdt"])
     room = equity * float(rk["max_gross_exposure"]) - gross_now

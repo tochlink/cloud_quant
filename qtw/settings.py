@@ -71,6 +71,10 @@ DEFAULTS: dict[str, Any] = {
         # 真实费率（现货 10 / 永续 5.1 bps）：前 6 段选出 0.1，后 6 段（未参与选择）OKX +33.6% vs 基线 +29.4%，
         # Gate +33.2% vs +29.3%；费率 ×2 仍更好；0.1/0.25/0.5 三档全优（平台而非尖峰）。0 = 关闭
         "rebalance_band": 0.1,
+        # 2026-11-12 19:55：可选「减仓专用阈值」（非对称调仓带）。0 = 与 rebalance_band 相同（默认，行为不变）；
+        # >0 时：当前名义高于目标（减仓）需偏离 > rebalance_band_down，加仓仍用 rebalance_band。研究建议 0.3–0.35
+        #（4500 根 4h：0.3 时 Gate +163% / OKX +169% 对基线 +156% / +159%，2026-03 后 +4 点；OKX walk-forward 全胜，Gate 3 个月训练略输，暂不设为默认，详见 docs/STRATEGY_FORMULAS.md）
+        "rebalance_band_down": 0.0,
         # 2026-11-10 13:05 改为默认 30%/180，并已接入模拟/实盘引擎（qtw/engine.vol_scaled_cfg：账本按 4h 分桶的收盘权益，
         # 不足 181 根即约 30 天时 k=1 不缩放）。严格月度 walk-forward（候选 0/25/30/35%，训练 3/6/12 月 × Calmar/夏普，两所 × 真实/压力费率
         # 共 24 组）：月度切换不优于固定选择；固定 30% 相对 0% 在全部 24 组样本外窗口回撤都更小（约 −2~−5 点）、夏普都更高，收益真实费率 −9~+4 点、压力费率 −16~−2 点（用收益换回撤）
@@ -213,6 +217,9 @@ def validate(s: dict) -> dict:
     st["rebalance_band"] = float(st.get("rebalance_band", 0) or 0)
     if st["rebalance_band"] and not 0.05 <= st["rebalance_band"] <= 2:
         raise ValueError("调仓阈值需为 0（关闭）或 0.05–2（即 5%–200%）")
+    st["rebalance_band_down"] = float(st.get("rebalance_band_down", 0) or 0)
+    if st["rebalance_band_down"] and not 0.05 <= st["rebalance_band_down"] <= 2:
+        raise ValueError("减仓调仓阈值需为 0（同调仓阈值）或 0.05–2（即 5%–200%）")
     st["port_vol_target"] = float(st.get("port_vol_target", 0) or 0)
     if st["port_vol_target"] and not 0.05 <= st["port_vol_target"] <= 2:
         raise ValueError("组合波动率目标需为 0（关闭）或 0.05–2（年化 5%–200%）")
