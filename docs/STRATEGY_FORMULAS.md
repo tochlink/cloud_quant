@@ -2430,3 +2430,17 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
   - fade / fadeL 一律 ≤ 基线（X1.5 掉到 +120…+143%），X2.5 几乎不触发。
   - 最佳 fadeS N40 X1.5：Gate +168.8% / −18.2% / 1.71，OKX +180.4% / −17.8% / 1.76，但增益全在 2026-03 前（post +56.0% / +54.4% 低于基线），且邻域孤立（N40 X2.0 +152.9% / +154.6%，N20 X1.5 +152.7% / +153.8% 都低于基线）。
 - 结论：拒绝，不改默认、不进观察名单；Fisher 变换 / 通道位置高斯化家族已覆盖。
+
+## 轮换：Arms Ease of Movement（EMV，Arms 1996）成交额归一化"轻松移动"入场门控（2026-11-12 18:20，研究，不改默认；fadeS 版进观察名单）
+
+- 查重：轮换日志已有 Elder Force Index（收益 × 成交额）、OBV/VWAP、量能冲击、Kyle λ、Amihud，但没有 EMV（中点位移 × 区间 ÷ 成交额，即"放量难推、缩量易推"的方向）门控，本轮补测。
+- 公式（官方现货 4h，因果）：e_t = ((H_t+L_t)/2 − (H_{t−1}+L_{t−1})/2) · (H_t − L_t) / (V_t · C_t)（V·C 为 USDT 成交额）；x_t = EMA_N(e) / EMA_N(|e|) ∈ [−1, 1]。
+- 门控（只拦新开 / 反手，不动已有持仓与止损）：need 新多需 x>T、新空需 x<−T；fade x>X 拦新多、x<−X 拦新空；fadeS 只拦空；fadeL 只拦多。P 后缀为 x 序列确定性循环时移安慰剂。
+- 网格：N 6/14/30（邻域补 10/20）；T 0/0.1/0.2；X 0.5/0.7（邻域补 0.4/0.6）；真实 + 压力费率；Gate 与 OKX；2026-03-05 前后切分；fadeS 时移安慰剂 5 个种子；月度 walk-forward（训练 3/6/12 个月，按夏普选）。脚本 scratch/emv_long.py、emv_pl.py、emv_wf.py；输出 output/research_ease_of_movement_gate_long_history.csv、research_ease_of_movement_gate_placebo_neighborhood.csv、research_ease_of_movement_gate_monthly_walkforward.csv（+ _monthly_vs_off.csv，均不入库）。
+- 结果（基线 Gate +156.4% / −18.8% / Sharpe 1.66，OKX +159.0% / −18.9% / 1.67，post +57.4% / +57.2%）：
+  - need 全面劣化（+75…+156%），need 安慰剂同样劣化；fade / fadeL 一律 ≤ 基线。
+  - fadeS（缩量轻松下跌后不追空）邻域平滑：N6–30 × X0.4–0.6 全部 Gate +170…+199% / Sharpe 1.74–1.86、OKX +164…+189% / 1.70–1.81，回撤 −15.6…−18.2%；最佳 N14 X0.4 Gate +198.9% / −15.8% / 1.86，OKX +189.3% / −15.6% / 1.81。压力费率 N14 X0.5 Gate +166.5%、OKX +158.1%（基线 +139.7% / +142.1%）。
+  - 5 个 fadeSP 时移安慰剂：Gate +156…+165%、OKX +150…+162%（Sharpe 1.63–1.70），全部低于真实格。
+  - 但增益全部在 2026-03 前：post +54.0…+57.4%，与基线持平或略低；月度对比 post 胜月仅 0–3/8（N14 X0.4 Gate 3/8、OKX 1/8），post 月度差之和 −0.6…−1.9pp。
+  - 月度 walk-forward：训练 3/6 个月两所均胜基线（Gate 3m +179.6% / 1.92 vs +161.6% / 1.83；OKX 3m +177.6% / 1.92 vs +164.6% / 1.85），12 个月持平略低；walk-forward 的 post 段也低于基线（Gate 57.0% vs 58.7%，OKX 57.2% vs 58.2%）。
+- 结论：不改默认；fadeS N10–20 X0.4–0.5 进观察名单（与 Williams VIX Fix sv、Fisher fadeS 同为"投降 / 轻松下跌后不追空"效应，三者都只在 2026-03 前有效），待 2026-03 后月度胜率 ≥5/8 且高于全部安慰剂时再测。EMV / 成交额归一化移动难度家族已覆盖。
