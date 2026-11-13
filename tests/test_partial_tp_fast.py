@@ -219,14 +219,30 @@ def test_api_candles_interval_param(monkeypatch):
 
 
 @pytest.mark.real_lots
-def test_gate_perp_lot_decimal_min_zero_is_not_one_contract():
-    # Gate 接口原样字段：enable_decimal 合约 order_size_min = 0（真实返回值），不能被当成缺失回退到 1 张
-    sol = lots.gate_perp_lot("SOLUSDT", {"quanto_multiplier": "1", "order_size_min": 0, "enable_decimal": True})
-    assert sol.step == pytest.approx(0.001) and sol.min_qty == pytest.approx(0.001)
-    assert lots.floor_qty(0.8765, sol, 80) == pytest.approx(0.876)  # 0.88 SOL ≈ 70 U 不再被 1 SOL 最小量拦掉
-    eth = lots.gate_perp_lot("ETHUSDT", {"quanto_multiplier": "0.01", "order_size_min": 0, "enable_decimal": True})
-    assert eth.min_qty == pytest.approx(0.00001) and lots.floor_qty(0.0052, eth, 1900) == pytest.approx(0.0052)
-    btc = lots.gate_perp_lot("BTCUSDT", {"quanto_multiplier": "0.0001", "order_size_min": 1, "enable_decimal": False})
+def test_gate_perp_lot_uses_decimal_header_values():
+    # 带 X-Gate-Size-Decimal: 1 的真实返回（2026-11-13）：小数合约 order_size_min = "0.1"（字符串）
+    sol = lots.gate_perp_lot("SOLUSDT", {"quanto_multiplier": "1", "order_size_min": "0.1", "enable_decimal": True})
+    assert sol.contract_step == pytest.approx(0.1) and sol.step == pytest.approx(0.1) and sol.min_qty == pytest.approx(0.1)
+    assert lots.floor_qty(0.8765, sol, 80) == pytest.approx(0.8)  # 0.88 SOL → 0.8 SOL（不是 1 SOL，也不是交易所不收的 0.876）
+    eth = lots.gate_perp_lot("ETHUSDT", {"quanto_multiplier": "0.01", "order_size_min": "0.1", "enable_decimal": True})
+    assert eth.min_qty == pytest.approx(0.001) and lots.floor_qty(0.0052, eth, 1900) == pytest.approx(0.005)
+    btc = lots.gate_perp_lot("BTCUSDT", {"quanto_multiplier": "0.0001", "order_size_min": "1", "enable_decimal": False})
     assert btc.step == pytest.approx(0.0001) and btc.min_qty == pytest.approx(0.0001) and btc.contract_step == 1.0
+    # 不带头时小数合约被截断成 0、或字段缺失：退回 1 张（偏保守，不发会被拒的数量）
+    zero = lots.gate_perp_lot("SOLUSDT", {"quanto_multiplier": "1", "order_size_min": 0, "enable_decimal": True})
+    assert zero.min_qty == pytest.approx(1.0)
     miss = lots.gate_perp_lot("ADAUSDT", {"quanto_multiplier": "10"})
-    assert miss.min_qty == pytest.approx(10.0)  # 字段缺失才按 1 张
+    assert miss.min_qty == pytest.approx(10.0)
+
+
+def test_gate_live_order_sends_decimal_size_string_with_header():
+    from qtw.live import gate as G
+    spec = {"ct_val": 1.0, "lot_sz": 0.1, "min_sz": 0.1, "decimal": True}
+    path, p = G.order_request("SOLUSDT", "perp", "open_short", 0.87, 80.0, spec)
+    assert path == "/futures/usdt/orders" and p["size"] == "-0.8"
+    _, c = G.order_request("SOLUSDT", "perp", "close_short", 0.8, 80.0, spec)
+    assert c["size"] == "0.8" and c["reduce_only"] is True
+    _, b = G.order_request("BTCUSDT", "perp", "open_short", 0.00052, 1e5, {"ct_val": 0.0001, "lot_sz": 1.0, "min_sz": 1.0})
+    assert b["size"] == -5  # 整数合约保持整数
+    req = G.GateTrader({"api_key": "k", "secret": "s"}, testnet=True).preview_order("SOLUSDT", "perp", "open_short", 0.87, 80.0, spec)
+    assert req["headers"].get("X-Gate-Size-Decimal") == "1"

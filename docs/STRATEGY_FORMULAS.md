@@ -4271,3 +4271,15 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
 - 实测（官方 OKX / Gate 4h，8 个标的，2025-01-18 → 2026-11-13 PT，真实费率，按当前官方步长取整，`scratch/dust_bt.py`，`output/research_rebalance_dust_residual_long_history.csv`）：起始 5000 / 1000 / 500 / 300 / 200 / 100 U，两家所调仓减仓 286~569 次，**尘埃剩余 0 次**（rebalance_band 0.1 只在偏离 > 10% 时调，减仓后剩余≈目标名义，远高于最小量）。收益与上一轮取整回测一致（Gate 1000 U +160.17%，OKX +162.44%）。
 - 结论：历史上不会触发，保护只针对极端小仓（例如 Gate 现货最小金额 3 U 附近）；不改任何策略默认，回测数字不变。新增测试 `tests/test_rebalance.py::test_rebalance_new_qty_rounds_and_never_leaves_dust`，全部 247 个测试通过。
 - 下一族建议：执行 / 引擎侧（例如现货买入手续费从到手币里扣时，全平数量与账本数量的一致性）或尚未覆盖的仓位构建。
+
+### 执行层：Gate 小数合约必须带 X-Gate-Size-Decimal 头——修正最小量 / 步长与实盘下单数量（2026-11-13 08:40 PST）
+
+- 发现：上一轮把 Gate 小数合约（enable_decimal）的 `order_size_min = 0` 当成真值、步长设为 0.001 张。核对 Gate 官方文档与公告（2025-12-18「USDT 永续合约数量字段类型变更」、2026-02-02「enable_decimal 字段」）：**不带请求头 `X-Gate-Size-Decimal: 1` 时数量字段按整数返回并向零截断**，0 是被截断的 0.1。带头实测（2026-11-13，公共接口）：SOL / ETH / XRP `order_size_min = "0.1"` 张，BTC 仍为 1 张（非小数合约）。
+- 修正：
+  - `qtw/lots.py`：Gate 合约元数据带头获取；小数合约张步长 = `order_size_min`（拿不到正数时保守退回 1 张），最小量 = max(最小张数, 步长) × quanto_multiplier；缓存键改为 `lot3:` 弃用旧值。现在 Gate 永续：SOL 步长 / 最小 0.1 SOL，ETH 0.001 ETH，XRP 1 XRP，BTC 0.0001 BTC。
+  - `qtw/market/gate.py::perp_spec` 与 lots 同一口径（返回 `lot_sz`、`decimal`）。
+  - `qtw/live/gate.py::order_request`：小数合约的张数按步长向下取整并以字符串发送，下单 / 预览请求带 `X-Gate-Size-Decimal: 1`；整数合约保持整数。原来一律 `int(floor(张数))`，SOL 0.8 张这样的空单会变成 0 张被拒（实盘仍关闭，本修正只影响将来开启实盘 / 测试网）。
+  - `qtw/market/base.py::HttpJson.get` 增加可选 `headers`。
+- 回测重跑（官方 Gate 4h，8 个标的，真实费率；按修正后的官方步长取整，`scratch/lots_bt2.py`，`output/research_lot_rounding_small_capital_long_history_v2.csv`、`output/research_lot_rounding_specs_v2.csv`）：分数数量基线 +160.67%。取整后 5000 U +160.24%，1000 U +160.77%（压力 +143.48% vs 分数 +143.71%），500 U +157.55%，300 U +157.68%，200 U +149.14%（压力 +131.26%），**100 U +112.36%（夏普 1.38，1219 次开仓因低于最小量被跳过）**。上一轮按 0.001 步长算的 100 U +129.99%、200 U +152.02% 偏乐观，以本次为准；1000 U 及以上结论不变（取整代价 < 1 点）。OKX 不受影响。
+- 结论：不改策略默认。Gate 小资金建议 ≥ 300 U（100 U 时 SOL / XRP / AVAX 永续最小量相对仓位过大，大量开仓被跳过）。测试新增 / 改写：`test_gate_perp_lot_uses_decimal_header_values`、`test_gate_live_order_sends_decimal_size_string_with_header`，全部 248 个测试通过。
+- 下一族建议：现货买入手续费从到手币里扣时，全平数量与账本数量的一致性（实盘侧）；或尚未覆盖的仓位构建。
