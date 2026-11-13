@@ -602,6 +602,29 @@ def block_active(bk, sym: str, row: dict) -> bool:
     return True
 
 
+def clamp_spot_sell(tr, venue: str, sym: str, qty: float, price: float) -> tuple[float, str]:
+    """现货平多（卖出）数量夹到交易所实际可用余额。
+
+    OKX / Gate 现货市价买入的手续费默认从到手的币里扣（买 Q 实得约 Q × (1 − 0.10%)），账本按 Q 记，
+    直接卖 Q 会因余额不足被拒、仓位留在交易所。卖出数量取 min(账本数量, 可用余额)，再按交易所步长向下取整。
+    查不到余额时按原数量发（由交易所决定），不猜。返回 (数量, 说明)。"""
+    fn = getattr(tr, "spot_available", None)
+    if fn is None:
+        return qty, ""
+    try:
+        avail = float(fn(sym[:-4] if sym.endswith("USDT") else sym))
+    except Exception as e:  # noqa: BLE001
+        return qty, f"可用余额查询失败，按账本数量发单：{e}"
+    if avail + 1e-12 >= qty:
+        return qty, ""
+    from . import lots
+    try:
+        q = lots.floor_qty(avail, lots.spec(venue, sym, "spot"), price)
+    except Exception:  # noqa: BLE001
+        q = avail
+    return q, f"可用余额 {avail:.12g} 小于账本数量 {qty:.12g}（买入手续费从币里扣），卖出 {q:.12g}"
+
+
 def _route(cfg, sym, market, action, qty, price):
     """纸面执行之外，若实盘闸门全部通过才会发单；否则只记录被拦截原因。"""
     mode = "live" if S.live_armed(cfg) else "paper"
@@ -617,9 +640,17 @@ def _route(cfg, sym, market, action, qty, price):
     try:
         tr = _trader(cfg)
         spec = get_client(cfg["venue"]).perp_spec(sym) if market == "perp" else None
+        if market == "spot" and action == "close_long":
+            qty, note = clamp_spot_sell(tr, cfg["venue"], sym, qty, price)
+            if qty <= 0:
+                _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=0,
+                           ref_price=price, status="error", detail=note[:300])
+                return "error"
+        else:
+            note = ""
         res = tr.place_order(cfg, sym, market, action, qty, price, spec)
         _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,
-                   ref_price=price, status="sent", detail=str(res)[:300])
+                   ref_price=price, status="sent", detail=((note + "｜") if note else "") + str(res)[:300])
         return "sent"
     except Exception as e:  # noqa: BLE001
         _log_order(mode="live", venue=cfg["venue"], symbol=sym, market=market, action=action, qty=qty,

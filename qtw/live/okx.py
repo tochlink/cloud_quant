@@ -97,3 +97,13 @@ class OkxTrader:
     def balance(self) -> dict:
         """只读：查询余额（不下单）。"""
         return _send(build(self.keys, "GET", "/api/v5/account/balance", None, self.demo))
+
+    def spot_available(self, base: str) -> float:
+        """只读：现货（交易账户）某币的可用数量 availBal。现货市价买入的手续费从到手的币里扣，
+        平多卖出前用它把卖出数量夹到实际可用余额，避免「余额不足」被拒。"""
+        j = _send(build(self.keys, "GET", f"/api/v5/account/balance?ccy={base}", None, self.demo))
+        for acct in j.get("data") or []:
+            for d in acct.get("details") or []:
+                if str(d.get("ccy")).upper() == base.upper():
+                    return float(d.get("availBal") or 0)
+        return 0.0

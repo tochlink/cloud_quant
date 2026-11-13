@@ -96,3 +96,11 @@ class GateTrader:
     def balance(self):
         """只读：查询现货账户余额（不下单）。"""
         return _send(build(self.keys, "GET", "/spot/accounts", None, testnet=False))
+
+    def spot_available(self, base: str) -> float:
+        """只读：现货账户某币的可用数量 available（未开 GT 抵扣时，市价买入手续费从到手的币里扣）。"""
+        rows = _send(build(self.keys, "GET", "/spot/accounts", None, query=f"currency={base}", testnet=False))
+        for d in rows if isinstance(rows, list) else []:
+            if str(d.get("currency")).upper() == base.upper():
+                return float(d.get("available") or 0)
+        return 0.0
