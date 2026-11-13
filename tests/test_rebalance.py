@@ -90,3 +90,15 @@ def test_paper_resize_accounting(tmp_path):
     # 往返记录的盈亏 = 所有腿已实现盈亏之和 = 权益变化
     assert tr[0]["pnl_usdt"] == pytest.approx(bk.realized - 1000)
     assert pnl_close == pytest.approx(3 * (260 / 3 - 70) - 3 * 70 * 0.00051)
+
+
+def test_rebalance_new_qty_rounds_and_never_leaves_dust():
+    from qtw.engine import rebalance_new_qty
+    from qtw.lots import Lot, floor_qty
+    lot = Lot("gate", "XUSDT", "spot", 0.01, 0.0, min_quote=3.0)
+    f = lambda q: floor_qty(q, lot, 10.0)  # 价格 10：最小金额 3 U = 0.3 币
+    assert rebalance_new_qty(1.0, 1.357, f) == 1.35          # 加仓差额按步长向下取整
+    assert rebalance_new_qty(1.0, 0.6, f) == 0.6             # 正常减仓（差额 4 U ≥ 3 U）
+    assert rebalance_new_qty(1.0, 0.98, f) is None           # 差额 0.2 币 = 2 U < 3 U：不动
+    assert rebalance_new_qty(1.0, 0.25, f) is None           # 差额够但剩余 0.25 币 = 2.5 U < 3 U：不留尘埃仓
+    assert rebalance_new_qty(1.0, 0.0, f) is None            # 目标 0 由信号 / 止损离场处理，调仓不清仓
