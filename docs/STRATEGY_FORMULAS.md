@@ -4744,3 +4744,13 @@ band 取 0.1、0.25、0.5 三档都优于基线，是一片平台，不是孤立
   - 压力费率：H180 胜率 84.5% / 76.1%，回撤不更差 62%。
 - C3+RB30 vs C3：收益胜率只有 28% ~ 44%（H180 中位数 −1 ~ −3 点），但回撤不更差 61% ~ 75%。
 - 结论：C3+RB30 是比 C3 更平滑的版本：收益略低，walk-forward 全胜 base，长窗口里回撤几乎从不比 base 差。按规则，它已满足 walk-forward 一关（全胜，不只是打平），月度只有 5/8（按 9 个月口径 6/9），尚未到「≥6/9 且稳定」的余量。默认不变。下一步：在 1000U 模拟盘实例开 C3+RB30 做实盘前观察（引擎侧 ls_parity 已同口径，风险预算是现有参数）。
+
+## 策略页 #8「双均线 + 多空平价 + 风险预算（候选）」ma_trend_lsp（2026-11-13 ~11:45 PT）
+
+- 注册表 `qtw/strategies.py` 新增 `ma_trend_lsp`（no 8，状态「观察」）：`signal=None`，即信号 / 过滤 / 2×ATR 止损 / 退出与 #1 完全相同，只改仓位构建：
+  - `strategy.ls_parity_cap = 3`（较小一侧信号书的 name_vol_mult 放大到与较大一侧平衡，上限 3 倍，公式见上文「动态多空风险平价 up」）；
+  - `risk.max_risk_per_trade = 0.03`，`strategy.port_vol_target = 0.5`（RB30）。
+- `strategy_cfg`：`signal is None` 的条目不再原样返回，而是只套 `overrides`（→ cfg.strategy）与新增的 `risk_overrides`（→ cfg.risk），**不套 `_NEUTRAL`**；#1（两者皆空）仍等于深拷贝原 cfg。
+- 结论不写进 `multi_strategy_research.json`（那是 spot_perp 口径的多策略对比），在代码里 `VERDICTS.setdefault("ma_trend_lsp", 观察)`。因信号与 #1 相同，不进影子子账本（`shadow.active_ids` 只收 signal 非空的策略）。
+- 复核（官方 4h、8 币、perp_both 10× + 官方资金费，2025-01-18→2026-11-13 UTC）：`run_backtest(data, strategy_cfg(c, "ma_trend_lsp"), funding)` Gate +214.86% / DD −15.05% / Sharpe 2.02 / 2026-03-05 后 +73.42%，OKX +218.80% / −15.16% / 2.05 / +72.53%，与 C3+RB30 研究逐位一致；`R.run("ma_trend_lsp")` 与手工覆盖参数的回测权益逐点相等。默认不变。
+- 测试：`tests/test_strategies_registry.py::test_ma_trend_lsp_variant_overrides_only_sizing`；全套 332 通过。
