@@ -204,6 +204,8 @@ def load() -> dict:
             data = {**data, "risk": {k: v for k, v in rk.items() if k != "perp_leverage"}}
         out = _merge(DEFAULTS, data)
         out["strategy"]["fast_exit_tf"] = "off"  # 已存的旧值（5m / 10m / 1d）也不生效，见 validate() 注释
+        for k in ("live_enabled", "okx_demo", "gate_testnet"):  # 旧存档里的字符串 "false" 不能被当成 True（实盘闸门 / 模拟盘开关）
+            out["live"][k] = _as_bool(out["live"].get(k, DEFAULTS["live"][k]))
         return out
 
 
@@ -397,4 +399,4 @@ def update(patch: dict) -> dict:
 
 def live_armed(s: dict) -> bool:
     lv = s["live"]
-    return lv["mode"] == "live" and bool(lv["live_enabled"]) and lv.get("confirm_phrase") == LIVE_CONFIRM_PHRASE
+    return lv["mode"] == "live" and _as_bool(lv["live_enabled"]) and lv.get("confirm_phrase") == LIVE_CONFIRM_PHRASE

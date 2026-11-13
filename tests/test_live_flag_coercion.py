@@ -30,3 +30,13 @@ def test_demo_flags_strict_bool():
 def test_bad_mode_rejected():
     with pytest.raises(ValueError):
         S.validate(_cfg(mode="foo"))
+
+
+def test_raw_string_false_never_arms_live_or_opens_gate(monkeypatch):
+    from qtw.live import guard
+    c = copy.deepcopy(S.DEFAULTS)
+    c["live"].update(mode="live", live_enabled="false", confirm_phrase=S.LIVE_CONFIRM_PHRASE)  # 未经 validate 的旧存档形态
+    assert S.live_armed(c) is False
+    monkeypatch.setenv("QTW_ALLOW_LIVE_ORDERS", "1")
+    okk, reasons = guard.check(c, "okx")
+    assert okk is False and any("实盘开关" in r for r in reasons)

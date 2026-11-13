@@ -24,7 +24,7 @@ def check(cfg: dict, exchange: str) -> tuple[bool, list[str]]:
     lv = cfg["live"]
     if lv["mode"] != "live":
         reasons.append("当前为纸面模式")
-    if not lv["live_enabled"]:
+    if not S._as_bool(lv["live_enabled"]):  # 字符串 "false" 视为关闭
         reasons.append("实盘开关未打开")
     if lv.get("confirm_phrase") != S.LIVE_CONFIRM_PHRASE:
         reasons.append("未输入实盘风险确认语")
