@@ -13,6 +13,11 @@ HEALTH_URL="http://${HOST}:${PORT}/api/health"
 mkdir -p data output
 chmod 700 data
 
+# 本机可选的第二个纸面实例（如 data/paper1000u，端口 8788，独立数据库）：存在 run.sh 就一起保活（run.sh 自带健康检查，幂等）
+for extra in data/*/run.sh; do
+  [[ -x "${extra}" ]] && "${extra}" >/dev/null 2>&1 || true
+done
+
 # Force live-off unless the operator explicitly exported ALLOW=1 already.
 export QTW_ALLOW_LIVE_ORDERS="${QTW_ALLOW_LIVE_ORDERS:-0}"
 
