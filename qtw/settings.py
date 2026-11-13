@@ -228,6 +228,8 @@ def validate(s: dict) -> dict:
     st["fast_ma"], st["slow_ma"], st["atr_period"] = int(st["fast_ma"]), int(st["slow_ma"]), int(st["atr_period"])
     if not (2 <= st["fast_ma"] < st["slow_ma"] <= 400):
         raise ValueError("需要 2 ≤ 快线 < 慢线 ≤ 400")
+    if not 2 <= st["atr_period"] <= 200:  # 0 / 1 会让 ATR 为空或退化成单根 TR，止损与按风险定仓失真
+        raise ValueError("ATR 周期需在 2–200 之间")
     st["atr_stop_mult"] = float(st["atr_stop_mult"])
     if not 0.5 <= st["atr_stop_mult"] <= 10:
         raise ValueError("ATR 止损倍数需在 0.5–10 之间")
