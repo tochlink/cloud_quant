@@ -75,18 +75,24 @@ def candles(venue: str, symbol: str, interval: str, limit: int, market: str = "s
     exp = _expected_last_open(interval)
     have = _read(venue, market, symbol, interval, limit)
     newest = int(have["open_time"].iloc[-1].value // 1_000_000) if len(have) else None
-    if len(have) >= limit and newest == exp and _contiguous(have, interval):
+    floor_key = f"hist_floor:{venue}:{market}:{symbol}:{interval}"
+    floor = db.meta_get(floor_key)
+    at_floor = bool(floor) and len(have) and int(have["open_time"].iloc[0].value // 1_000_000) <= int(floor)
+    if (len(have) >= limit or at_floor) and newest == exp and _contiguous(have, interval):
         have.attrs["cache"] = "sqlite"
         return have
     # 需要补拉：缺得少只拉缺口 + 余量，否则全量
     step = INTERVAL_MS[interval]
     n = limit
-    if newest is not None and len(have) >= limit and _contiguous(have, interval) and newest < exp:
+    if newest is not None and (len(have) >= limit or at_floor) and _contiguous(have, interval) and newest < exp:
         n = min(limit, int((exp - newest) // step) + 3)
     fresh = get_client(venue).candles(symbol, interval, max(n, 2), market)
     if fresh.empty:
         raise MarketDataError(f"{venue.upper()} {symbol} {market} 未返回任何已收盘 K 线")
     _upsert(venue, market, symbol, interval, fresh)
+    if n == limit and len(fresh) < limit and _contiguous(fresh, interval):
+        # 交易所已无更早的 K 线（上市起点）：记下起点，之后不必每次全量重拉
+        db.meta_set(floor_key, str(int(fresh["open_time"].iloc[0].value // 1_000_000)))
     out = _read(venue, market, symbol, interval, limit)
     if not _contiguous(out, interval) and len(fresh) >= min(limit, len(out)):
         # 库里拼接出现缺口（例如很久没更新），直接用本次实拉的真实数据

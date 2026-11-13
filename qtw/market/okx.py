@@ -7,7 +7,7 @@ from qtw.timeutil import from_ms
 
 from .base import INTERVAL_MS, HttpJson, MarketDataError, Quote, finalize
 
-BAR = {"15m": "15m", "1h": "1H", "4h": "4H", "1d": "1Dutc"}
+BAR = {"1m": "1m", "5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "1d": "1Dutc"}
 # openapi.okx.com 是 2026-05-20 起官方推荐的 Global REST 域名；www.okx.com 仍可用。
 # aws.okx.com 已于 2025-04-28 停用，不再作为默认备用。可用 QTW_OKX_REST_HOST 指定官方域名。
 BASES = ["https://openapi.okx.com", "https://www.okx.com"]
@@ -46,7 +46,7 @@ class OkxPublic:
         while closed(rows) < limit and rows:
             oldest = min(int(r[0]) for r in rows)
             more = self._data("/api/v5/market/history-candles",
-                              {"instId": inst, "bar": BAR[interval], "limit": 100, "after": oldest})
+                              {"instId": inst, "bar": BAR[interval], "limit": 300, "after": oldest})
             if not more:
                 break
             rows.extend(more)
