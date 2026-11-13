@@ -579,6 +579,114 @@ def chart_yoy(symbol: str = "ETHUSDT", interval: str = "1d", years: str = "", ma
         raise HTTPException(502, f"行情获取失败：{e}") from e
 
 
+# ---------------- 指标页（只作参考证据，不参与下单） ----------------
+IND_TFS = ["1m", "5m", "10m", "1h", "4h", "1d"]
+IND_WARMUP = 260  # SMA150 / 一目 52+26 等需要的预热根数
+
+
+def _ind_args(symbol: str, venue: str, market: str, interval: str = "4h"):
+    sym = symbol.upper().replace("/", "").replace("-", "")
+    if sym not in S.SUPPORTED_SYMBOLS:
+        raise HTTPException(400, f"只支持 {', '.join(S.SUPPORTED_SYMBOLS)}")
+    v = (venue or S.load()["venue"]).lower()
+    if v not in ("okx", "gate"):
+        raise HTTPException(400, "venue 只能是 okx 或 gate")
+    if market not in ("spot", "perp"):
+        raise HTTPException(400, "market 只能是 spot 或 perp")
+    if interval not in IND_TFS:
+        raise HTTPException(400, f"周期只能是 {' / '.join(IND_TFS)}")
+    return sym, v
+
+
+def _ind_frame(v: str, sym: str, iv: str, bars: int, market: str) -> pd.DataFrame:
+    from .market import chart as mchart
+    if iv == "10m":  # 10m 由官方 1m 聚合；图表接口最多取 3000 根 1m，这里多取一些以覆盖指标预热
+        from .fastlayer import aggregate
+        df = aggregate(mcache.candles(v, sym, "1m", min(6000, bars * 10 + 20), market), 10, 1).tail(bars).reset_index(drop=True)
+    else:
+        df = mchart.chart_candles(v, sym, iv, bars, market)
+    if df.empty:
+        raise HTTPException(502, "交易所未返回该周期的已收盘 K 线")
+    return df
+
+
+def _forming_seed(v: str, sym: str, market: str, iv: str, df: pd.DataFrame) -> dict | None:
+    """当前未收盘 K 线的起点：由本根开始后已收盘的官方 1m 聚合（只用于图上实时跳动，不参与任何指标 / 信号）。"""
+    from .market import chart as mchart
+    try:
+        start = pd.Timestamp(df["close_time"].iloc[-1])
+        if iv == "1m":
+            return None
+        m1 = mcache.candles(v, sym, "1m", min(1500, mchart.SEC[iv] // 60 + 5), market)
+        x = m1[pd.to_datetime(m1["open_time"], utc=True) >= start]
+        if x.empty:
+            return None
+        return {"time": int(start.timestamp()), "open": float(x["open"].iloc[0]), "high": float(x["high"].max()),
+                "low": float(x["low"].min()), "close": float(x["close"].iloc[-1]), "n_1m": int(len(x))}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@app.get("/api/indicators")
+def indicators_page(symbol: str = "BTCUSDT", venue: str = "", market: str = "spot", interval: str = "4h", bars: int = 300):
+    """指标页数据：官方已收盘 K 线 + 全部指标序列 + 每个指标的多空标签与理由 + 证据分。"""
+    from . import ta
+    sym, v = _ind_args(symbol, venue, market, interval)
+    show = max(60, min(500, int(bars)))
+    try:
+        df = _ind_frame(v, sym, interval, show + IND_WARMUP, market)
+    except MarketDataError as e:
+        raise HTTPException(502, f"行情获取失败：{e}") from e
+    raw = df.drop(columns=["partial"], errors="ignore")
+    ind = ta.compute(raw, interval)
+    V = ta.votes(ind)
+    ind["score"] = ta.score_series(ind, V)
+    tech = ta.cards(ind, V)
+    tech_sum = ta.summarize(tech)
+    extra = []
+    try:
+        h1 = _ind_frame(v, sym, "1h", 30, "perp")
+        c1 = h1["close"].astype(float)
+        chg = float(c1.iloc[-1] / c1.iloc[-25] - 1) if len(c1) >= 25 else None
+    except Exception:  # noqa: BLE001
+        chg = None
+    extra += ta.deriv_cards(ta.derivatives(v, sym), chg)
+    try:
+        btc = mcache.candles(v, "BTCUSDT", "4h", 1300, "spot")
+    except Exception:  # noqa: BLE001
+        btc = None
+    extra.append(ta.btc_regime_card(btc, int(S.load()["strategy"].get("btc_regime_ma") or 1200)))
+    allc = tech + extra
+    forming = _forming_seed(v, sym, market, interval, df)
+    tail = ind.tail(show)
+    t = ((tail["open_time"] - pd.Timestamp(0, tz="UTC")) // pd.Timedelta(seconds=1)).astype(int).tolist()
+    from .market import chart as mchart
+    return ok({"symbol": sym, "venue": v, "market": market, "interval": interval, "interval_cn": ta.TF_CN[interval],
+               "interval_sec": mchart.SEC[interval], "data_source": df.attrs.get("data_source"), "source_host": df.attrs.get("source_host"),
+               "aggregated_from": df.attrs.get("aggregated_from", ""), "fetched_at": df.attrs.get("fetched_at"),
+               "times": t, "candles": [{"time": t[i], "open": r.open, "high": r.high, "low": r.low, "close": r.close, "volume": r.volume}
+                                       for i, r in enumerate(tail.itertuples())],
+               "series": ta.series_payload(ind, show), "cards": allc, "forming": forming, "tech_summary": tech_sum, "summary": ta.summarize(allc),
+               "note": "参考证据：只展示，不参与下单。信号只用已收盘 K 线；最后一根未收盘 K 线只在图上实时跳动。"})
+
+
+@app.get("/api/indicators/matrix")
+def indicators_matrix(symbol: str = "BTCUSDT", venue: str = "", market: str = "spot"):
+    """多周期证据矩阵：1分钟 ~ 日线各自的技术面证据分（同一套投票规则）。"""
+    from . import ta
+    sym, v = _ind_args(symbol, venue, market)
+    rows = []
+    for iv in IND_TFS:
+        try:
+            df = _ind_frame(v, sym, iv, 300 if iv != "10m" else 280, market).drop(columns=["partial"], errors="ignore")
+            snap = ta.tech_snapshot(df, iv)
+            rows.append({"interval": iv, "interval_cn": ta.TF_CN[iv], "book": "长线" if iv in ("4h", "1d") else "短线", **snap})
+        except Exception as e:  # noqa: BLE001
+            rows.append({"interval": iv, "interval_cn": ta.TF_CN[iv], "book": "长线" if iv in ("4h", "1d") else "短线",
+                         "error": str(getattr(e, "detail", e))[:160]})
+    return ok({"symbol": sym, "venue": v, "market": market, "rows": rows, "threshold": ta.BULL_TH})
+
+
 # ---------------- 纸面 / 自动交易 ----------------
 @app.post("/api/cycle")
 def cycle():
@@ -904,6 +1012,15 @@ def backtest_runs():
 
 
 # ---------------- 实时推送（SSE） ----------------
+def _forming_alt(venue: str) -> dict:
+    """另一家交易所的实时 K 线（指标页可选 Gate / OKX；只读展示）。"""
+    other = "gate" if venue == "okx" else "okx"
+    try:
+        return {"venue": other, "forming": (stream.snapshot(other) or {}).get("forming") or {}}
+    except Exception:  # noqa: BLE001
+        return {"venue": other, "forming": {}}
+
+
 def _live_payload() -> dict:
     cfg = S.load()
     bk = engine.book(cfg)
@@ -916,6 +1033,7 @@ def _live_payload() -> dict:
         "connections": [{k: c.get(k) for k in ("name", "status", "url", "last_msg", "last_msg_age_sec", "reconnects", "last_error")}
                         for c in st.get("connections") or []],
         "prices": snap["prices"], "forming": snap["forming"],
+        "forming_alt": _forming_alt(cfg["venue"]),
         "mark_candles": snap.get("mark_candles") or {},
         "paper": {"equity": eq, "realized": bk.realized, "unrealized": eq - bk.realized, "gross": bk.gross(),
                   "net": bk.net(), "total_pnl": eq - bk.starting,

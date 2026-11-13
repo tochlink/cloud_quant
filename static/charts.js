@@ -393,6 +393,76 @@
       });
       return c;
     },
+    /* 指标页：一张图分上下两区（同一时间轴、同一十字线）。上区 = K 线 + 叠加指标；下区 = 副图指标（独立价格轴 "sub"）。
+       d.times 与 d.series[k] 一一对齐（null = 数据不足）。opt = { overlay, sub, overlays: {key:[[col, 名称, 颜色]...]}, subs: {...} } */
+    indicators(el, d, opt) {
+      const term = isTerm();
+      const c = this.make(el);
+      c.applyOptions({ rightPriceScale: { scaleMargins: { top: 0.04, bottom: 0.33 } }, crosshair: { mode: 0 } });
+      const s = c.addCandlestickSeries(term
+        ? { upColor: "rgba(0,0,0,0)", downColor: "#ff3b5c", borderVisible: true, borderUpColor: "#00e68a", borderDownColor: "#ff3b5c", wickUpColor: "#00e68a", wickDownColor: "#ff3b5c", priceLineVisible: false }
+        : { upColor: "#25b07a", downColor: "#e5536b", borderVisible: false, wickUpColor: "#25b07a", wickDownColor: "#e5536b", priceLineVisible: false });
+      s.setData(d.candles.map((k) => ({ time: k.time, open: k.open, high: k.high, low: k.low, close: k.close })));
+      const T = d.times, ser = d.series || {};
+      const line = (col) => (ser[col] || []).map((v, i) => (v == null ? { time: T[i] } : { time: T[i], value: v }));
+      const ov = (opt.overlays || {})[opt.overlay] || [];
+      const ovS = [];
+      ov.forEach(([col, name, color, style]) => {
+        if (col === "st_line") { // 超级趋势：多头段绿、空头段红（分两条线，另一方向留空）
+          const dir = ser.st_dir || [];
+          const up = c.addLineSeries({ color: term ? "#00e68a" : "#25b07a", lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+          const dn = c.addLineSeries({ color: term ? "#ff3b5c" : "#e5536b", lineWidth: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+          up.setData((ser.st_line || []).map((v, i) => (v == null || dir[i] !== 1 ? { time: T[i] } : { time: T[i], value: v })));
+          dn.setData((ser.st_line || []).map((v, i) => (v == null || dir[i] !== -1 ? { time: T[i] } : { time: T[i], value: v })));
+          ovS.push([col, name, color]);
+          return;
+        }
+        const x = c.addLineSeries({ color, lineWidth: style === "thin" ? 1 : 2, lineStyle: style === "dash" ? 2 : 0, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        x.setData(line(col)); ovS.push([col, name, color]);
+      });
+      const sb = (opt.subs || {})[opt.sub] || { lines: [] };
+      const subS = [];
+      (sb.lines || []).forEach(([col, name, color, kind]) => {
+        const o = { priceScaleId: "sub", priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: "", priceFormat: { type: "price", precision: sb.prec ?? 2, minMove: 10 ** -(sb.prec ?? 2) } };
+        let x;
+        if (kind === "hist") {
+          x = c.addHistogramSeries({ ...o, base: 0 });
+          x.setData((ser[col] || []).map((v, i) => (v == null ? { time: T[i] } : { time: T[i], value: v, color: v >= 0 ? (term ? "rgba(0,230,138,.55)" : "rgba(37,176,122,.55)") : (term ? "rgba(255,59,92,.55)" : "rgba(229,83,107,.55)") })));
+        } else {
+          x = c.addLineSeries({ ...o, color, lineWidth: 1.5 });
+          x.setData(line(col));
+        }
+        subS.push([col, name, color, x]);
+      });
+      if (subS.length) (sb.levels || []).forEach((lv) => subS[0][3].createPriceLine({ price: lv, color: term ? "#2d4a8a" : "#c9c3ea", lineWidth: 1, lineStyle: 2, axisLabelVisible: false }));
+      c.priceScale("sub").applyOptions({ scaleMargins: { top: 0.72, bottom: 0.02 }, borderVisible: false });
+      // 最近 120 根默认可见（可缩放 / 拖动看更早）
+      const n = d.candles.length;
+      if (n > 120) c.timeScale().setVisibleLogicalRange({ from: n - 120, to: n + 2 }); else c.timeScale().fitContent();
+      c._candle = s; c._n = n;
+      c._lastClosed = n ? d.candles[n - 1].time : 0;
+      c._lastClosedClose = n ? d.candles[n - 1].close : null;
+      const idx = new Map(T.map((t, i) => [t, i]));
+      const prevOf = new Map(); d.candles.forEach((k, i) => { if (i > 0) prevOf.set(k.time, d.candles[i - 1].close); });
+      const card = hoverCard(el, "ind");
+      const fv = (v) => (v == null || !isFinite(v) ? "—" : hfp(v));
+      c.subscribeCrosshairMove((pr) => {
+        const k = pr && pr.time != null && pr.point && pr.seriesData ? pr.seriesData.get(s) : null;
+        c._hover = !!(k && k.open != null);
+        if (!c._hover) { card.hide(); return; }
+        const live = pr.time > c._lastClosed;
+        let pc = prevOf.get(pr.time); if (pc == null && live) pc = c._lastClosedClose;
+        const chg = pc ? k.close - pc : null, pct = pc ? (k.close / pc - 1) * 100 : null, amp = pc ? (k.high - k.low) / pc * 100 : null;
+        const i = idx.get(pr.time);
+        const vals = (rows) => rows.map(([col, name, color]) => `<span><i style="background:${color}"></i><em>${escH(name)}</em><b>${i == null ? "—" : fv((ser[col] || [])[i])}</b></span>`).join("");
+        card.show(`<div class="hc-col one"><div class="hc-h"><em>时间</em><span class="hc-d">${escH(window.PT.full(pr.time))}${live ? ' · <b class="hc-live">未收盘</b>' : ""}</span></div>
+          <div class="hc-close"><em>收盘</em><b>${hfp(k.close)}</b><span class="hc-chip ${hcl(pct)}">${hsg(pct)}</span></div>
+          <div class="hc-ohl"><span><em>开盘</em>${hfp(k.open)}</span><span><em>最高</em>${hfp(k.high)}</span><span><em>最低</em>${hfp(k.low)}</span></div>
+          <div class="hc-st three"><span><em>涨跌额</em><b class="${hcl(chg)}">${chg == null ? "—" : (chg >= 0 ? "+" : "\u2212") + hfp(Math.abs(chg))}</b></span><span><em>涨跌幅</em><b class="${hcl(pct)}">${hsg(pct)}</b></span><span><em>振幅</em><b>${amp == null ? "—" : amp.toFixed(2) + "%"}</b></span></div>
+          ${live ? '<div class="hc-ivals"><span class="muted">未收盘 K 线不计算指标</span></div>' : `${ovS.length ? `<div class="hc-ivals">${vals(ovS)}</div>` : ""}${subS.length ? `<div class="hc-ivals sub"><em class="hc-ik">${escH(sb.name || "")}</em>${vals(subS)}</div>` : ""}`}</div>`, pr.point);
+      });
+      return c;
+    },
     /* 同比叠加：横轴 = 参考年 2000 的同月同日（UTC），刻度只显示 月-日。
        style = "k"（默认，每年一组 K 线：空心 = 收涨、实心 = 收跌，颜色区分年份，同一天按年份并排）| "line"（只画收盘线）。
        悬浮：十字线 + 固定宽度提示框（各年日期 / 开高低收 / 涨跌 / 年内涨跌，以及最新年份与其他年份的差异）。 */

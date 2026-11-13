@@ -5,6 +5,7 @@ const S = { status: null, dash: null, signals: null, bt: null, page: "dashboard"
 
 /* UI icons: filled paths from @douyinfe/semi-icons 2.104.0 (MIT, DouyinFE / Semi Design). */
 const ICON = {
+  indicators: '<path fill-rule="evenodd" clip-rule="evenodd" d="M9.5 1a1.5 1.5 0 0 1 1.4 1.1l3.77 14.27 1.4-4.84a1.5 1.5 0 0 1 1.43-1.03H22a1.5 1.5 0 0 1 0 3h-3.42l-2.62 8.47a1.5 1.5 0 0 1-2.87-.07L9.33 7.63l-1.4 4.84A1.5 1.5 0 0 1 6.5 13.5H2a1.5 1.5 0 0 1 0-3h3.42l2.62-8.47C8.24 1.4 8.84.98 9.5 1Z" fill="currentColor"/>', /* IconPulse */
   home: '<path d="M2 11.4454C2 11.1619 2.12032 10.8917 2.33104 10.7021L11.331 2.60207C11.7113 2.2598 12.2887 2.2598 12.669 2.60207L21.669 10.7021C21.8797 10.8917 22 11.1619 22 11.4454V20C22 21.1046 21.1046 22 20 22H16C15.4477 22 15 21.5523 15 21V17C15 15.3432 13.6569 14 12 14C10.3431 14 9 15.3432 9 17V21C9 21.5523 8.55228 22 8 22H4C2.89543 22 2 21.1046 2 20V11.4454Z" fill="currentColor"/>',
   signals: '<path d="M2 4C2 2.89543 2.89543 2 4 2H9C10.1046 2 11 2.89543 11 4V9C11 10.1046 10.1046 11 9 11H4C2.89543 11 2 10.1046 2 9V4Z" fill="currentColor"/><path d="M2 15C2 13.8954 2.89543 13 4 13H9C10.1046 13 11 13.8954 11 15V20C11 21.1046 10.1046 22 9 22H4C2.89543 22 2 21.1046 2 20V15Z" fill="currentColor"/><path d="M13 15C13 13.8954 13.8954 13 15 13H20C21.1046 13 22 13.8954 22 15V20C22 21.1046 21.1046 22 20 22H15C13.8954 22 13 21.1046 13 20V15Z" fill="currentColor"/><path d="M13 4C13 2.89543 13.8954 2 15 2H20C21.1046 2 22 2.89543 22 4V9C22 10.1046 21.1046 11 20 11H15C13.8954 11 13 10.1046 13 9V4Z" fill="currentColor"/>',
   backtest: '<path d="M17 2C16.4477 2 16 2.44772 16 3V19H14V10C14 9.44772 13.5523 9 13 9H11C10.4477 9 10 9.44771 10 10V19H8V8C8 7.44772 7.55228 7 7 7H5C4.44772 7 4 7.44772 4 8V19H3C2.44772 19 2 19.4477 2 20V21C2 21.5523 2.44772 22 3 22H21C21.5523 22 22 21.5523 22 21V20C22 19.4477 21.5523 19 21 19H20V3C20 2.44772 19.5523 2 19 2H17Z" fill="currentColor"/>',
@@ -47,7 +48,7 @@ function hydrateIcons(root = document) {
   });
 }
 const NAV = [
-  ["dashboard", "home", "总览", "总览"], ["signals", "signals", "信号", "信号 / 进出场"], ["backtest", "backtest", "回测", "回测"], ["positions", "positions", "持仓", "持仓"],
+  ["dashboard", "home", "总览", "总览"], ["signals", "signals", "信号", "信号 / 进出场"], ["indicators", "indicators", "指标", "指标 / 多空证据"], ["backtest", "backtest", "回测", "回测"], ["positions", "positions", "持仓", "持仓"],
   ["trades", "trades", "成交", "成交"], ["risk", "risk", "风控", "风控 / 自动交易"], ["settings", "settings", "设置", "行情源 / API / 实盘"], ["help", "help", "帮助", "帮助"],
 ];
 const COIN = { BTC: "#f7931a", ETH: "#627eea", BNB: "#e0a800", SOL: "linear-gradient(135deg,#9945ff,#14f195)", XRP: "#23292f", ADA: "#0033ad", DOGE: "#c2a633", AVAX: "#e84142", LTC: "#345d9d", LINK: "#2a5ada", TRX: "#d8222a", DOT: "#e6007a" };
@@ -264,6 +265,7 @@ function relayoutPagers() {
   else if (S.page === "positions") renderPosTable();
   else if (S.page === "dashboard") renderDashTx();
   else if (S.page === "backtest") renderBtTrades();
+  else if (S.page === "indicators" && typeof indRenderRows === "function") indRenderRows();
   renderRight();
 }
 
@@ -1624,6 +1626,7 @@ function applyLive() {
   updateLiveCells();
   applyForming();
   applyMarkCandles();
+  if (S.page === "indicators" && typeof indLive === "function") indLive();
   const now = Date.now();
   if (S.page === "dashboard" && now - (S._lastLiveRender || 0) > 5000 && !$("#modal:not(.hidden)") && !document.querySelector("#page :hover:is(button,a)") && !dashHover()) { // 悬停图表 / 图例时不重绘，避免悬停卡片被打断
     S._lastLiveRender = now; pageDashboard();
@@ -1669,8 +1672,8 @@ $("#livePill").onclick = () => {
 };
 
 /* ---------- 路由与刷新 ---------- */
-const PAGES = { dashboard: pageDashboard, signals: pageSignals, backtest: pageBacktest, positions: pagePositions, trades: pageTrades, risk: pageRisk, settings: pageSettings, help: pageHelp };
-const SUBS = { dashboard: "系统化纸面 / 研究工具 · 不构成投资建议", signals: "实时 K 线与每个币的进出场建议", backtest: "真实公共历史 K 线 · 无前视回测", positions: "纸面持仓 · 可平仓或停止自动管理", trades: "开平配对的成交记录", risk: "自动交易、紧急停止与风控参数", settings: "行情源、API 密钥（加密保存）与实盘闸门", help: "使用说明与风险提示" };
+const PAGES = { dashboard: pageDashboard, signals: pageSignals, indicators: pageIndicators, backtest: pageBacktest, positions: pagePositions, trades: pageTrades, risk: pageRisk, settings: pageSettings, help: pageHelp };
+const SUBS = { dashboard: "系统化纸面 / 研究工具 · 不构成投资建议", signals: "实时 K 线与每个币的进出场建议", indicators: "更多技术指标与多空证据（参考证据，不参与下单）", backtest: "真实公共历史 K 线 · 无前视回测", positions: "纸面持仓 · 可平仓或停止自动管理", trades: "开平配对的成交记录", risk: "自动交易、紧急停止与风控参数", settings: "行情源、API 密钥（加密保存）与实盘闸门", help: "使用说明与风险提示" };
 async function refreshStatus() { S.status = await api("/api/status"); renderMode(); }
 async function refreshDash() {
   const [d, eq] = await Promise.all([
@@ -1689,6 +1692,8 @@ async function route() {
   S.page = (location.hash.replace("#/", "") || "dashboard").split("?")[0];
   if (!PAGES[S.page]) S.page = "dashboard";
   if (S.page !== "signals") S.chart = null;
+  if (S.page !== "indicators" && S.ind) S.ind.chart = null;
+  { const it = document.getElementById("indTip"); if (it) it.classList.remove("on"); }
   renderNav(); renderTitle();
   if (!S.status || !S.dash) await refreshAll();
   try { await PAGES[S.page](); } catch (e) { $("#page").innerHTML = `<div class="empty neg">${esc(e.message)}</div>`; }
