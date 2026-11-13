@@ -248,14 +248,18 @@ def funding_series(venue: str, symbols: list[str], start_ms: int, *, fetch: bool
     return out, info
 
 
-def funding_by_bar(times_ns, rows: list[tuple[int, float]]):
-    """把结算点按 (times[i-1], times[i]] 归到第 i 根（i ≥ 1）：返回与 times 同长的费率和数组。"""
+def funding_by_bar(times_ns, rows: list[tuple[int, float]], grace_ms: int = 60_000):
+    """把结算点按 (times[i-1], times[i]] 归到第 i 根（i ≥ 1）：返回与 times 同长的费率和数组。
+
+    官方记录的结算时间常比整点晚 1 ~ 2 秒（如 00:00:01）。不加容差时这类结算会被归到下一根（晚 4 小时、
+    按下一根开盘价、只对下一根仍持有的仓计），与引擎「开盘先计资金费再离场 / 入场」的顺序不一致。
+    grace_ms：结算时间在某根开盘之后 grace_ms 以内的，视为该根开盘时刻结算（默认 60 秒）。"""
     import numpy as np
     t = np.asarray(times_ns, dtype="int64")
     acc = np.zeros(len(t))
     if not rows or not len(t):
         return acc
-    ts = np.array([r[0] for r in rows], dtype="int64") * 1_000_000
+    ts = (np.array([r[0] for r in rows], dtype="int64") - int(grace_ms)) * 1_000_000
     rs = np.array([r[1] for r in rows], dtype=float)
     k = np.searchsorted(t, ts, side="left")  # t[k-1] < ts <= t[k]
     ok = (k >= 1) & (k < len(t))

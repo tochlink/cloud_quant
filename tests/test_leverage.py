@@ -61,6 +61,17 @@ def test_funding_by_bar_bins_settlements_into_next_bar():
     assert acc[0] == 0 and acc[1] == pytest.approx(0.001) and acc[2] == pytest.approx(-0.001) and acc[3] == 0
 
 
+
+def test_funding_by_bar_treats_settlement_a_few_seconds_late_as_at_bar_open():
+    # 官方结算记录常比整点晚 1 ~ 2 秒：仍归到该整点开盘那根，而不是晚一根
+    h = 3600_000
+    times = np.array([0, 4 * h, 8 * h, 12 * h], dtype="int64") * 1_000_000
+    acc = LV.funding_by_bar(times, [(4 * h + 1000, 0.001), (8 * h + 2000, 0.002), (8 * h + 61_000, 0.004)])
+    assert acc[1] == pytest.approx(0.001) and acc[2] == pytest.approx(0.002) and acc[3] == pytest.approx(0.004)
+    old = LV.funding_by_bar(times, [(4 * h + 1000, 0.001)], grace_ms=0)
+    assert old[1] == 0 and old[2] == pytest.approx(0.001)
+
+
 def _q(sym, px):
     return Quote(venue="okx", symbol=sym, market="perp", price=px, kind="mark", ts=datetime.now(timezone.utc),
                  data_source="okx_public_ws", source_host="ws.okx.com")
