@@ -187,6 +187,10 @@ def test_yoy_normalizes_each_year(monkeypatch):
     raw = chart.yoy("okx", "ETHUSDT", "1d", [2025], mode="raw")
     assert raw["series"][0]["points"][0]["value"] == pytest.approx(100)
     assert out["available_years"] == [2025, 2026]
+    p0 = s25["points"][10]
+    assert {"open", "high", "low", "close", "raw"} <= set(p0) and p0["close"] == p0["value"]
+    assert p0["raw"][3] == pytest.approx(c[10]) and p0["high"] >= p0["low"]
+    assert raw["series"][0]["points"][5]["open"] == pytest.approx(raw["series"][0]["points"][5]["raw"][0])
 
 
 def test_api_candles_interval_param(monkeypatch):
