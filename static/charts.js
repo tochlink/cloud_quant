@@ -259,7 +259,8 @@
         out += `<path d="M${x0} ${y0} A${r} ${r} 0 ${large} 1 ${x1} ${y1}" stroke="${p.c}" stroke-width="${p.w || 22}" fill="none" stroke-linecap="butt"/>`;
         a0 = a1;
       });
-      return `<svg viewBox="0 0 100 100">${out}<circle cx="50" cy="50" r="15" fill="#fff"/></svg>`;
+      const hole = Math.max(15, 34 - Math.max(...parts.map((p) => p.w || 22)) / 2 - 1);
+      return `<svg viewBox="0 0 100 100">${out}<circle cx="50" cy="50" r="${hole}" fill="#fff" class="donut-hole"/></svg>`;
     },
   };
 
@@ -271,17 +272,51 @@
     crosshair: { mode: 1 },
     localization: { locale: "zh-CN", timeFormatter: (ts) => window.PT.full(ts) },
   };
+  // 深色终端主题：纯黑底 + 暗蓝细网格 + 等宽数字
+  const TERM = {
+    layout: { attributionLogo: false, background: { type: "solid", color: "#000000" }, textColor: "#7d8bb0", fontFamily: "JetBrains Mono, SFMono-Regular, Menlo, Consolas, monospace" },
+    grid: { vertLines: { color: "#0c1324" }, horzLines: { color: "#0c1324" } },
+    rightPriceScale: { borderColor: "#1c2742" }, timeScale: { ...base.timeScale, borderColor: "#1c2742" },
+  };
+  const isTerm = () => document.body.classList.contains("theme-term");
+  const opts0 = () => (isTerm() ? { ...base, ...TERM } : base);
+  /* ---- 悬停卡片（K 线 / 同比共用）：半透明 + 背景模糊，跟随鼠标，靠右边（价格轴）或底部时翻转，水平错开光标 22px，不遮挡被悬停的 K 线 ---- */
+  const hfp = (v) => (v == null || !isFinite(v) ? "—" : Math.abs(v) >= 1000 ? v.toLocaleString("en-US", { maximumFractionDigits: 2 }) : Math.abs(v) >= 1 ? v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : v.toPrecision(4));
+  const hsg = (v, dgt = 2, unit = "%") => (v == null || !isFinite(v) ? "—" : (v >= 0 ? "+" : "\u2212") + Math.abs(v).toFixed(dgt) + unit);
+  const hcl = (v) => (v == null || !isFinite(v) ? "" : v >= 0 ? "pos" : "neg");
+  function hoverCard(el, kind) {
+    const box = document.createElement("div"); box.className = "hcard" + (kind ? " hcard-" + kind : ""); el.appendChild(box);
+    const AXIS = 64, GAP = 22;
+    return {
+      el: box,
+      hide() { box.classList.remove("on"); },
+      show(html, pt) {
+        box.innerHTML = html; box.classList.add("on");
+        const W = el.clientWidth, H = el.clientHeight, tw = box.offsetWidth, th = box.offsetHeight;
+        let x = pt.x + GAP;
+        if (x + tw > W - AXIS) x = pt.x - GAP - tw;            // 右侧放不下 → 翻到光标左侧
+        if (x < 4) x = Math.min(W - AXIS - tw, pt.x + GAP);     // 两侧都挤：贴左
+        x = Math.max(4, x);
+        let y = pt.y - th / 2;
+        y = Math.max(4, Math.min(y, H - th - 30));             // 底部留出时间轴
+        box.style.transform = `translate(${Math.round(x)}px,${Math.round(y)}px)`;
+      },
+    };
+  }
   window.BigCharts = {
+    retheme() {},
     make(el, h) {
       el.innerHTML = "";
-      const c = LightweightCharts.createChart(el, { ...base, width: el.clientWidth, height: h || el.clientHeight });
+      const c = LightweightCharts.createChart(el, { ...opts0(), width: el.clientWidth, height: h || el.clientHeight });
       const ro = new ResizeObserver(() => { if (!el.isConnected) { ro.disconnect(); return; } c.applyOptions({ width: el.clientWidth, height: h || el.clientHeight }); });
       ro.observe(el);
       return c;
     },
     candles(el, d) {
       const c = this.make(el);
-      const s = c.addCandlestickSeries({ upColor: "#25b07a", downColor: "#e5536b", borderVisible: false, wickUpColor: "#25b07a", wickDownColor: "#e5536b" });
+      const s = c.addCandlestickSeries(isTerm()
+        ? { upColor: "rgba(0,0,0,0)", downColor: "#ff3b5c", borderVisible: true, borderUpColor: "#00e68a", borderDownColor: "#ff3b5c", wickUpColor: "#00e68a", wickDownColor: "#ff3b5c" } // 终端：空心绿 / 实心红
+        : { upColor: "#25b07a", downColor: "#e5536b", borderVisible: false, wickUpColor: "#25b07a", wickDownColor: "#e5536b" });
       s.setData(d.candles);
       c.addLineSeries({ color: "#2cc4c9", lineWidth: 2, title: "快线" }).setData(d.fast);
       c.addLineSeries({ color: "#6c5ce7", lineWidth: 2, title: "慢线" }).setData(d.slow);
@@ -293,42 +328,35 @@
       c._last = d.candles.length ? d.candles[d.candles.length - 1].time : 0;
       c._lastClosed = c._last; // 已收盘最后一根；未收盘跳动只更新 c._last
       c._lastBar = d.candles.length ? { ...d.candles[d.candles.length - 1] } : null;
-      // 悬停 OHLC 栏（固定在图内左上）：时间 / 开盘 / 最高 / 最低 / 收盘 / 涨跌额（收−前收）/ 涨跌幅 / 振幅（(高−低)/前收）
+      // 悬停卡片（跟随鼠标、靠边翻转、不遮挡被悬停的 K 线）：时间 / 收盘 / 开高低 / 涨跌额 / 涨跌幅 / 振幅（(高−低)/前收）
       const prevOf = new Map();
       d.candles.forEach((k, i) => { if (i > 0) prevOf.set(k.time, d.candles[i - 1].close); });
-      let bar = el.querySelector(".k-ohlc");
-      if (!bar) { bar = document.createElement("div"); bar.className = "k-ohlc"; el.appendChild(bar); }
-      const fpx = (v) => { v = +v; const a = Math.abs(v); return a >= 1000 ? v.toFixed(2) : a >= 1 ? v.toFixed(4) : v.toPrecision(5); };
-      const show = (k) => {
-        if (!k) { bar.innerHTML = ""; return; }
-        let pc = prevOf.get(k.time);
-        if (pc == null && c._lastBar && k.time > c._lastClosed) pc = c._lastClosedClose;
-        const chg = pc ? k.close - pc : null, pct = pc ? (k.close / pc - 1) * 100 : null, amp = pc ? (k.high - k.low) / pc * 100 : null;
-        const cl = (v) => (v == null ? "" : v >= 0 ? "pos" : "neg");
-        const sg = (v, f) => (v == null ? "—" : (v >= 0 ? "+" : "\u2212") + f(Math.abs(v)));
-        bar.innerHTML = `<span><em>时间</em>${window.PT.full(k.time)}</span><span><em>开盘</em>${fpx(k.open)}</span><span><em>最高</em>${fpx(k.high)}</span><span><em>最低</em>${fpx(k.low)}</span><span><em>收盘</em><b>${fpx(k.close)}</b></span>`
-          + `<span class="${cl(chg)}"><em>涨跌额</em>${sg(chg, fpx)}</span><span class="${cl(pct)}"><em>涨跌幅</em>${sg(pct, (x) => x.toFixed(2) + "%")}</span><span><em>振幅</em>${amp == null ? "—" : amp.toFixed(2) + "%"}</span>`;
-      };
+      const card = hoverCard(el);
       c._lastClosedClose = d.candles.length ? d.candles[d.candles.length - 1].close : null;
-      c._ohlcShow = show;
-      c._ohlcIdle = () => show(c._lastBar);
-      show(c._lastBar);
+      c._ohlcIdle = () => {};
       c.subscribeCrosshairMove((pr) => {
-        const k = pr && pr.time != null && pr.seriesData ? pr.seriesData.get(s) : null;
+        const k = pr && pr.time != null && pr.point && pr.seriesData ? pr.seriesData.get(s) : null;
         c._hover = !!(k && k.open != null);
-        if (c._hover) show({ ...k, time: pr.time }); else show(c._lastBar);
+        if (!c._hover) { card.hide(); return; }
+        let pc = prevOf.get(pr.time);
+        if (pc == null && pr.time > c._lastClosed) pc = c._lastClosedClose;
+        const chg = pc ? k.close - pc : null, pct = pc ? (k.close / pc - 1) * 100 : null, amp = pc ? (k.high - k.low) / pc * 100 : null;
+        card.show(`<div class="hc-col one"><div class="hc-h"><em>时间</em><span class="hc-d">${escH(window.PT.full(pr.time))}</span></div>
+          <div class="hc-close"><em>收盘</em><b>${hfp(k.close)}</b><span class="hc-chip ${hcl(pct)}">${hsg(pct)}</span></div>
+          <div class="hc-ohl"><span><em>开盘</em>${hfp(k.open)}</span><span><em>最高</em>${hfp(k.high)}</span><span><em>最低</em>${hfp(k.low)}</span></div>
+          <div class="hc-st three"><span><em>涨跌额</em><b class="${hcl(chg)}">${chg == null ? "—" : (chg >= 0 ? "+" : "\u2212") + hfp(Math.abs(chg))}</b></span><span><em>涨跌幅</em><b class="${hcl(pct)}">${hsg(pct)}</b></span><span><em>振幅</em><b>${amp == null ? "—" : amp.toFixed(2) + "%"}</b></span></div></div>`, pr.point);
       });
       return c;
     },
     /* 同比叠加：横轴 = 参考年 2000 的同月同日（UTC），刻度只显示 月-日。
        style = "k"（默认，每年一组 K 线：空心 = 收涨、实心 = 收跌，颜色区分年份，同一天按年份并排）| "line"（只画收盘线）。
        悬浮：十字线 + 固定宽度提示框（各年日期 / 开高低收 / 涨跌 / 年内涨跌，以及最新年份与其他年份的差异）。 */
-    yoy(el, d, colorOf, style) {
+    yoy(el, d, colorOf, style, range) {
       el.innerHTML = "";
       const K = style !== "line";
       const md = (ts) => { const x = new Date(ts * 1000); return `${String(x.getUTCMonth() + 1).padStart(2, "0")}-${String(x.getUTCDate()).padStart(2, "0")}`; };
       const pfmt = (v) => d.mode === "pct" ? (v >= 0 ? "+" : "") + v.toFixed(1) + "%" : (Math.abs(v) >= 100 ? v.toFixed(2) : v.toPrecision(5));
-      const c = LightweightCharts.createChart(el, { ...base, width: el.clientWidth, height: el.clientHeight,
+      const c = LightweightCharts.createChart(el, { ...opts0(), width: el.clientWidth, height: el.clientHeight,
         crosshair: { mode: 0 },
         timeScale: { borderColor: "#ece8fd", timeVisible: false, tickMarkFormatter: (ts) => md(ts) },
         localization: { locale: "zh-CN", timeFormatter: (ts) => md(ts), priceFormatter: pfmt } });
@@ -352,14 +380,16 @@
         }
       });
       c.timeScale().fitContent();
+      // 默认只显示最近一段（K 线 3 个月 / 折线全年），K 线不再挤成细线；可拖动 / 缩放，K 线宽度随缩放自适应
+      const days = { "3m": 92, "6m": 183 }[range] || 0;
+      const lastSr = [...d.series].reverse().find((sr) => sr.points.length), last = lastSr ? lastSr.points[lastSr.points.length - 1].time : 0; // 以最新年份的最后一根为右端
+      if (days && last) { try { c.timeScale().setVisibleRange({ from: last - days * 86400, to: last + 3 * 86400 }); } catch (_) {} }
       c._n = 0;
-      // ---- 悬浮提示 ----
-      const tip = document.createElement("div"); tip.className = "yoy-tip"; tip.style.display = "none"; el.appendChild(tip);
-      const fp = (v) => (v == null || !isFinite(v) ? "—" : Math.abs(v) >= 1000 ? v.toLocaleString("en-US", { maximumFractionDigits: 2 }) : Math.abs(v) >= 1 ? v.toFixed(4).replace(/0+$/, "").replace(/\.$/, "") : v.toPrecision(4));
-      const sg = (v, dgt = 2, unit = "%") => (v == null || !isFinite(v) ? "—" : (v >= 0 ? "+" : "\u2212") + Math.abs(v).toFixed(dgt) + unit);
-      const cl = (v) => (v == null || !isFinite(v) ? "" : v >= 0 ? "pos" : "neg");
+      // ---- 悬停卡片：每年一列（年份色块、收盘大字、开高低、涨跌额 / 涨跌幅 / 振幅 / 年内），下方高亮年度差异 ----
+      const card = hoverCard(el, "yoy");
+      const tip = card.el;
       c.subscribeCrosshairMove((pr) => {
-        if (!pr || pr.time == null || !pr.point || pr.point.x < 0 || pr.point.y < 0) { tip.style.display = "none"; return; }
+        if (!pr || pr.time == null || !pr.point || pr.point.x < 0 || pr.point.y < 0) { card.hide(); return; }
         const bt = Number(pr.time) - (Number(pr.time) % 3600);
         const rows = d.series.map((sr, i) => {
           const k = idx[i] && idx[i].get(bt);
@@ -369,21 +399,18 @@
           return { sr, i, p, r, chg: prc ? (r[3] / prc - 1) * 100 : null, chgAbs: prc ? r[3] - prc : null, amp: prc ? (r[1] - r[2]) / prc * 100 : null,
                    ytd: sr.first_close ? (r[3] / sr.first_close - 1) * 100 : null };
         });
-        if (!rows.some((x) => x.p)) { tip.style.display = "none"; return; }
-        const head = `<tr><th>年份</th><th>日期</th><th>开盘</th><th>最高</th><th>最低</th><th>收盘</th><th>涨跌额</th><th>涨跌幅</th><th>振幅</th><th>年内</th></tr>`;
-        const body = rows.map((x) => `<tr><td><i style="background:${colorOf(x.i, n)}"></i>${x.sr.year}</td>${x.p ? `<td>${escH(String(x.p.date).slice(5, d.interval === "4h" ? 16 : 10))}</td><td>${fp(x.r[0])}</td><td>${fp(x.r[1])}</td><td>${fp(x.r[2])}</td><td><b>${fp(x.r[3])}</b></td><td class="${cl(x.chgAbs)}">${x.chgAbs == null ? "—" : (x.chgAbs >= 0 ? "+" : "\u2212") + fp(Math.abs(x.chgAbs))}</td><td class="${cl(x.chg)}">${sg(x.chg)}</td><td>${x.amp == null ? "—" : x.amp.toFixed(2) + "%"}</td><td class="${cl(x.ytd)}">${sg(x.ytd, 1)}</td>` : `<td colspan="9" class="muted">当天无 K 线</td>`}</tr>`).join("");
+        if (!rows.some((x) => x.p)) { card.hide(); return; }
+        const cols = rows.map((x) => `<div class="hc-col" style="--yc:${colorOf(x.i, n)}"><div class="hc-h"><span class="yr-chip">${x.sr.year}</span><span class="hc-d">${x.p ? escH(String(x.p.date).slice(5, d.interval === "4h" ? 16 : 10)) : ""}</span></div>${x.p ? `
+          <div class="hc-close"><em>收盘</em><b>${hfp(x.r[3])}</b></div>
+          <div class="hc-ohl"><span><em>开</em>${hfp(x.r[0])}</span><span><em>高</em>${hfp(x.r[1])}</span><span><em>低</em>${hfp(x.r[2])}</span></div>
+          <div class="hc-st"><span><em>涨跌额</em><b class="${hcl(x.chgAbs)}">${x.chgAbs == null ? "—" : (x.chgAbs >= 0 ? "+" : "\u2212") + hfp(Math.abs(x.chgAbs))}</b></span><span><em>涨跌幅</em><b class="${hcl(x.chg)}">${hsg(x.chg)}</b></span>
+            <span><em>振幅</em><b>${x.amp == null ? "—" : x.amp.toFixed(2) + "%"}</b></span><span><em>年内</em><b class="${hcl(x.ytd)}">${hsg(x.ytd, 1)}</b></span></div>` : `<div class="hc-none">当天无 K 线</div>`}</div>`).join("");
         const L = rows[rows.length - 1];
         const diffs = L && L.p ? rows.slice(0, -1).filter((x) => x.p).map((x) => {
           const dp = L.r[3] - x.r[3], dpc = (L.r[3] / x.r[3] - 1) * 100, gap = L.ytd - x.ytd;
-          return `<div class="yoy-diff">${L.sr.year} vs ${x.sr.year}：收盘差 <b class="${cl(dp)}">${dp >= 0 ? "+" : "\u2212"}${fp(Math.abs(dp))}</b>（<span class="${cl(dpc)}">${sg(dpc)}</span>）· 年内涨跌差 <b class="${cl(gap)}">${sg(gap, 1, " pts")}</b></div>`;
+          return `<div class="hc-diff ${hcl(dpc)}"><span class="hc-vs">${L.sr.year} vs ${x.sr.year}</span><span><em>收盘差</em><b class="${hcl(dp)}">${dp >= 0 ? "+" : "\u2212"}${hfp(Math.abs(dp))}</b></span><span><em>差幅</em><b class="${hcl(dpc)}">${hsg(dpc)}</b></span><span><em>年内涨跌差</em><b class="${hcl(gap)}">${hsg(gap, 1, " pts")}</b></span></div>`;
         }).join("") : "";
-        tip.innerHTML = `<table>${head}${body}</table>${diffs}`;
-        tip.style.display = "block";
-        const W = el.clientWidth, H = el.clientHeight, tw = tip.offsetWidth, th = tip.offsetHeight;
-        let x = pr.point.x + 16; if (x + tw > W - 70) x = pr.point.x - tw - 16; // 右侧留出价格轴
-        x = Math.max(4, Math.min(x, W - tw - 4));
-        const y = Math.max(4, Math.min(H - th - 28, 6));
-        tip.style.left = x + "px"; tip.style.top = y + "px";
+        card.show(`<div class="hc-cols n${Math.min(rows.length, 4)}">${cols}</div>${diffs}`, pr.point);
       });
       c._yoyTip = tip;
       return c;

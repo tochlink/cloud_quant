@@ -28,6 +28,14 @@ const ICON = {
   send: '<path d="M20.6027 2.13245L1.53504 8.48833C0.829806 8.72341 0.618511 9.61847 1.14416 10.1441L4.95675 13.9567C5.2771 14.2771 5.77281 14.3421 6.16489 14.1151L14.351 9.37577C14.5283 9.27312 14.7269 9.47176 14.6243 9.64907L9.88494 17.8351C9.65794 18.2272 9.7229 18.7229 10.0433 19.0433L13.8559 22.8559C14.3816 23.3815 15.2766 23.1702 15.5117 22.465L21.8676 3.39736C22.1282 2.6156 21.3844 1.87187 20.6027 2.13245Z" fill="currentColor"/>',
   alert: '<path fill-rule="evenodd" clip-rule="evenodd" d="M10.2268 2.3986L1.52616 19.0749C0.831449 20.4064 1.79747 22 3.29933 22H20.7007C22.2025 22 23.1686 20.4064 22.4739 19.0749L13.7732 2.3986C13.0254 0.965441 10.9746 0.965442 10.2268 2.3986ZM13.1415 14.0101C13.0603 14.5781 12.5739 15 12.0001 15C11.4263 15 10.9398 14.5781 10.8586 14.0101L10.2829 9.97992C10.1336 8.93495 10.9445 8.00002 12.0001 8.00002C13.0556 8.00002 13.8665 8.93495 13.7172 9.97992L13.1415 14.0101ZM13.5001 18.5C13.5001 19.3284 12.8285 20 12.0001 20C11.1716 20 10.5001 19.3284 10.5001 18.5C10.5001 17.6716 11.1716 17 12.0001 17C12.8285 17 13.5001 17.6716 13.5001 18.5Z" fill="currentColor"/>'
 };
+/* 界面主题：浅色（默认）/ 深色终端；只存本浏览器 localStorage，不进后端设置 */
+function setTheme(th) {
+  document.body.classList.toggle("theme-term", th === "term");
+  try { localStorage.setItem("qtw.theme", th); } catch (_) {}
+  if (window.BigCharts && BigCharts.retheme) BigCharts.retheme();
+  if (S && S.page && PAGES[S.page]) { try { PAGES[S.page](); } catch (_) {} }
+}
+try { if (localStorage.getItem("qtw.theme") === "term") document.body.classList.add("theme-term"); } catch (_) {}
 const ic = (k, cls = "") => `<svg viewBox="0 0 24 24" class="icon ${cls}" aria-hidden="true">${ICON[k] || ""}</svg>`;
 function hydrateIcons(root = document) {
   root.querySelectorAll("[data-icon]").forEach((el) => {
@@ -129,12 +137,16 @@ function fmtPnl(pnl, stacked) {
   const a = pnl.usdt == null ? "—" : sgn(pnl.usdt);
   if (pnl.pct == null) return a;
   const b = (pnl.pct >= 0 ? "+" : "") + pct(pnl.pct);
+  if (stacked === "c") return `${a} ${b}`; // 侧栏卡片：紧凑单行
   return stacked ? `${a}\n(${b})` : `${a}（${b}）`;
 }
 function setTextFlash(el, text) {
   if (!el || el.textContent === text) return;
+  const num = (x) => parseFloat(String(x).replace(/[^0-9.\-−+]/g, "").replace("−", "-"));
+  const a = num(el.textContent), b = num(text);
   el.textContent = text;
-  el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+  const dir = isFinite(a) && isFinite(b) && a !== b ? (b > a ? "flash-up" : "flash-dn") : "flash"; // 涨闪绿、跌闪红
+  el.classList.remove("flash", "flash-up", "flash-dn"); void el.offsetWidth; el.classList.add(dir);
 }
 function updateLiveCells() {
   document.querySelectorAll("[data-live='px']").forEach((el) => {
@@ -151,7 +163,7 @@ function updateLiveCells() {
       const e = Number(el.dataset.entry), q = Number(el.dataset.qty);
       pnl = { usdt: net, pct: (pxOk(e) && q) ? net / (e * q) : pnl.pct };
     }
-    const txt = fmtPnl(pnl, el.dataset.stacked === "1");
+    const txt = fmtPnl(pnl, el.dataset.stacked === "c" ? "c" : el.dataset.stacked === "1");
     const target = el.querySelector("[data-live-pnl-txt]") || el;
     setTextFlash(target, txt);
     el.classList.toggle("pos", pnl.usdt != null && pnl.usdt > 0);
@@ -222,13 +234,14 @@ function tightenIfOverflow(host, key, redraw) {
   if (!host || host.clientHeight <= 0) return;
   if (host.scrollHeight > host.clientHeight + 6) {
     const st = S.pg[key];
-    if (st && st.n > 1 && st._fit !== st.n - 1) { st._fit = st.n - 1; redraw(); }
+    if (st && st.n > 1 && st._fit !== st.n - 1) { st._cap = st.n; st._capT = Date.now(); st._fit = st.n - 1; redraw(); } // 记住溢出的行数，避免与 refit 来回振荡
   }
 }
 function refitByActualRows(host, key, rowSel, redraw, min = 2) {
   const row = host && host.querySelector(rowSel);
   if (!host || !row || host.clientHeight <= 0) return;
-  const rowH = row.getBoundingClientRect().height;
+  const rows = host.querySelectorAll(rowSel), r0 = row.getBoundingClientRect(), rl = rows[rows.length - 1].getBoundingClientRect();
+  const rowH = rows.length > 1 ? (rl.bottom - r0.top) / rows.length + 0.5 : r0.height; // 含行间距的平均行高
   if (!(rowH > 8)) return;
   const head = host.querySelector("thead");
   const headH = head ? head.getBoundingClientRect().height : 0;
@@ -236,6 +249,7 @@ function refitByActualRows(host, key, rowSel, redraw, min = 2) {
   const st = S.pg[key];
   if (!st || n === st.n) return;
   if (n < st.n && host.scrollHeight <= host.clientHeight + 2) return;
+  if (n > st.n && st._cap && n >= st._cap && Date.now() - st._capT < 3000) return; // 该行数已实测溢出过
   st._fit = n;
   redraw();
 }
@@ -244,7 +258,7 @@ function relayoutPagers() {
   const sig = `${page?.clientWidth||0}x${page?.clientHeight||0}:${rail?.clientWidth||0}x${rail?.clientHeight||0}`;
   if (S._fitSig === sig) return;
   S._fitSig = sig;
-  Object.keys(S.pg || {}).forEach((k) => { if (S.pg[k]) S.pg[k]._fit = null; });
+  Object.keys(S.pg || {}).forEach((k) => { if (S.pg[k]) { S.pg[k]._fit = null; S.pg[k]._cap = null; } });
   if (S.page === "signals") renderSigList();
   else if (S.page === "trades" && S.trades) renderTradesPage(false);
   else if (S.page === "positions") renderPosTable();
@@ -567,17 +581,17 @@ function renderRight() {
     $("#railBtnLbl").textContent = `持仓 ${d.positions.length}`;
     $("#rSub").textContent = `${d.positions.length} 个纸面持仓 · 点击查看该币信号与 K 线`;
     const allPos = d.positions.filter((p) => !q || p.symbol.includes(q)).sort((a, b) => b.weight - a.weight);
-    const stP = pgState("rail", allPos.length, fitRows($("#rList"), 60, 0, 3));
+    const stP = pgState("rail", allPos.length, fitRows($("#rList"), 70, 0, 3));
     html = allPos.slice(stP.start, stP.end).map((p) => {
       const mark = posMark(p), pnl = posUpnl(p, mark);
       const live = `data-sym="${p.symbol}" data-mkt="${p.market}" data-entry="${p.entry_price}" data-qty="${p.qty}" data-side="${p.side}" data-mark="${p.mark_price ?? ""}" data-mark-time="${esc(p.mark_time || "")}"`;
       const tp = pxOk(p.tp_price) ? fp(p.tp_price) : "—";
       const tpTitle = p.tp_done ? (p.be_moved ? "已分批止盈，余仓止损在保本价" : "已分批止盈") : (p.tp_enabled ? `${fp(p.tp_r, 3)}R 分批止盈（平 ${Math.round((p.tp_frac || 0.5) * 100)}%）` : `参考 ${fp(p.tp_r, 3)}R（未启用分批止盈）`);
       return `<div class="r-row r-pos"><button type="button" class="r-row-main" data-sym="${p.symbol}" data-mkt="${p.market}" title="查看 ${base(p.symbol)} 的信号与 K 线">${coin(p.symbol)}
-        <span class="rp-l1"><b>${base(p.symbol)}</b><span class="side-tag ${p.side}">${p.side === "short" ? "空" : "多"}·${p.market === "perp" ? "永续" : "现货"}</span>${bookTag(p)}${p.halted ? '<span class="pill flat rp-halt">已停止</span>' : ""}
-          <span class="rp-pnl num ${cls(pnl.usdt)}" data-live="pnl" ${live}><span data-live-pnl-txt>${fmtPnl(pnl)}</span></span></span>
-        <span class="rp-l2"><span class="num rp-qty" title="数量 ${fp(p.qty, 10)} ${base(p.symbol)}">${fp(p.qty, 5)} ${base(p.symbol)}</span><span class="num rp-w" data-live="weight" ${live} title="权重">${pct(p.weight, 1)}</span><span class="rp-px rp-now num" title="当前价（${p.market === "perp" ? "永续标记价" : "现货最新价"}）"><b data-live="px" ${live}>${fpPx(mark)}</b></span></span>
-        <span class="rp-l3" title="止损 ${fpPx(p.stop_price)} · 止盈 ${tp}（${esc(tpTitle)}）· ${esc(p.exit_rule_cn || "")}"><span class="neg">损 ${fpPx(p.stop_price)}${p.be_moved ? "·保本" : ""}</span><span class="pos">盈 ${tp}${p.tp_done ? "·已" : ""}</span><span class="rp-px num" title="入仓价">入 ${fpPx(p.entry_price)}</span></span>
+        <span class="rp-l1"><b>${base(p.symbol)}</b><span class="side-tag ${p.side}">${p.side === "short" ? "空" : "多"}·${p.market === "perp" ? "永续" : "现货"}</span>${bookTag(p)}${p.halted ? '<span class="pill flat rp-halt">已停</span>' : ""}
+          <span class="rp-pnl num ${cls(pnl.usdt)}" data-live="pnl" data-stacked="c" ${live} title="浮动盈亏（已扣手续费）"><span data-live-pnl-txt>${fmtPnl(pnl, "c")}</span></span></span>
+        <span class="rp-l2"><span class="num rp-qty" title="数量 ${fp(p.qty, 10)} ${base(p.symbol)}">${fp(p.qty, 5)}</span><span class="rp-kv num" title="当前价（${p.market === "perp" ? "永续标记价" : "现货最新价"}）"><em>现</em><b data-live="px" ${live}>${fpPx(mark)}</b></span><span class="rp-kv num" title="入仓价"><em>入</em>${fpPx(p.entry_price)}</span></span>
+        <span class="rp-l3" title="止损 ${fpPx(p.stop_price)} · 止盈 ${tp}（${esc(tpTitle)}）· ${esc(p.exit_rule_cn || "")}"><span class="rp-chip sl num"><em>损</em>${fpPx(p.stop_price)}${p.be_moved ? "<i>保本</i>" : ""}</span><span class="rp-chip tp num"><em>盈</em>${tp}${p.tp_done ? "<i>已</i>" : ""}</span><span class="rp-w num" data-live="weight" ${live} title="仓位权重">${pct(p.weight, 1)}</span></span>
       </button><span class="r-acts"><button type="button" class="ibtn" data-act="halt" data-sym="${p.symbol}" title="${p.halted ? "恢复自动管理" : "停止自动开平（止损止盈仍生效）"}" aria-label="${p.halted ? "恢复" : "停止"} ${base(p.symbol)}">${ic(p.halted ? "play" : "stop")}</button><button type="button" class="ibtn danger" data-act="close" data-sym="${p.symbol}" title="按市价平仓" aria-label="平仓 ${base(p.symbol)}">${ic("x")}</button></span></div>`;
     }).join("");
     S._railPager = stP;
@@ -663,42 +677,74 @@ function pageDashboard() {
   const curDD = d.drawdown.length ? d.drawdown[d.drawdown.length - 1] : 0;
   const cum = d.pnl_by_trade.reduce((a, x) => (a.push((a.at(-1) || 0) + x), a), []);
   const stat = (lbl, val, sub, c = "", extra = "") => `<div class="stat ${extra}"><div class="s-lbl">${lbl}</div><div class="s-val num ${c}">${val}</div><div class="s-sub">${sub}</div></div>`;
+  const P = d.periods || {}, today = P.today, yday = P.yesterday, mon = P.this_month, lmon = P.last_month;
+  const cmp = (cur, prev) => {   // 对比上一期：(本期 − 上期) / |上期|
+    if (!cur || !prev || !prev.pnl) return '<span class="muted">—</span>';
+    const ch = (cur.pnl - prev.pnl) / Math.abs(prev.pnl);
+    return `<span class="${ch >= 0 ? "pos" : "neg"}">${Math.abs(ch * 100).toFixed(0)}%${ch >= 0 ? "↑" : "↓"}</span>`;
+  };
+  const byCoin = {};
+  d.positions.forEach((p) => { byCoin[base(p.symbol)] = (byCoin[base(p.symbol)] || 0) + Math.abs(p.notional); });
+  const COIN_PAL = ["#6c5ce7", "#2cc4c9", "#f2a541", "#e5536b", "#5b9bf0", "#25b07a", "#b07ae5", "#8a8aa8"];
+  const coins = Object.entries(byCoin).sort((x, y) => y[1] - x[1]);
+  const top = coins.slice(0, 5), rest = coins.slice(5).reduce((x, c) => x + c[1], 0);
+  const parts = top.map(([k, v], i) => ({ k, v, c: COIN_PAL[i] })).concat(rest > 0 ? [{ k: "其他", v: rest, c: COIN_PAL[7] }] : []);
+  const expPct = d.equity ? d.gross / d.equity : 0;
+  const daily = (P.daily || []).slice(-14);
+  const dmax = Math.max(1e-9, ...daily.map((x) => Math.abs(x.pnl)));
+  const ring = (v, lbl, sub, col) => {
+    const f = v == null ? 0 : Math.max(0, Math.min(1, v)), C = 2 * Math.PI * 26;
+    return `<div class="d5-ring"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="26" stroke="#eeebfa" stroke-width="6" fill="none"/><circle cx="32" cy="32" r="26" stroke="${col}" stroke-width="6" fill="none" stroke-linecap="round" stroke-dasharray="${(f * C).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 32 32)"/></svg><b class="num">${v == null ? "—" : Math.round(v * 100) + "%"}</b><div><div class="d5-rl">${lbl}</div><div class="d5-rs">${sub}</div></div></div>`;
+  };
+  const tileI = (icon, g, lbl, val, sub, c = "") => `<div class="d5-tile"><span class="d5-ic ${g}">${ic(icon)}</span><div class="d5-tt"><div class="d5-tl">${lbl}</div><div class="d5-tv num ${c}">${val}</div><div class="d5-ts">${sub}</div></div></div>`;
+  const fx = d.recent_fills.slice(0, 10), nmax = Math.max(1e-9, ...fx.map((f) => Math.abs(f.notional_usdt || 0)));
+  const ticker = d.positions.map((p) => `<span class="tk"><b>${base(p.symbol)}</b><span class="num" data-live="px" data-sym="${p.symbol}" data-mkt="${p.market}" data-mark="${p.mark_price ?? ""}" data-mark-time="${esc(p.mark_time || "")}">${fpPx(posMark(p))}</span></span>`).join("");
   $("#page").innerHTML = `
-  <div class="fit dash">
-    <section class="hero">${HEROWAVE}
-      <div class="hero-main">
-        <div class="h-lbl">纸面权益 · USDT</div>
-        <div class="h-val num">${f2(d.equity)}</div>
-        <div class="h-chg"><span class="chg ${d.total_pnl >= 0 ? "up" : "down"}">${sgn(d.total_pnl)} · ${d.total_return >= 0 ? "+" : ""}${pct(d.total_return)}</span><span>相对起始 ${f2(d.starting_equity, 0)} USDT</span></div>
+  <div class="fit dash d5">
+    ${ticker ? `<div class="d5-ticker" title="持仓币种实时价（${VN[v]} 官方公共 WS，变动时闪烁）">${ticker}</div>` : ""}
+    <section class="d5-top">
+      <div class="card5 featured d5-hero">
+        <div class="d5-hl">
+          <div class="d5-cap">纸面权益 · USDT <button class="d5-detail" data-go="positions">DETAIL ›</button></div>
+          <div class="d5-big num">${f2(d.equity)}</div>
+          <div class="d5-chg"><span class="chg5 ${d.total_pnl >= 0 ? "pos" : "neg"}">${sgn(d.total_pnl)} · ${d.total_return >= 0 ? "+" : ""}${pct(d.total_return)}</span><span class="muted">相对起始 ${f2(d.starting_equity, 0)}</span></div>
+          <div class="d5-today"><div><span class="d5-tl">今日盈亏</span><b class="num ${cls(today && today.pnl)}">${today ? sgn(today.pnl) : "—"}</b></div><div class="d5-vs">对比昨日 ${cmp(today, yday)}</div></div>
+        </div>
+        <div class="hero-spark d5-spark"><div class="eq-hover" id="heroEq"></div><div class="cap">账本权益走势 · ${eqPts.length} 个真实快照点</div></div>
       </div>
-      <div class="hero-spark"><div class="eq-hover eq-hover-hero" id="heroEq"></div><div class="cap">账本权益走势 · ${eqPts.length} 个记录点 · 移动查看收益变化</div></div>
     </section>
-    <section class="stats">
-      ${stat("可用现金", f2(cash), cash < 0 ? `<span class="explain">空头价格上涨后，持仓名义（${f2(d.gross, 0)}）已超过权益。这是亏损空头的正常记账，不是错误；回落前不会再开新仓。</span>` : "权益 − 持仓名义，可用于新开仓", cash < 0 ? "neg" : "", cash < 0 ? "warn" : "")}
-      ${stat("持仓敞口", f2(d.gross, 0), `${d.positions.length} 个持仓 · 净敞口 ${sgn(d.net, 0)}`)}
-      ${stat("未实现盈亏", sgn(d.unrealized), `已实现 ${sgn(realizedPnl)}（含手续费）`, cls(d.unrealized))}
+    <section class="d5-tiles">
+      ${tileI("positions", "g-violet", "持仓数", d.positions.length, `${coins.length} 个币 · 敞口 ${f2(d.gross, 0)} U`)}
+      ${tileI("signals", "g-cyan", "胜率", d.win_rate == null ? "—" : pct(d.win_rate, 0), d.closed_trades ? `${d.closed_trades} 笔已平仓` : "尚无平仓")}
+      ${tileI("backtest", "g-orange", "盈亏比", P.payoff_ratio == null ? "—" : fp(P.payoff_ratio, 3), P.payoff_ratio == null ? "需盈利与亏损各至少 1 笔" : "平均盈利 / 平均亏损")}
+      ${tileI("risk", "g-pink", "最大回撤", pct(d.max_drawdown, 1), `距高点 ${pct(curDD, 1)}`, d.max_drawdown < -0.1 ? "neg" : "")}
     </section>
-    <section class="panel tx-panel">
-      <div class="sec-title"><div><h3>${fills.length ? "最近成交" : "当前信号预览"}</h3><div class="note">${fills.length ? `本周 ${d.week.fills} 笔 · 已实现 <span class="pos">+${f2(d.week.gains)}</span> / <span class="neg">${f2(d.week.losses)}</span> USDT · 点击查看该币 K 线` : "尚无成交 · 以下为系统化信号"}</div></div>
-        <button class="link" data-go="${fills.length ? "trades" : "signals"}">${fills.length ? "全部成交" : "全部信号"} →</button></div>
-      <div class="tx-list" id="dashTx">${list}</div>
+    <section class="d5-grid">
+      <div class="card5 d5-donut">
+        <div class="t5">敞口构成 <i>›</i></div>
+        <div class="d5-dw"><div class="d5-dc">${MiniCharts.donut(parts.length ? parts.map((x) => ({ v: x.v, c: x.c, w: 9 })) : [])}<div class="d5-dt"><b class="num">${f2(d.gross, 0)}</b><span>USDT</span></div></div>
+          <table class="d5-lt">${parts.map((x) => `<tr><td><i style="background:${x.c}"></i>${esc(x.k)}</td><td class="num">${f2(x.v, 0)}</td><td class="num muted">${pct(d.gross ? x.v / d.gross : 0, 0)}</td></tr>`).join("") || '<tr><td class="muted">空仓</td></tr>'}</table></div>
+      </div>
+      <div class="card5 d5-perf">
+        <div class="t5">表现 <i>›</i><span class="t5-r">${esc(P.tz || "北京时间")} · 每日权益变化</span></div>
+        <div class="d5-rings">${ring(expPct, "敞口 / 权益", `${f2(d.gross, 0)} / ${f2(d.equity, 0)}`, "#6c5ce7")}${ring(d.win_rate, "胜率", d.closed_trades ? `${d.closed_trades} 笔` : "尚无平仓", "#2cc4c9")}</div>
+        <div class="d5-strip" title="每根 = 一个北京时间自然日的权益变化（真实账本快照）">${daily.map((x) => `<span class="${x.pnl >= 0 ? "up" : "dn"}" style="height:${Math.max(6, Math.abs(x.pnl) / dmax * 100).toFixed(0)}%" title="${x.period} · ${sgn(x.pnl)} U"></span>`).join("")}</div>
+        <div class="d5-mon"><span>本月 <b class="num ${cls(mon && mon.pnl)}">${mon ? sgn(mon.pnl) : "—"}</b></span><span class="muted">Compared to 上月 ${lmon ? `${sgn(lmon.pnl)} · ${cmp(mon, lmon)}` : "—（首月）"}</span></div>
+      </div>
+      <div class="card5 d5-log">
+        <div class="t5">成交记录 <i>›</i><button class="link t5-r" data-go="trades">全部 →</button></div>
+        <div class="d5-lh"><span>时间</span><span>方向</span><span>币种</span><span>数量</span><span>价格</span><span>盈亏</span></div>
+        <div class="d5-lb" id="dashTx">${fx.length ? fx.map((f) => { const pnl = Number(f.realized_pnl_usdt), buy = f.side === "buy"; return `<button class="d5-lr tx" data-sym="${f.symbol}" data-mkt="${f.market}" title="${esc(t(f.time) + " · " + ptText(f.reason))}"><i class="flow ${buy ? "b" : "s"}" style="width:${(Math.abs(f.notional_usdt || 0) / nmax * 100).toFixed(0)}%"></i><span class="num">${esc(String(t(f.time)).split(" ").slice(0, 2).join(" "))}</span><span class="${buy ? "pos" : "neg"}">${buy ? "买" : "卖"}·${f.action === "open" ? "开" : f.action === "add" ? "加" : f.action === "reduce" ? "减" : "平"}</span><span>${base(f.symbol)}</span><span class="num">${fp(f.qty, 4)}</span><span class="num">${fpPx(f.price)}</span><span class="num ${cls(pnl)}">${pnl ? sgn(pnl) : "—"}</span></button>`; }).join("") : '<div class="empty">尚无纸面成交</div>'}</div>
+      </div>
     </section>
-    <section class="facts">
-      <div class="tile"><div class="tt">最大回撤</div><div class="tv num ${d.max_drawdown < -0.1 ? "neg" : ""}">${pct(d.max_drawdown, 1)}</div><div class="tu">当前距高点 ${pct(curDD, 1)}</div><div class="tc">${MiniCharts.bars(d.drawdown.filter((_, i, a) => i % Math.max(1, Math.floor(a.length / 18)) === 0))}</div></div>
-      <div class="tile"><div class="tt">胜率</div><div class="tv num">${d.win_rate == null ? "—" : pct(d.win_rate, 0)}</div><div class="tu">${d.closed_trades ? `${d.closed_trades} 笔已平仓 · 累计已实现` : "尚无平仓，持仓离场后统计"}</div><div class="tc">${cum.length > 1 ? MiniCharts.line(cum) : ""}</div></div>
-      <div class="tile donut"><div class="tt">敞口构成</div>
-        <div class="tc">${MiniCharts.donut([{ v: longN, c: "#5ee0d6" }, { v: shortN, c: "#4b3aa6" }, { v: Math.max(0, cash), c: "#ece8fd" }])}</div>
-        <div class="legend"><div><i style="background:#5ee0d6"></i>现货多 ${f2(longN, 0)}</div><div><i style="background:#4b3aa6"></i>永续空 ${f2(shortN, 0)}</div><div><i style="background:#ece8fd"></i>现金 ${f2(Math.max(0, cash), 0)}</div></div></div>
-      <div class="tile"><div class="tt">自动交易</div><div class="tv"><span class="pill ${w.running ? "long" : "flat"}">${w.running ? "运行中" : "已停止"}</span></div>
-        <div class="tu" style="margin-top:8px">${w.running ? `事件驱动 · ${esc(trigCn(w.last_trigger))}` : "可在风控页开启"}<br>上次 ${t(w.last_run)}</div>
-        <button class="btn ghost sm tile-act" data-go="risk">风控与自动交易 →</button></div>
-    </section>
-    <div class="note foot">系统化纸面 / 研究工具，不构成投资建议；实盘交易可能亏损全部本金。数据来自 ${VN[v]} 官方公共行情 · 更新于 ${tFull(d.time)}。</div>
+    <div class="note foot">系统化纸面 / 研究工具，不构成投资建议。数据来自 ${VN[v]} 官方公共行情 · 自动交易${w.running ? "运行中（事件驱动）" : "未开启"} · 更新于 ${tFull(d.time)}。</div>
   </div>`;
   bindGo();
   document.querySelectorAll("#page .tx[data-sym]").forEach((el) => (el.onclick = () => goSignal(el.dataset.sym, el.dataset.mkt)));
   const heroEq = $("#heroEq");
-  if (heroEq) MiniCharts.equityHover(heroEq, { points: eqPts, starting: eqStart, color: "#73f0e0" });
+  if (heroEq) MiniCharts.equityHover(heroEq, { points: eqPts, starting: eqStart, color: "#6c5ce7" });
+  const lb = $("#dashTx"); // 成交记录：放不下的行直接不显示（不出现半行），全部成交见「成交」页
+  if (lb) while (lb.scrollHeight > lb.clientHeight + 1 && lb.children.length > 1) lb.lastElementChild.remove();
 }
 function bindGo() { document.querySelectorAll("#page [data-go]").forEach((el) => (el.onclick = () => (location.hash = "#/" + el.dataset.go))); }
 
@@ -713,14 +759,20 @@ async function pageSignals() {
   const s = S.status.settings.strategy;
   $("#page").innerHTML = `
     <div class="fit sig-page">
-    <div class="panel chart-panel">
-      <div class="chart-head">
-        <div><h3 id="chartTitle">K 线与均线</h3><div class="note" id="chartSrc">加载中…</div></div>
-        <div class="chart-ctl">
-          <div class="seg" id="mktSeg" role="group" aria-label="市场"><button data-m="spot">现货</button><button data-m="perp">USDT 永续</button></div>
-          <div class="seg iv-seg" id="ivSeg" role="group" aria-label="K 线周期">${CHART_IVS.map(([v, l]) => `<button data-iv="${v}" title="${v === "10m" ? "由官方 1m 聚合" : ["1w", "1M", "1y"].includes(v) ? "由官方 1D 聚合（UTC 自然周 / 月 / 年）" : "交易所官方 K 线"}">${l}</button>`).join("")}</div>
-          <select class="mini" id="rangeSel" aria-label="显示范围"><option value="7">近 1 周</option><option value="30">近 1 月</option><option value="all">全部</option></select>
-          <div class="seg" id="modeSeg" role="group" aria-label="图表模式"><button data-mode="k">K 线</button><button data-mode="yoy" title="同一币种不同年份叠加对比（一年中的同一天）">同比</button></div>
+    <div class="panel chart-panel featured">
+      <div class="chart-head ch5">
+        <div class="ch5-top">
+          <div class="ch5-title"><h3 id="chartTitle">K 线与均线</h3><span class="note" id="chartSrc">加载中…</span></div>
+          <div class="seg seg5" id="modeSeg" role="group" aria-label="视图"><button data-mode="k">K线</button><button data-mode="yoy" title="同一币种不同年份叠加对比（一年中的同一天）">同比</button></div>
+        </div>
+        <div class="chart-ctl ch5-bar" id="chartBar">
+          <div class="ch5-l">
+            <select class="sel5" id="chartSym" aria-label="币种"></select>
+            <div class="seg seg5 iv-seg" id="ivSeg" role="group" aria-label="K 线周期">${CHART_IVS.map(([v, l]) => `<button data-iv="${v}" title="${v === "10m" ? "由官方 1m 聚合" : ["1w", "1M", "1y"].includes(v) ? "由官方 1D 聚合（UTC 自然周 / 月 / 年）" : "交易所官方 K 线"}">${l}</button>`).join("")}</div>
+            <select class="sel5" id="rangeSel" aria-label="显示范围"><option value="7">近 1 周</option><option value="30">近 1 月</option><option value="all">全部</option></select>
+          </div>
+          <div class="ch5-m" id="yoyCtl"></div>
+          <div class="ch5-r"><div class="seg seg5" id="mktSeg" role="group" aria-label="市场"><button data-m="spot">现货</button><button data-m="perp">永续</button></div></div>
         </div>
       </div>
       <div class="chart-box" id="candleChart"><div class="empty">加载中…</div></div>
@@ -734,6 +786,7 @@ async function pageSignals() {
   $("#rangeSel").onchange = (e) => { S.chartRange = e.target.value; applyRange(); };
   document.querySelectorAll("#ivSeg [data-iv]").forEach((b) => (b.onclick = () => { S.chartIv = b.dataset.iv; S.chartMode = "k"; loadCandles(); }));
   document.querySelectorAll("#modeSeg [data-mode]").forEach((b) => (b.onclick = () => { S.chartMode = b.dataset.mode; loadCandles(); }));
+  $("#chartSym").onchange = (e) => { const v = e.target.value; if (S.chartMode === "yoy") { S.yoy.sym = v; loadYoy(); } else selectSignal(v); };
   try { if (!S.signals) S.signals = await api("/api/signals"); } catch (e) { $("#sigList").innerHTML = `<div class="empty neg">信号计算失败：${esc(e.message)}</div>`; return; }
   renderRight();
   const rows = S.signals.rows;
@@ -878,7 +931,14 @@ function syncChartCtl() {
   document.querySelectorAll("#ivSeg [data-iv]").forEach((b) => b.classList.toggle("on", !yoy && b.dataset.iv === iv));
   document.querySelectorAll("#modeSeg [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === (yoy ? "yoy" : "k")));
   ["#ivSeg", "#rangeSel"].forEach((q) => { const e = $(q); if (e) e.style.display = yoy ? "none" : ""; });
-  const ms = $("#mktSeg"); if (ms) ms.style.display = "";
+  const cs = $("#chartSym");
+  if (cs) {
+    const syms = (S.signals && S.signals.rows ? S.signals.rows.map((r) => r.symbol) : S.status.settings.symbols) || [];
+    const cur = yoy ? ((S.yoy && S.yoy.sym) || S.selSym) : S.selSym;
+    const html = syms.map((x) => `<option value="${x}" ${x === cur ? "selected" : ""}>${base(x)}</option>`).join("");
+    if (cs._html !== html) { cs.innerHTML = html; cs._html = html; }
+    cs.value = cur || "";
+  }
 }
 async function loadCandles() {
   const el = $("#candleChart"); if (!el || !S.selSym) return;
@@ -902,23 +962,41 @@ async function loadCandles() {
 }
 /* 同比：同一币种不同年份叠加到「一年中的同一天」横轴（参考闰年 2000），默认日线、按当年第一根收盘归一为 % */
 function renderYoyCtl(on) {
-  let box = $("#yoyCtl");
-  if (!on) { if (box) box.remove(); return; }
+  const box = $("#yoyCtl"); if (!box) return;
+  if (!on) { box.innerHTML = ""; box.hidden = true; return; }
+  box.hidden = false;
   const y = S.yoy || {};
-  const avail = (y.data && y.data.available_years) || [];
-  const syms = (S.status.settings.symbols || []);
-  if (!box) { box = document.createElement("div"); box.id = "yoyCtl"; box.className = "yoy-ctl"; $(".chart-ctl").prepend(box); }
-  box.innerHTML = `<select class="mini" id="yoySym" aria-label="币种">${syms.map((x) => `<option value="${x}" ${x === (y.sym || S.selSym) ? "selected" : ""}>${base(x)}</option>`).join("")}</select>
-    <select class="mini" id="yoyIv" aria-label="周期">${[["1d", "日线"], ["1w", "周线"], ["4h", "4h"]].map(([v, l]) => `<option value="${v}" ${v === (y.iv || "1d") ? "selected" : ""}>${l}</option>`).join("")}</select>
-    ${(avail.length ? avail : y.years || []).slice(-6).map((yr) => `<label class="yr"><input type="checkbox" value="${yr}" ${(y.years || []).includes(yr) ? "checked" : ""}/>${yr}</label>`).join("")}
-    <div class="seg" id="yoyMode" role="group" aria-label="数值"><button data-v="pct" class="${(y.mode || "pct") === "pct" ? "on" : ""}">涨跌 %</button><button data-v="raw" class="${y.mode === "raw" ? "on" : ""}">价格</button></div>
-    <div class="seg" id="yoyStyle" role="group" aria-label="画法"><button data-v="k" class="${(y.style || "k") === "k" ? "on" : ""}" title="每年一组 K 线（空心 = 收涨，实心 = 收跌）">K线</button><button data-v="line" class="${y.style === "line" ? "on" : ""}" title="只画收盘线">线</button></div>`;
-  $("#yoySym").onchange = (e) => { S.yoy.sym = e.target.value; loadYoy(); };
+  const avail = ((y.data && y.data.available_years) || y.years || []).slice(-6);
+  const chips = (dd) => dd
+    ? `<div class="yr-dd" id="yrDd"><button type="button" class="sel5 yr-dd-btn" aria-haspopup="true">${(y.years || []).map((yr) => `<i style="background:${yoyColor((y.years || []).indexOf(yr), (y.years || []).length)}"></i>${yr}`).join(" ")}<span class="caret">▾</span></button>
+        <div class="yr-pop" hidden>${avail.map((yr) => `<label><input type="checkbox" value="${yr}" ${(y.years || []).includes(yr) ? "checked" : ""}/>${yr}</label>`).join("")}</div></div>`
+    : `<div class="yr-chips" role="group" aria-label="年份">${avail.map((yr) => { const k = (y.years || []).indexOf(yr); return `<button type="button" class="yr-chip5 ${k >= 0 ? "on" : ""}" data-yr="${yr}" style="${k >= 0 ? `--yc:${yoyColor(k, (y.years || []).length)}` : ""}">${yr}</button>`; }).join("")}</div>`;
+  const draw = (dd) => {
+    box.innerHTML = `<select class="sel5" id="yoyIv" aria-label="周期">${[["1d", "日线"], ["1w", "周线"], ["4h", "4时"]].map(([v, l]) => `<option value="${v}" ${v === (y.iv || "1d") ? "selected" : ""}>${l}</option>`).join("")}</select>
+      ${chips(dd)}
+      <select class="sel5" id="yoyRange" aria-label="显示范围">${[["3m", "近 3 月"], ["6m", "近半年"], ["all", "全年"]].map(([v, l]) => `<option value="${v}" ${v === yoyRange() ? "selected" : ""}>${l}</option>`).join("")}</select>
+      <div class="seg seg5" id="yoyMode" role="group" aria-label="数值"><button data-v="pct" class="${(y.mode || "pct") === "pct" ? "on" : ""}">涨跌%</button><button data-v="raw" class="${y.mode === "raw" ? "on" : ""}">价格</button></div>
+      <div class="seg seg5" id="yoyStyle" role="group" aria-label="画法"><button data-v="k" class="${(y.style || "k") === "k" ? "on" : ""}" title="每年一组 K 线（空心 = 收涨，实心 = 收跌）">K线</button><button data-v="line" class="${y.style === "line" ? "on" : ""}" title="只画收盘线">折线</button></div>`;
+  };
+  draw(false);
+  const bar = $("#chartBar");
+  if (bar && bar.scrollWidth > bar.clientWidth + 1) draw(true); // 1366 等较窄宽度：年份收进多选下拉
+  const setYears = (ys) => { ys = ys.map(Number).sort(); if (ys.length) { S.yoy.years = ys; loadYoy(); } };
   $("#yoyIv").onchange = (e) => { S.yoy.iv = e.target.value; loadYoy(); };
-  box.querySelectorAll("label.yr input").forEach((c) => (c.onchange = () => { S.yoy.years = [...box.querySelectorAll("label.yr input:checked")].map((x) => +x.value); if (S.yoy.years.length) loadYoy(); }));
+  $("#yoyRange").onchange = (e) => { S.yoy.range = e.target.value; loadYoy(); };
+  box.querySelectorAll(".yr-chip5").forEach((b) => (b.onclick = () => { const v = +b.dataset.yr, cur = S.yoy.years || []; setYears(cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]); }));
+  const dd = $("#yrDd");
+  if (dd) {
+    const pop = dd.querySelector(".yr-pop");
+    dd.querySelector(".yr-dd-btn").onclick = (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; };
+    pop.onclick = (e) => e.stopPropagation();
+    pop.querySelectorAll("input").forEach((c) => (c.onchange = () => setYears([...pop.querySelectorAll("input:checked")].map((x) => +x.value))));
+    document.addEventListener("click", () => { pop.hidden = true; }, { once: true });
+  }
   box.querySelectorAll("#yoyMode [data-v]").forEach((b) => (b.onclick = () => { S.yoy.mode = b.dataset.v; loadYoy(); }));
   box.querySelectorAll("#yoyStyle [data-v]").forEach((b) => (b.onclick = () => { S.yoy.style = b.dataset.v; loadYoy(); }));
 }
+function yoyRange() { const y = S.yoy || {}; return y.range || (y.iv === "1w" || y.style === "line" ? "all" : "3m"); }
 async function loadYoy() {
   const el = $("#candleChart"); if (!el) return;
   const now = new Date().getUTCFullYear();
@@ -928,19 +1006,20 @@ async function loadYoy() {
   document.querySelectorAll("#mktSeg [data-m]").forEach((b) => b.classList.toggle("on", b.dataset.m === m));
   syncChartCtl();
   const ivCn = { "1d": "日线", "1w": "周线", "4h": "4h" }[y.iv] || y.iv;
-  $("#chartTitle").textContent = `${base(y.sym)} ${m === "perp" ? "永续" : "现货"} · ${ivCn}同比 ${y.years.join(" vs ")}`;
+  $("#chartTitle").textContent = `${base(y.sym)} ${m === "perp" ? "永续" : "现货"} · ${ivCn}同比`;
   $("#chartTitle").title = `${base(y.sym)}/USDT · ${m === "perp" ? "USDT 永续" : "现货"} · ${ivCn} · 同比（${y.years.join(" vs ")}）`;
   const req = (S._candleReq = (S._candleReq || 0) + 1);
   try {
     const d = await api(`/api/chart/yoy?symbol=${y.sym}&interval=${y.iv}&years=${y.years.join(",")}&market=${m}&mode=${y.mode}`);
     if (req !== S._candleReq || !document.body.contains(el)) return;
     y.data = d; renderYoyCtl(true);
-    S.chart = BigCharts.yoy(el, d, yoyColor, y.style || "k"); S.chart._yoy = true;
+    S.chart = BigCharts.yoy(el, d, yoyColor, y.style || "k", yoyRange()); S.chart._yoy = true;
     const leg = $("#chartLegend");
     const n = d.series.length, K = (y.style || "k") === "k";
     const npts = d.series.map((x) => x.points.length).reduce((a, b) => a + b, 0);
     const srcFull = `${npts} 个点来自 ${d.data_source} · ${d.source_host}（官方 K 线，历史按需拉取并缓存到 SQLite${d.aggregated_from ? "；周线由 1D 聚合" : ""}）`;
-    if (leg) leg.innerHTML = `<span class="yoy-legend">${d.series.map((sr, i) => `<span><i class="${K ? "k" : ""}" style="${K ? `border-color:${yoyColor(i, n)};background:linear-gradient(90deg,${yoyColor(i, n)} 50%,transparent 50%)` : `background:${yoyColor(i, n)}`}"></i>${sr.year}${sr.change != null ? `：${sr.first_date ? sr.first_date.slice(5, 10) : ""} 起 ${(sr.change >= 0 ? "+" : "") + (sr.change * 100).toFixed(1)}%` : "：无数据"}</span>`).join("")}</span><span class="muted" title="${esc(srcFull)}">${K ? "空心收涨 · 实心收跌 · 同日各年并排 · " : ""}${y.mode === "pct" ? "按当年首根收盘归一" : "原始价格"} · 悬停看差异</span>`;
+    const thisYear = new Date().getUTCFullYear();
+    if (leg) leg.innerHTML = `<span class="yoy-legend">${d.series.map((sr, i) => `<span class="yl-chip" style="--yc:${yoyColor(i, n)}"><i class="${K ? "k" : ""}"></i><b>${sr.year}</b>${sr.change != null ? `<span class="${sr.change >= 0 ? "pos" : "neg"}">${sr.year >= thisYear ? "年内" : "全年"} ${(sr.change >= 0 ? "+" : "") + (sr.change * 100).toFixed(1)}%</span>` : '<span class="muted">无数据</span>'}</span>`).join("")}</span><span class="muted" title="${esc(srcFull)}">${K ? "空心收涨 · 实心收跌 · " : ""}${y.mode === "pct" ? "按当年首根收盘归一" : "原始价格"} · 拖动 / 滚轮缩放 · 图表 TradingView Lightweight Charts™</span>`;
     const src = $("#chartSrc");
     if (src) { src.textContent = `横轴为一年中的同一天 · ${npts} 个官方 K 线点（${(d.venue || "").toUpperCase()}）`; src.title = srcFull; }
   } catch (e) { el.innerHTML = `<div class="empty neg">${esc(e.message)}</div>`; }
@@ -965,7 +1044,7 @@ async function pageBacktest() {
   const s = S.status.settings;
   $("#page").innerHTML = `
   <div class="fit bt-page">
-  <div class="panel bt-params"><div class="sec-title"><h3>回测参数</h3><span class="note">使用交易所真实公共历史 K 线 · 第 t 根收盘信号在第 t+1 根开盘成交（无前视）</span></div>
+  <div class="panel bt-params featured"><div class="sec-title"><h3>回测参数</h3><span class="note">使用交易所真实公共历史 K 线 · 第 t 根收盘信号在第 t+1 根开盘成交（无前视）</span></div>
     <div class="bt-form">
       <label class="field">交易所<select id="btVenue"><option value="okx">OKX</option><option value="gate">Gate.io</option></select></label>
       <label class="field">K 线根数 (${s.strategy.interval})<input id="btBars" type="number" value="1500" min="200" max="5000"/></label>
@@ -1025,7 +1104,7 @@ function renderBt() {
     <button type="button" role="tab" data-bt-view="short">短线层研究</button>
   </div>
   <div class="panel bt-short-panel hidden" id="btShortWrap"><div class="empty">加载中…</div></div>
-  <div class="panel bt-chart-panel" id="btChartWrap">
+  <div class="panel bt-chart-panel featured" id="btChartWrap">
     <div class="sec-title"><h3>权益曲线与回撤</h3><span class="note">#${m.run_id ?? ""} ${esc((m.venue || "").toUpperCase())} · ${esc(m.interval)} · ${tFull(m.start_time)} → ${tFull(m.end_time)} · ${m.bars} 根 · 手续费 ${m.fee_bps} bps · 止损离场 ${m.stop_exits} 次</span></div>
     <div class="chart-box" id="eqChart"></div>
   </div>
@@ -1059,7 +1138,7 @@ function pagePositions() {
   const d = S.dash;
   $("#page").innerHTML = `<div class="fit pos-page">
   <div class="metrics"><div class="metric feature"><small>纸面权益</small><b class="num">${f2(d.equity)}</b></div><div class="metric"><small>可用现金</small><b class="num">${f2(d.cash_free)}</b></div><div class="metric"><small>总敞口 / 净敞口</small><b class="num">${f2(d.gross, 0)} / ${sgn(d.net, 0)}</b></div><div class="metric"><small>未实现盈亏</small><b class="num ${cls(d.unrealized)}">${sgn(d.unrealized)}</b></div></div>
-  <div class="panel pos-panel"><div class="sec-title"><h3>当前纸面持仓（${d.positions.length}）</h3>${d.positions.length ? `<button type="button" class="btn danger" id="flattenAll">${ic("alert")}一键清仓</button>` : ""}</div>
+  <div class="panel pos-panel featured"><div class="sec-title"><h3>当前纸面持仓（${d.positions.length}）</h3>${d.positions.length ? `<button type="button" class="btn danger" id="flattenAll">${ic("alert")}一键清仓</button>` : ""}</div>
   <div id="posTable"></div>
   <div id="posPager"></div>
   <div class="note">纸面账本持久化保存在 data/qtw.sqlite（重启不丢失；CSV 仅为导出）。永续空头按 1 倍保证金计，占用等额现金。手动平仓为市价，按该市场吃单（taker）费率记账；「停止」后不再按信号自动开平，ATR 止损与止盈仍生效。</div></div></div>`;
@@ -1102,13 +1181,17 @@ async function pageTrades() {
   renderTradesPage(true);
 }
 function renderTradesPage(rebuild) {
-  const rows = S.trades || [];
+  const all = S.trades || [];
+  const TT = [["all", "全部", all], ["open", "持仓中", all.filter((x) => x.status === "open")], ["closed", "已平仓", all.filter((x) => x.status !== "open")]];
+  const tab = S.tradeTab || "all";
+  const rows = (TT.find((x) => x[0] === tab) || TT[0])[2];
   const orders = S.orders || [];
   const route = orders.filter((o) => o.status && o.status !== "paper_filled");
   if (rebuild !== false || !$("#tradeTable")) {
     $("#page").innerHTML = `<div class="fit trades-page">
-      <div class="panel trades-panel">
-        <div class="sec-title"><h3>纸面成交（${rows.length}）</h3></div>
+      <div class="panel trades-panel featured">
+        <div class="sec-title"><h3>纸面成交（${all.length}）</h3>
+          <div class="tabs5" role="tablist" aria-label="成交筛选">${TT.map(([k, l, r]) => `<button type="button" role="tab" data-tt="${k}" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}">${l}<span class="cnt">${r.length}</span></button>`).join("")}</div></div>
         <div id="tradeTable"></div>
         <div id="tradePager"></div>
       </div>
@@ -1118,6 +1201,7 @@ function renderTradesPage(rebuild) {
         </tbody></table></div></details>` : ""}
     </div>`;
   }
+  document.querySelectorAll("#page [data-tt]").forEach((b) => (b.onclick = () => { S.tradeTab = b.dataset.tt; if (S.pg.trades) S.pg.trades.i = 0; renderTradesPage(true); }));
   const host = $("#tradeTable"); if (!host) return;
   if (!rows.length) { host.innerHTML = '<div class="empty">暂无成交</div>'; const pg = $("#tradePager"); if (pg) pg.innerHTML = ""; return; }
   const st = pgState("trades", rows.length, fitRows(host, 100, 52, 3));
@@ -1292,6 +1376,7 @@ function pageSettings() {
       <button type="button" role="tab" data-tab="okx">${ic("key")}OKX 密钥</button>
       <button type="button" role="tab" data-tab="gate">${ic("key")}Gate 密钥</button>
       <button type="button" role="tab" data-tab="live">${ic("alert")}实盘开关</button>
+      <button type="button" role="tab" data-tab="ui">${ic("sidebar")}界面主题</button>
     </nav>
     <div class="set-main">
       <div class="set-panes">
@@ -1299,6 +1384,11 @@ function pageSettings() {
           <div class="sec-title"><h3>行情源</h3></div>
           <div class="venue-row"><div class="venue big" role="group" aria-label="行情源">${["okx", "gate"].map((x) => `<button type="button" data-v2="${x}" class="${s.venue === x ? "on" : ""}" ${(live || ((S.dash?.positions?.length || 0) && x !== s.venue)) ? "disabled" : ""}>${VN[x]}</button>`).join("")}</div>
           <div class="note">信号、K 线和纸面账本的计价都来自这里选择的交易所官方<b>公共</b>行情，不需要 API Key，切换后仍是纸面模式。${live ? '<br><span class="neg">实盘开启时不能切换，请先到「实盘开关」关闭实盘。</span>' : (S.dash?.positions?.length ? `<br><span class="neg">当前有 ${S.dash.positions.length} 个纸面持仓：请先平仓或重置后再切换行情源，避免入场/止损跨所混价。</span>` : "有纸面持仓时不能切换；只有在「实盘开关」通过全部闸门后，才会用它下真实单。")}</div></div>
+        </section>
+        <section class="set-pane panel" data-pane="ui" role="tabpanel">
+          <div class="sec-title"><h3>界面主题</h3></div>
+          <div class="seg theme-seg" id="themeSeg" role="group" aria-label="界面主题"><button type="button" data-theme="light">浅色（默认）</button><button type="button" data-theme="term">深色终端</button></div>
+          <div class="note" style="margin-top:10px">深色终端：纯黑底、直角细边框、等宽数字、霓虹绿 / 红表示涨跌，适合盯盘。仅改变本浏览器的显示，不影响策略、账本或任何下单设置；不含耗电的装饰动画。</div>
         </section>
         <section class="set-pane panel" data-pane="okx" role="tabpanel">
           ${kc("okx", "OKX API 密钥")}
@@ -1353,6 +1443,9 @@ function pageSettings() {
     try { await api("/api/live", { method: "PUT", body: { mode: "live", live_enabled: true, confirm_phrase: $("#livePhrase").value.trim() } }); toast("实盘模式已开启"); await refreshStatus(); pageSettings(); } catch (e) { toast(e.message, true); }
   });
   $("#liveOff") && ($("#liveOff").onclick = async () => { await api("/api/live", { method: "PUT", body: { mode: "paper", live_enabled: false } }); toast("已回到纸面模式"); await refreshStatus(); pageSettings(); });
+  const syncTheme = () => document.querySelectorAll("#themeSeg [data-theme]").forEach((b) => b.classList.toggle("on", b.dataset.theme === (document.body.classList.contains("theme-term") ? "term" : "light")));
+  document.querySelectorAll("#themeSeg [data-theme]").forEach((b) => (b.onclick = () => { setTheme(b.dataset.theme); syncTheme(); }));
+  syncTheme();
 }
 
 /* ---------- 帮助 ---------- */
