@@ -7308,3 +7308,21 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 与研究用 `output/deribit_dvol_1h.csv` 对比 42,693 根，完全一致（研究文件最后一根是当时进行中的小时线，已剔除）。
 - 状态：观察（强观察），自动进影子子账本。2026-11-14 22:53 UTC 起在 8788 前向记录。
 - 测试：`tests/test_capitulation_dvol.py`。
+
+## 长线新族：Coinbase 溢价（美国合规 USD 现货需求）作为 4h 默认书入场闸门（2026-11-14 ~15:10 PST，研究，不改默认；否决）
+
+- 查重：此前做过 Gate × OKX 跨所溢价方向（否决）、USDC/USDT 稳定币溢价（offS 弱观察）、期现基差，但没有用过 Coinbase 数据。本族信息源是「美国合规 USD 现货买盘」，与离岸两所之间的偏离不同。
+- 数据：Coinbase Exchange 官方公共 1h K 线 BTC-USD / ETH-USD / USDT-USD，2022-01 → 2026-11-14，共 128,041 行（只存已收盘小时线），输出 `output/coinbase_spot_1h.csv`。交易用 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）官方 4h，默认参数，同脚本基线。
+- 公式（因果）：
+  - 溢价：`P(T) = ln(CB BTC-USD / CB USDT-USD) − ln(本所 BTC-USDT 现货)`，T = 本所 4h 收盘时间，两边都用已收盘价。
+  - 特征：`m = P` 的 S 日均值（S = 1 / 3 / 7）。可用 W 日 z 分数（W = 30 / 90，阈值 q = 1 / 1.5 / 2），或直接用水平值（±1 / 2 / 4 bps）。在 4h 开盘时只用上一根已收盘的值。
+  - 闸门（只拦新开仓）：long_lo（美国净卖时不开多）、short_hi（美国净买时不开空）、both；反向对照 long_hi / short_lo。
+  - 安慰剂：平移 90 天。
+- 结果：
+  - 溢价本身很小，季度均值 −0.8 ~ +1.0 bps，4h 标准差约 1.9 bps；2025-Q4 起转负。
+  - 顺向闸门（long_lo / short_hi / both）几乎不改变交易：三套数据只拦 0–3 笔，收益变化多在 ±1 点以内；水平值阈值全部不触发或无差别。
+  - 唯一有差别的是 both S1 W90 z1.0：deep 段 +8 ~ +16 点，但 post 段 −0.2 ~ +0.4 点，逐月 4 好 / 3 差；邻格 z1.5 只有 0 ~ +4 点，属于孤立格。
+  - 反向闸门明显变差：long_hi（溢价高时不追多）调参窗 −27 ~ −42 点，short_lo post 段 −30 ~ −42 点。说明美国资金流方向与趋势同向，但趋势信号本身已包含这部分信息。
+  - 安慰剂 deep 段 −3 ~ −12 点。
+- 结论：**否决**。Coinbase 溢价对 4h 趋势书没有增量信息，不实现。不再重测 Coinbase 溢价长线闸门；数据保留，可留作短线事件研究的候选输入。
+- CSV（不入库）：`output/research_coinbase_premium_gate_4h.csv`、`output/coinbase_spot_1h.csv`；脚本 `scratch/cbprem/`（fetch.py、run.py）。
