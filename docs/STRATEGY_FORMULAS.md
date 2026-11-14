@@ -5233,3 +5233,35 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 后段数字含约三成未平仓浮盈，读后段业绩时应把这部分打折看。
 
 不改代码，默认不变。CSV（本地，不入库）：output/research_profit_concentration_topk.csv、output/research_profit_concentration_top10_trades.csv。
+
+### 2026-11-13 16:30 PST — 全部参数同时随机扰动（joint parameter jitter；稳健性，不改代码、不改默认）
+
+**问题**：已有的邻域检验都是一次只动一到两个参数（均线对、ATR 周期 × 倍数、风险预算曲面等）。如果所有参数同时偏离一点（就像“当初稍微调得不一样”），默认的 +165% 还剩多少？这可以估计参数选择带来的乐观偏差。
+
+**做法**：12 个连续参数同时乘以独立的 U(1−b, 1+b)，b = 10% 和 20%，各抽 50 组（确定性种子 20261123 / 20261133），两所用同一组抽样。
+- 整数参数取整：fast_ma、slow_ma、trend_ma、atr_period、btc_regime_ma、port_vol_lookback、name_vol_lookback。
+- 浮点参数：atr_stop_mult、port_vol_target、name_vol_target、rebalance_band、max_risk_per_trade。
+- confirm_bars 以 1/8 概率 −1、1/8 概率 +1。
+- 其余与默认相同：perp_both 10× + 官方资金费，官方 OKX / Gate 4h K 线，窗口 2025-01-17 → 2026-11-13 PT，以 2026-03-05 切分，真实费。
+- 脚本：scratch/jit/jit.py、scratch/jit/summ.py。
+
+| | Gate 全段 p10 / p50 / p90（最低） | OKX 全段 p10 / p50 / p90（最低） | Sharpe p50 | 回撤 p50 | 后段 p50（最低） | 收益超过默认的组数 |
+|---|---|---|---|---|---|---|
+| 默认 | +164.80 | +166.90 | 1.70 / 1.71 | −18.9 | +62.0 / +61.5 | — |
+| ±10% | +87.7 / +116.8 / +154.2（+40.9） | +88.1 / +116.7 / +154.6（+39.0） | 1.42 / 1.41 | −19.3 | +43.2 / +42.7（+23.8） | 4 / 2（共 50） |
+| ±20% | +64.2 / +94.9 / +136.3（+45.9） | +62.2 / +93.6 / +148.0（+47.6） | 1.28 / 1.25 | −20.0 / −19.7 | +34.0 / +33.6（+6.9） | 2 / 2（共 50） |
+
+- 200 次回测全部为正，2026-03 后段也全部为正；0 次强平；回撤中位数和默认相近（−19% 到 −20%）。
+- 但默认在两所都高于约 92–96% 的扰动组：默认是一个尖峰，不是平台。±10% 的扰动就让中位数少约 48 个百分点，±20% 少约 71 个百分点。
+- 哪些参数最敏感（±20% 组，两所平均收益与参数倍数的 Spearman 秩相关）：
+  - fast_ma −0.45（快线越短越好），atr_stop_mult +0.31（止损越宽越好）。
+  - trend_ma、port_vol_lookback、confirm_bars 约 −0.2；btc_regime_ma、name_vol_lookback 约 +0.2。
+  - atr_period、rebalance_band、name_vol_target 约为 0。
+  - 但单参数邻域早已表明，单独把快线调短或止损调宽都不比默认好，所以这些只是联合扰动下的方向，不是调参建议。
+
+**结论**：
+- 策略本身是稳健的：参数在 ±20% 内任意组合都赚钱，后段也全部为正。
+- 但 +165% 这个点估计含明显的参数选择乐观偏差。更合理的预期是「附近参数」的中位数：全段约 +95–117%，Sharpe 约 1.25–1.4，后段约 +34–43%。
+- 这与 16:05 的币池外留出、15:25 的 ATR 周期 × 倍数邻域方向一致。
+- 不改代码，默认不变；也不据此移动默认参数（单参数邻域已否决这些方向）。
+- CSV（本地，不入库）：output/research_joint_param_jitter.csv（每组参数与结果）、output/research_joint_param_jitter_summary.csv。
