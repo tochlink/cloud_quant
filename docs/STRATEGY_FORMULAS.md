@@ -7030,3 +7030,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - follow：几乎全负，只有 OKX k4 H48 tune / post 为正，而且 deep 段 −187 bps，不稳。
 - 结论：否决，不实现，默认不变。1h 层面基差偏离太小，收敛套付不起现货手续费；单边方向上的信息量不比安慰剂多。以后不再重测本族。
 - CSV：`output/research_basis_extreme_1h.csv`（汇总）、`output/research_basis_extreme_1h_events.csv`（逐事件）；脚本 `scratch/basis1h/`（fetch.py、run.py）。
+
+## 短线新族：日内固定 UTC 时段持仓季节性（每天固定小时开仓、持有 H 小时，1h 永续；2026-11-14 ~13:00 PST，研究，不改默认；否决，不实现）
+
+- 查重：此前只测过 4h 默认书的入场时段 / 星期闸门和 Asia/EU/US 时段动量闸门（都是改默认书的入场），没有把「固定时段持仓」当独立短线交易测过。
+- 公式：每天在 UTC 小时 h 的 1h 开盘等权开 8 币永续（多或空），持有 H 小时后按开盘平仓；h = 0…23，H = 1/2/3/4/6/8；单笔净值 = side·(O_{t+H}/O_t − 1) − side·持仓期间结算的资金费 − 往返手续费（taker 2×5.1 bps；maker 估算 2×2 bps；压力 2×15.1 bps）。每天每个窗口最多一笔，按天的篮子收益算 t 值。
+- 数据：OKX 官方 1h 永续 d8 2022-01→2026-11-14（deep < 2024-10-21 ≤ tune < 2026-03-05 ≤ post）；Gate 官方 1h d8 2025-09-24→；未调参 OKX new8（由官方 15m 聚合，无资金费）2024-11-15→。
+- 结果：时段均值跨期不持续——OKX tune 与 post 各窗口毛收益相关系数 H1 −0.18 / H4 −0.44 / H8 −0.73（反向），tune 与 new8 post −0.34…−0.66；tune 段 288 个窗口里满足 |t|>2 且毛收益 > 10.2 bps 的只有 01:00 UTC 做多 4h（+13.0 bps），它在 post 段 OKX −6.4 / Gate −6.4 / new8 −4.7 bps（毛）。用 deep+tune 两段同号、合并毛收益 > 10.2 bps 选窗只剩 03:00 UTC 做多 8h（+10.4），post 净值 OKX −13.0 / Gate −13.3 / new8 −9.8 bps。maker 执行也补不回（post 毛收益为负）。
+- 结论：否决，不进观察名单，不实现。日内时段季节性的毛优势（个位数 bps）小于成本且跨期反转；固定时段族视为覆盖，以后不再测。
+- 研究表：`output/research_intraday_session_seasonality_1h.csv`（全部窗口 × 方向 × 时段）、`output/research_intraday_session_seasonality_1h_selected.csv`（选窗与样本外）；脚本 scratch/tod/run.py（未推送）。
