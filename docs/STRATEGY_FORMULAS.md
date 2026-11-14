@@ -6203,3 +6203,11 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：CROWD 在双重留出上是一个平滑的「降回撤 / 提 Sharpe」平面，不是孤立最优点，强观察维持；但默认 8 币 2026-03 后所有格子都少赚、逐月不过门槛，**不改默认**。若想要更低回撤，C4 m1.25（或 C4 m1.5 保收益版）可作为风险档候选，与组合波动 0.2 同属风险档。不再细扫 CROWD 邻域，等 2026-03 后数据累积再复核逐月门槛。
 - CSV（本地，不入库）：`output/research_double_holdout_crowd_neighborhood.csv`、`output/research_double_holdout_crowd_neighborhood_default8_post.csv`；脚本 `scratch/dnew/crowd_nb.py`、`crowd_d8.py`。
 - 下一族：转回尚未覆盖的出场 / 执行层结构（先查轮换日志）。
+
+### 2026-11-14 01:50 PST 引擎 vs 回测：可选仓位策略 #10 / #11 与单独 CROWD 的有持仓逐根对拍（执行 / 引擎验证）· 通过
+
+- 动机：CROWD（`side_crowd_cap / side_crowd_mult`）、ES 尾部仓位（`name_es_w / name_es_k`）、BTC 体制投票（`btc_regime_vote_k`）都已做成回测 + 引擎可选参数，并在策略页登记为 #10 / #11，但此前只验证过「生产回测 = 研究脚本」，没跑过引擎有持仓逐根回放。
+- 方法：沿用 13:55 / 14:30 节的对拍框架（scratch/eng7/full.py 由 eng4/full_mode_oeq.py 复制）：2026-03-05 起两边空仓跑到 2026-11-13，每家 1523 根 4h × 默认 8 币，perp_both 10×，两边喂同一份官方资金费序列，下单精度 1e-8，回测用开盘权益口径（OEQ）以隔离已知的定仓口径差；引擎每根开盘调 `run_cycle`、盘中按官方高低价喂 `poll_stops`。变体：默认、CROWD C5 m1.25、#10（CROWD C5 m1.25 + ES W120 k2）、#11（投票 k3）。
+- 结果（output/research_engine_backtest_stateful_parity_optional_sizing.csv、…_entries.csv，不推送；cmp 脚本 scratch/eng7/cmp.py）：四个变体 × 两所，开仓（币、方向、K 线）全部逐笔对上（61 / 61、#10 62 / 62），ATR 止损 36 / 36，期末收益差 ≤ 0.02 个点（最大：OKX CROWD +54.33% vs +54.31%，权益最大相对偏差 0.021%，来自资金费结算与调仓取整的细小差异；其余 ≤ 0.0034%）。
+- 投票 k3 在这段窗口里与单线逐位相同（2026-03 后从没出现分歧），回放不能区分，所以另做窗口一致性检查（scratch/eng7/vote_win.py；output/research_engine_regime_vote_window_parity.csv）：用官方深历史 BTC 现货 4h（OKX 2021 起、Gate 2022 起）逐根模拟引擎 `_btc_regime_state` 只取最近 need + 5 根（投票 need = 1800）的算法，与回测整段序列对比：单线 / 投票 k3 两所共 38,950 根全部一致（0 处不一致）；其中投票与单线不同的 141 / 105 根也一致。
+- 结论：#10、#11、单独 CROWD 的引擎路径与回测一致，可放心作为可选策略在模拟盘运行；无代码改动，默认参数不变。
