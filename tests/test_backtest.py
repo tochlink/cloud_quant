@@ -155,3 +155,15 @@ def test_pyramid_off_by_default_and_bounded():
     assert r["summary"]["total_return"] != base["summary"]["total_return"]
     with pytest.raises(ValueError):
         S.validate({**c, "strategy": {**c["strategy"], "pyramid_r": 0.2}})
+
+
+def test_pyramid_add_recomputes_margin_and_liq():
+    # 浮盈加仓后保证金 / 强平价须按新数量与加权均价重算（调仓带关闭时不会被调仓顺带修正）
+    c = nobal()
+    c = {**c, "strategy": {**c["strategy"], "pyramid_r": 1.0, "pyramid_frac": 0.5, "rebalance_band": 0}}
+    r = run_backtest(book(), c)
+    tr = r["trades"]
+    perp = tr[tr["market"] == "perp"]
+    assert len(perp)
+    for _, t in perp.iterrows():
+        assert t["margin_usdt"] == pytest.approx(t["qty"] * t["entry_price"] / t["leverage"], rel=1e-9)

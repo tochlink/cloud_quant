@@ -460,6 +460,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                 t.fees_usdt += add_n * FEE[t.market]
                 room_add -= add_n
                 added.add(s)
+                _relev(t, s)  # 加仓后按新均价 / 数量重算保证金与强平价（此前漏算，保证金与强平价停留在加仓前）
         # 2c) 可选：持仓调仓（默认见 settings.rebalance_band；0 = 关闭）。用 i-1 收盘的权益 / ATR，在第 i 根开盘
         #     把已有持仓（本根新开的除外）调向目标名义：
         #       目标 = min(权益×单笔风险 / 止损距离%, 权益×单币权重)，止损距离按 rebalance_mode：
