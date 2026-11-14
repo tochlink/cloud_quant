@@ -224,6 +224,11 @@ STRATEGIES: list[dict] = [
              "深历史未见段、未调参 8 币、随机 8 币 20 组 Sharpe 全部更高，尚未改默认（docs/STRATEGY_FORMULAS.md「CROWD × ES 叠加」）。",
      "params": {"side_crowd_cap": 5.0, "side_crowd_mult": 1.25, "name_es_w": 120, "name_es_k": 2.0}, "signal": None,
      "overrides": {"side_crowd_cap": 5.0, "side_crowd_mult": 1.25, "name_es_w": 120, "name_es_k": 2.0}},
+    {"id": "ma_trend_regime_vote", "no": 11, "name": "双均线 + BTC 体制线多周期投票（候选）", "interval": "4h", "kind": "趋势·体制过滤",
+     "desc": "信号、止损、仓位与 #1 完全相同；只改 BTC 体制过滤：BTC 现货收盘低于 SMA600 / 900 / 1200 / 1500 / 1800 中至少 3 条才不开多"
+             "（btc_regime_vote_k 3），代替单一 SMA1200，降低体制线周期的选参运气。深历史未见段 Sharpe 三组都更高、2026-03 后与 #1 相同，"
+             "但差异只来自少数几次体制切换，尚未改默认（docs/STRATEGY_FORMULAS.md「多周期投票」）。",
+     "params": {"btc_regime_ma": 1200, "btc_regime_vote_k": 3}, "signal": None, "overrides": {"btc_regime_vote_k": 3}},
 ]
 BY_ID = {s["id"]: s for s in STRATEGIES}
 
@@ -256,6 +261,11 @@ VERDICTS.setdefault("ma_trend_lsp_hp", {"status": "观察", "reason": (
     "16 选 8 随机子集 40 组对 #8 收益约六七成更高但 Sharpe 只有约一半更高、回撤深约 2.5 点，主要是放大敞口。"
     "CSV：output/research_hedge_pair_out_of_universe.csv")})
 
+VERDICTS.setdefault("ma_trend_regime_vote", {"status": "观察", "reason": ("强观察。"
+    "2026-11-14 研究（多空永续 10× + 官方资金费，scratch/drgv）：深历史未见段日 Sharpe OKX 8 币 0.81 / Gate 8 币 0.31 / OKX 7 币 0.80"
+    "（#1 0.71 / 0.09 / 0.77），回撤 −24.6% / −29.9% / −26.6%（#1 −28.7% / −36.5% / −26.9%），压力费同向；调参窗口与 2026-03 后与 #1 逐位相同。"
+    "逐月差异只出现在少数体制切换月份（未见段更好 / 更差 2/2、5/6、6/3），未达改默认门槛。不进影子子账本。"
+    "CSV：output/research_deep_history_btc_regime_vote.csv。")})
 VERDICTS.setdefault("ma_trend_crowd_es", {"status": "观察", "reason": ("强观察。"
     "2026-11-14 研究（多空永续 10× + 官方资金费，scratch/stack）：深历史未见段日 Sharpe OKX 8 币 0.91 / Gate 8 币 0.51 / OKX 7 币 1.10（#1 0.71 / 0.09 / 0.77），"
     "回撤 −26% / −26% / −25%（#1 −29% / −37% / −27%）；调参窗 Sharpe 2.0 左右（#1 1.74）；2026-03 后收益三组都更高（+66.5% / +64.4% / +67.1% 对 +61.5% / +62.0% / +52.1%），"
