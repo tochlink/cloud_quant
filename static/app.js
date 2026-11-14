@@ -1256,12 +1256,21 @@ function renderPosTable() {
 
 /* ---------- 成交 ---------- */
 async function pageTrades() {
-  $("#page").innerHTML = '<div class="empty">加载中…</div>';
+  // 进入成交页默认显示「全部」成交：不沿用上次停留的筛选（持仓中为 0 时会显示「暂无成交」）
+  S.tradeTab = "all"; if (S.pg && S.pg.trades) S.pg.trades.i = 0;
+  if (S.trades) renderTradesPage(true); else $("#page").innerHTML = '<div class="empty">加载中…</div>';
+  if (!(await loadTrades()) && !S.trades) return;
+  if (S.page === "trades") renderTradesPage(true);
+}
+/* 成交与路由日志并行拉取；失败时保留已有数据 */
+async function loadTrades() {
   try {
-    S.trades = await api("/api/trades");
-    S.orders = await api("/api/orders");
-  } catch (e) { $("#page").innerHTML = `<div class="empty neg">${esc(e.message)}</div>`; return; }
-  renderTradesPage(true);
+    const [tr, od] = await Promise.all([api("/api/trades"), api("/api/orders")]);
+    S.trades = tr; S.orders = od; return true;
+  } catch (e) {
+    if (!S.trades && S.page === "trades") $("#page").innerHTML = `<div class="empty neg">${esc(e.message)}</div>`;
+    return false;
+  }
 }
 function renderTradesPage(rebuild) {
   const all = S.trades || [];
@@ -1655,7 +1664,7 @@ function applyLive() {
       syms.push(p.symbol);
     });
     const sig = syms.join();
-    if (sig !== S._posSig) { S._posSig = sig; renderRight(); if (S.page === "positions") renderPosTable(); if (S.page === "trades") renderTradesPage(false); }
+    if (sig !== S._posSig) { S._posSig = sig; renderRight(); if (S.page === "positions") renderPosTable(); if (S.page === "trades") loadTrades().then((ok) => { if (ok && S.page === "trades") renderTradesPage(true); }); }
   }
   if (S.signals && L.venue === S.status?.settings.venue) S.signals.rows.forEach((r) => { const q = L.prices[r.symbol]; const m = r.market === "-" ? "spot" : r.market; if (q && q[m] && quoteFresh(q[m])) r.ref_price = q[m].price; });
   updateLiveCells();
@@ -1722,6 +1731,7 @@ async function refreshAll() {
   try { await Promise.all([refreshStatus(), refreshDash()]); } catch (e) { toast("无法连接后端：" + e.message, true); return; }
   renderRight();
   if (S.page === "positions" || (S.page === "dashboard" && !dashHover())) PAGES[S.page]();
+  else if (S.page === "trades" && (await loadTrades()) && S.page === "trades") renderTradesPage(true);  // 周期 / 平仓事件后成交页同步最新成交
 }
 async function route() {
   S.page = (location.hash.replace("#/", "") || "dashboard").split("?")[0];
