@@ -7326,3 +7326,18 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 安慰剂 deep 段 −3 ~ −12 点。
 - 结论：**否决**。Coinbase 溢价对 4h 趋势书没有增量信息，不实现。不再重测 Coinbase 溢价长线闸门；数据保留，可留作短线事件研究的候选输入。
 - CSV（不入库）：`output/research_coinbase_premium_gate_4h.csv`、`output/coinbase_spot_1h.csv`；脚本 `scratch/cbprem/`（fetch.py、run.py）。
+
+## 短线新族：Coinbase 溢价冲击事件 → 1h 永续 8 币篮子（2026-11-14 ~15:20 PST，研究，不改默认；否决，ETH 折价 z≤−3 持有 48h 仅弱观察）
+
+- 查重：上一节只测了 Coinbase 溢价作长线 4h 闸门（否决），并注明数据可留作短线事件输入；此前没有用 Coinbase 溢价做短线事件。与已否决的 1h 微观结构事件（爆仓 / 持仓量 / 主动买卖 / 多空比）、跨所溢价方向、基差极值不同：信息源是美国合规 USD 现货相对离岸 USDT 永续的偏离。
+- 数据：`output/coinbase_spot_1h.csv`（Coinbase 官方 1h，BTC-USD / ETH-USD / USDT-USD）；交易用 OKX 官方 1h 永续 d8（2022-02→）、未调参 new8，Gate 官方 1h 永续 d8（只有 2024-10 起，train 段无数据）；官方资金费。
+- 公式（因果，均为第 i 根 1h 收盘已知、下一根开盘入场）：
+  - 溢价 `P_i = [ln(CB X-USD / CB USDT-USD) − ln(本所 X-USDT 永续收盘)] × 1e4 bps`，X = BTC / ETH（参照是永续，含基差）。
+  - 特征：`m = P` 的 S 根均值（S = 1 / 6）；`z_W = (m − 均值_W) / 标准差_W`，W = 168 / 720；`Δ24 = P_i − P_{i−24}`，按 720 根滚动标准差 sd 衡量。
+  - 事件：z ≥ k 或 z ≤ −k（k = 2 / 3）；Δ24 ≥ k·sd 或 ≤ −k·sd。等权做多或做空 8 币，持有 H = 12 / 24 / 48，持仓期内不重复；吃单 5.1 bps×2（压力 15.1）。安慰剂：事件后移 720h。增量检验：剔除 #14（投降 ∪ ETH DVOL z168≥3）前 72h 内有触发的事件。
+- 结果：
+  - 240 格（real 费）中 OKX d8 / new8 / Gate 8 个有数据切片全正的只有 3 格，安慰剂 0 格；7/8 正 11 格 vs 安慰剂 7 格——整体接近噪声。
+  - 最好一格 ETH S1 z168 ≤ −3 做多 48h：OKX d8 train/test/post +10 / +110 / +203 bps（n 65/31/16），new8 +32 / +140 / +311，Gate test/post +57 / +157；压力费仍为正；安慰剂 +7 / −87 / −55。剔除 #14 窗口后 OKX d8 +8 / +135 / +70、new8 +9 / +201 / +129、Gate +172 / +57，仍为正。
+  - 但不稳：同一事件 H12 / H24 在 train / test 为负；邻格 z ≤ −2 全段为负或接近 0，S6 平滑版 post 为负，z720 版剔除 #14 后 train 为负；train 段（最长、事件最多）只有约 +10 bps。BTC 溢价与 Δ24 事件无一致方向。
+- 结论：**否决**为独立短线策略，不实现。ETH Coinbase 折价 z168 ≤ −3 → 做多 48h 列**弱观察**（只一个阈值、只一个持有期成立，train ≈ 0），不并入 #14。不再重测 Coinbase 溢价短线事件网格。
+- CSV（不入库）：`output/research_coinbase_premium_shock_event_1h.csv`、`output/research_coinbase_premium_shock_event_1h_incremental.csv`；脚本 `scratch/cbev/`（run.py、inc.py，需在 scratch/capit 目录运行）。
