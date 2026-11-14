@@ -6288,3 +6288,13 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：选择效应部分成立（未见币深历史有，默认币没有），维持「观察（加风险档）」，不改默认、不改代码；opp-only 不单独立项（属于已覆盖的多空书风险家族）。
 - CSV（本地，不入库）：`output/research_hedge_pair_placebo_double_holdout.csv`；脚本 `scratch/dhpp/run.py`。
 - 下一步：对冲对等 2026-03 后数据累积后复核逐月门槛；转向其他结构性方向（条件加仓 / 执行侧）。
+
+### 2026-11-14 02:35 PST 引擎 vs 回测：可选对冲对乘数（单独）与 ES NORM（单独）的有持仓逐根对拍（执行 / 引擎验证）· 通过
+- 动机：双重留出里站得住的两个可选仓位项 —— 对冲对 hedge_pair W180 c0.5 h1.5 与 ES NORM W120 k2 —— 单独使用时引擎（模拟 / 实盘路径 `engine.apply_hedge_pair` / `apply_es_tail`）此前没有逐根对拍（01:50 节只覆盖默认、CROWD、#10、#11）。
+- 方法：沿用 scratch/eng7/full.py 框架：2026-03-05 起两边空仓跑到 2026-11-13，每家 1523 根 4h × 默认 8 币，perp_both 10×，两边喂同一份官方资金费，开盘权益口径；引擎每根开盘 `run_cycle`、盘中按官方高低价 `poll_stops`。
+- 结果（回测 / 引擎）：
+  - 对冲对：Gate 入场 61 / 61 全部逐笔匹配、ATR 止损 37 / 37，终值 +63.05% / +63.07%，最大相对权益差 0.014%；OKX 61 / 61、37 / 37，+62.93% / +62.86%，最大差 0.042%。
+  - ES NORM：Gate 61 / 61、38 / 38，+57.72% / +57.59%（差 0.13 点，来自资金费累计 3.36 / 3.37 USDT 与小数位定仓，最大相对差 0.31%）；OKX 62 / 62、38 / 38，+58.23% / +58.24%，最大差 0.002%。
+  - 默认复测与 01:50 节一致（Gate +57.66% / +57.66%，OKX +56.95% / +56.95%）。
+- 结论：两个可选项的引擎实现与回测同口径，试用时模拟盘结果可按回测预期；不改代码、不改默认（两者仍为观察 / 强观察）。
+- CSV（本地，不入库）：`output/research_engine_backtest_stateful_parity_optional_sizing_hedge_es.csv`（+ `_entries.csv`，无错配）；脚本 `scratch/eng7/full.py`、`cmp2.py`。
