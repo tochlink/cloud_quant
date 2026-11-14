@@ -7039,3 +7039,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果：时段均值跨期不持续——OKX tune 与 post 各窗口毛收益相关系数 H1 −0.18 / H4 −0.44 / H8 −0.73（反向），tune 与 new8 post −0.34…−0.66；tune 段 288 个窗口里满足 |t|>2 且毛收益 > 10.2 bps 的只有 01:00 UTC 做多 4h（+13.0 bps），它在 post 段 OKX −6.4 / Gate −6.4 / new8 −4.7 bps（毛）。用 deep+tune 两段同号、合并毛收益 > 10.2 bps 选窗只剩 03:00 UTC 做多 8h（+10.4），post 净值 OKX −13.0 / Gate −13.3 / new8 −9.8 bps。maker 执行也补不回（post 毛收益为负）。
 - 结论：否决，不进观察名单，不实现。日内时段季节性的毛优势（个位数 bps）小于成本且跨期反转；固定时段族视为覆盖，以后不再测。
 - 研究表：`output/research_intraday_session_seasonality_1h.csv`（全部窗口 × 方向 × 时段）、`output/research_intraday_session_seasonality_1h_selected.csv`（选窗与样本外）；脚本 scratch/tod/run.py（未推送）。
+
+## 长线新族：单币「波动率的波动率」（vol-of-vol）仓位乘子 / 闸门（4h 默认书，2026-11-14 ~13:10 PST，研究，不改默认；否决，不实现）
+
+- 查重：此前测过波动分位、目标波动、BVOL、ES 尾部厚度、偏度、Ulcer 等，没有用「波动率本身的不稳定程度」做仓位的记录。
+- 公式（第 i 根用 i−1 收盘值，乘到单币风险 / 权重乘数 NVS，多用现货 / 永续按 MK、空用永续）：rv_t = 最近 20 根 4h 对数收益标准差；VoV_t = log(rv) 最近 W 根的标准差；ratio_t = VoV_t / VoV 最近 720 根中位数。连续版 g = clip(ratio^(−k), 0.5, 1.5)，W = 60/120/240，k = 0.5/1；闸门版 ratio > 1.3 时 g = 0.5，否则为 1。安慰剂：反向 k = −1，以及序列平移 +90 天。
+- 数据：OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-01→）官方 4h 现货 + 永续，perp_both 10×，真实与压力费率；分三段：深历史未见（< 2024-10-21）、调参段（→ 2026-03-05）、后段（→ 2026-11-14）。
+- 结果（深历史 / 调参段 / 后段，同一脚本基线 OKX +35.1% Sh0.71 / +85.1% / +59.9%，Gate −3.6% / +84.3% / +60.3%，d7 +65.3% / +92.9% / +50.8%）：连续版 6 格两家后段全部低于基线（+42.7…+58.2%），深历史 Gate 全部更差。闸门 W120：调参段 Sharpe 1.47→1.66（三组都升），但后段 OKX +55.3%、Gate +54.2%，均低于基线，深历史 OKX 和 Gate 也更差。闸门 W240 反过来：后段 +62.5% / +62.3%，略好，但调参段 +77.5% / +75.1%，落后。W60 全面更差。最好的窗口在不同时期来回换，邻域不稳定；平移 90 天的安慰剂在后段与真实版相近。
+- 结论：否决，不进观察名单，不实现，默认不变。
+- 研究表：`output/research_vol_of_vol_name_sizing_4h.csv`；脚本 scratch/vov/run.py（未推送）。
