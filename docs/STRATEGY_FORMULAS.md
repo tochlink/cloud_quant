@@ -7295,3 +7295,16 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - w 0.25 介于两者之间，单调。
 - 结论：**UNION_H48 w0.5 覆盖层列为强观察，作为 #13 的升级规格**（触发：投降或 ETH DVOL z168 ≥ 3；持有 24h → 48h）。三段 Sharpe、两所、两档费用都好于现 #13 规格和安慰剂。逐月只有 4/9，不改默认。下一步：在 8788 的 #13 影子子账本中加入 Deribit ETH DVOL 实时触发与 48h 持有选项（默认关闭），前向纸面记录。
 - CSV（不入库）：`output/research_dvol_cap_overlay_on_4h_book.csv`；脚本 `scratch/dvstack/run.py`（在 scratch/stack13 下运行）。
+
+### #14 capitulation_dvol_1h：投降 ∪ ETH 隐含波动冲击反弹（可选短线策略，影子子账本，2026-11-14 ~15:00 PST，实现，不改默认）
+
+- 规则：第 i 根 1h 收盘时，满足任一条件即为事件；下一根开盘等权做多全部币，持有 H = 48 根后离场，持仓期内不重复触发。
+  - ① #13 投降：`mean_j ln(C_i / C_{i−24}) ≤ −0.10` 且下跌币数 ≥ ⌈0.875 n⌉。
+  - ② ETH DVOL：`z168 = (DVOL − 均值_168) / 标准差_168 ≥ 3`，按 Deribit 已收盘小时线计算。
+- 执行与仓位：单币名义上限 6.25% 权益（8 币约 0.5×），50×ATR 灾难线，与 #13 相同（`interval 1h`、`max_weight_per_name 0.0625`）。参数：`lookback 24, drop 0.10, hold 48, breadth 0.875, dvol_currency ETH, dvol_window 168, dvol_z 3`。
+- 数据：新模块 `qtw/dvol.py`，读 Deribit 公共接口 `public/get_volatility_index_data`（resolution 3600，分页），缓存到 `data/dvol_<CUR>_1h.csv`（不入库）。
+  - 接口会返回进行中的当前小时线，这里丢弃，只存已收盘小时线（ts + 1h ≤ 现在）；ts 为小时线开盘时间，按 K 线 open_time 对齐。
+  - 拉取失败或索引不是时间时，DVOL 条件不触发，只剩 ①，绝不补造数据。
+  - 与研究用 `output/deribit_dvol_1h.csv` 对比 42,693 根，完全一致（研究文件最后一根是当时进行中的小时线，已剔除）。
+- 状态：观察（强观察），自动进影子子账本。2026-11-14 22:53 UTC 起在 8788 前向记录。
+- 测试：`tests/test_capitulation_dvol.py`。
