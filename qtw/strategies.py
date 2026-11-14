@@ -238,12 +238,17 @@ VERDICTS: dict[str, dict] = load_research().get("verdicts", {})
 VERDICTS.setdefault("ma_trend_lsp", {"status": "观察", "reason": (
     "2026-11-13 研究（多空永续 10× + 官方资金费）：整段 Gate +214.9% / OKX +218.8%（#1 同口径 +163.3% / +165.4%），夏普 2.02 / 2.05，"
     "回撤 −15.1% / −15.2%，2026-03-05 后 +73.4% / +72.5%；按训练期 Sharpe 二选一的 walk-forward 12 格全胜 #1；2026-03 后逐月 5/8 更好，"
-    "未达改默认余量。信号与 #1 相同，只改仓位，不进影子子账本。CSV：output/research_c3_rb30_walkforward_rolling_perp_both_10x.csv")})
+    "未达改默认余量。信号与 #1 相同，只改仓位，不进影子子账本。CSV：output/research_c3_rb30_walkforward_rolling_perp_both_10x.csv。"
+    "注意（2026-11-13 币池外留出）：换到从未调参的 8 个币上 #8 不如 #1（Gate −0.6% vs +24.1%，OKX −5.5% vs +13.6%），"
+    "16 选 8 随机子集里对 #1 基本是抛硬币，增量视为默认 8 币特有。CSV：output/research_hedge_pair_out_of_universe.csv")})
 
 VERDICTS.setdefault("ma_trend_lsp_hp", {"status": "观察", "reason": (
     "2026-11-13 研究（多空永续 10× + 官方资金费）：叠加在 ls_parity_cap 3 上整段 Gate +296.1% / OKX +323.4%（仅 C3 +230.6% / +237.7%），"
     "Sharpe 2.21 / 2.28，回撤约 −15%，12/12 安慰剂胜出，3 / 6 / 12 个月 walk-forward 真实费率全赢；4h 相位检验叠加 C3+RB30 后 4/4 相位收益与 "
-    "2026-03 后都更高、Sharpe 不输。2026-03 后逐月 5/8 更好，未达改默认门槛。CSV：output/research_hedged_pair_phase_offset_perp_both_10x.csv")})
+    "2026-03 后都更高、Sharpe 不输。2026-03 后逐月 5/8 更好，未达改默认门槛。CSV：output/research_hedged_pair_phase_offset_perp_both_10x.csv。"
+    "降为弱观察（2026-11-13 币池外留出）：未调参的 8 个币上 #9 Gate −13.9% / OKX −18.6%（#1 +24.1% / +13.6%），回撤 −34% ~ −38%；"
+    "16 选 8 随机子集 40 组对 #8 收益约六七成更高但 Sharpe 只有约一半更高、回撤深约 2.5 点，主要是放大敞口。"
+    "CSV：output/research_hedge_pair_out_of_universe.csv")})
 
 
 def strategy_cfg(cfg: dict, sid: str) -> dict:
