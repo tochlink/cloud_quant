@@ -85,7 +85,8 @@ def strategies_backtest(sid: str, body: dict = Body(default={})):
             res = carry.simulate(fr, fund, c, **spec["params"])
         else:
             # 标的里没有 BTCUSDT 时单独取 BTC 现货供体制过滤（与模拟盘 / 实盘引擎同口径）
-            btc_df, btc_err = btc_spot_for_regime(c, fr, bars)
+            # 体制线来源币种按该策略的覆盖取（#12 用 ETHUSDT）
+            btc_df, btc_err = btc_spot_for_regime(R.strategy_cfg(c, sid), fr, bars)
             if btc_err:
                 errs = {**errs, "BTCUSDT(regime)": btc_err}
             res = R.run(sid, fr, c, btc_spot=btc_df)

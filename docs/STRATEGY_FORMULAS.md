@@ -6638,3 +6638,19 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：否决，不进观察名单，不改默认。体制状态对侧别风险预算没有可用的增量信息：加空 / 减空在调参窗与默认币池上都亏，new8 上的零星改善被时移安慰剂超过。
 - CSV（本地，不入库）：`output/research_regime_conditional_side_budget_deep.csv`；脚本 `scratch/drgside/run.py`。
 - 下一族：继续结构性方向（执行 / 引擎层或组合层），不要重测本节或体制闸门族。
+
+### 2026-11-14 06:05 PST 实现：可选体制线来源币种 `btc_regime_symbol`（默认 BTCUSDT，可选 ETHUSDT）+ 可选策略 #12 `ma_trend_regime_eth`（执行 / 引擎工作，不改默认）
+- 背景：05:40 节「体制过滤的数据来源替换」把 ETH SMA1200 列为强观察（双重留出 5 组深历史 Sharpe 全部更高、2026-03 后 5/5 更高，但调参窗口 2026-03 前少 23–37 点）。本轮把它做成可选参数，方便 kean 在模拟盘自选，不改默认。
+- 公式：bear_t = 同所官方 `btc_regime_symbol` 现货收盘_t < SMA_N（N = `btc_regime_ma`，可与 `btc_regime_vote_k` 投票组合），bear 时不新开多单，空单与已有仓不变；默认 `BTCUSDT` 时与旧代码逐位一致。
+- 代码：`qtw/settings.py`（`REGIME_SYMBOLS = BTCUSDT / ETHUSDT`，校验）、`qtw/backtest.py`（体制序列取 `spot_d[symbol]`，币池里没有时用调用方传入的 `btc_spot`；`btc_spot_for_regime` 按该币种取官方现货；summary 新增 `btc_regime_symbol`）、`qtw/engine.py`（`_btc_regime_state` 按该币种取 K 线，返回 `symbol`）、`qtw/strategies.py`（#12，状态「观察」，不进影子子账本）、`qtw/strategies_api.py`（策略页按该策略覆盖后的配置取体制 K 线，修正 #12 在币池外时会误取 BTC 的问题）、`tests/test_regime_symbol.py`。全量测试 422 通过。
+- 对拍（scratch/dreth/run.py，官方 OKX / Gate 8 币深历史，perp_both 10× + 官方资金费）：生产参数 ETHUSDT 与研究钩子（ETH 现货 < SMA1200）两所、真实 / 压力费 4 组权益逐位一致；同脚本对比（真实费）：
+
+| 交易所 | 方案 | 深历史全段 | Sharpe | 回撤 | 2025-01-17 起窗口 | 窗口 Sharpe | 2026-03 前 | 2026-03 后 |
+|---|---|---|---|---|---|---|---|---|
+| OKX | BTC（默认） | +294.1% | 1.25 | −26.2% | +161.8% | 1.68 | +61.1% | +60.5% |
+| OKX | ETH | +334.0% | 1.34 | −21.8% | +144.5% | 1.60 | +48.3% | +62.9% |
+| Gate | BTC（默认） | +256.9% | 1.03 | −38.0% | +160.4% | 1.68 | +59.4% | +61.0% |
+| Gate | ETH | +293.4% | 1.11 | −36.6% | +142.4% | 1.59 | +46.2% | +63.4% |
+
+  压力费同向（OKX 深历史 +272.8% vs +235.2%，窗口 +128.9% vs +143.9%）。结论与 05:40 节一致：深历史与 2026-03 后更好，调参窗口 2026-03 前更差；保持强观察、默认不变，按月复查。
+- CSV：`output/research_regime_symbol_eth_param_parity.csv`（不入库）。
