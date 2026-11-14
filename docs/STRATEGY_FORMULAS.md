@@ -7110,3 +7110,14 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - short / short_hi / long_lo 基本无影响或变差；chg 版不稳（调参前段多为变差）。
 - 结论：**弱观察，不实现、不改默认**。「USDT 借贷利率异常高时不追多」在深历史和调参前段的三组样本上都成立，也优于平移安慰剂，但 2026-03 后失效（逐月 ≤ 2/9），不满足改默认规则。每月复查 post 段；不再重测 chg / short 侧变体。
 - CSV（不入库）：`output/research_usdt_lending_rate_regime_4h.csv`；脚本 `scratch/lend/run.py`。
+
+## 短线新族：市场广度冲刺（breadth thrust，Zweig 式）事件——篮子站上自身均线的比例短时间内由冷转热 → 等权做多 / 做空（1h 永续，2026-11-14 ~13:55 PST，研究，不改默认；否决，不实现）
+
+- 查重：广度此前只作为默认 4h 的入场闸门（2026-11-10 `research_market_breadth_dispersion_gate.csv`，静态水平）和按信号宽度调总敞口（`research_breadth_conditioned_gross_*`）测过；#13 看的是 24h 跌幅大小。广度在 K 小时内的「快速转变」作为独立事件交易没测过。
+- 公式：1h 收盘 i，B_i = 篮子里 `C > SMA_N(C)` 的币数比例（N 240 / 480 / 960 根 1h，即 10 / 20 / 40 天）。向上冲刺 = `B_i ≥ hi` 且 `min(B_{i−K..i}) ≤ lo`；向下崩塌 = `B_i ≤ lo` 且 `max(B_{i−K..i}) ≥ hi`。(lo, hi) ∈ {(0.25,0.75), (0.375,0.75), (0.25,0.875), (0.125,0.875)}，K 24 / 48 / 96，持有 H 24 / 48。四种方向：up_follow（冲刺后做多）、up_fade、down_follow（崩塌后做空）、down_fade。下一根开盘吃单、等权、持仓期不重复；压力费 15.1 bps × 2 + 官方资金费。基准：同期每 24h 无条件等权做多。安慰剂：事件 ±168h 平移；剔除前 72h 内有 #13 投降事件的冲刺。
+- 数据：OKX 官方 1h 永续默认 8 币（2022→，训练 → 2024-10-21，测试 → 2026-03-05，post 之后）、未调参 new8（自己的篮子算广度）、Gate 官方 1h 默认 8 币（2025-09→）。
+- 结果（288 组 × 3 个币池）：
+  - 四个方向里 OKX d8 + new8 训练 / 测试 / post 六段都为正的只有 1 组（up_follow N960 lo0.25 hi0.875 K48 H48：d8 +105 / +233 / +98 bps，事件 11 / 3 / 6，t ≤ 1.3，最差一笔 −5%）；六段都跑赢无条件基准的只有 up_follow 的 4 组，邻域不连续。fade / down 三个方向 0 / 72。
+  - 主格 up_follow N480 lo0.25 hi0.75 K48 H24：±168h 平移安慰剂与真实同量级；剔除 #13 相邻事件后 d8 post −79、Gate post −75 bps，new8 训练 / 测试 −26 / −53。
+- 结论：**否决，不实现、不进观察名单**。广度快速转变没有独立于 #13 的短线优势；广度冲刺 / 崩塌族视为已覆盖，不再重测。
+- CSV（不入库）：`output/research_breadth_thrust_event_1h.csv`；脚本 `scratch/bthrust/run.py`。
