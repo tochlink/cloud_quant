@@ -7174,3 +7174,16 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 安慰剂（后移 90 天）深历史明显更差（OKX d8 +11.8% vs 真实 +50.7%），但调参前段反而更好（+101% vs +86%），证据只算一半。
 - 结论：**弱观察，不实现、不改默认**。和上一轮 USDT 借贷利率闸门一样，都是「市场过热时不追多」这一类，在 2026-03 前有用、post 没机会触发或变差。「放量才开」与空头侧变体否决，不再重测。等将来出现新一轮放量狂热时，前向看 `long_block_hi S30 L360 t0.4` 是否触发、触发后默认多单表现。
 - CSV（不入库）：`output/research_market_participation_volume_regime_4h.csv`；脚本 `scratch/vpart/run.py`。
+
+## 短线 / 中短线新族：Gate × OKX 同币永续「跨所资金费差」carry（两腿市场中性，4h 执行，2026-11-14 ~14:30 PST，研究，不改默认；否决）
+
+- 查重：已测截面资金费 carry（不同币之间多空，日线）、资金费结算窗口、资金费极端事件、资金费成本闸门 / 倾斜 / 离场、跨所价差闸门、跨所择优成交；没测过「同一个币在两家所的资金费差」套利。
+- 新数据（官方）：OKX 公共接口 `GET /api/v5/public/market-data-history?module=3&instType=SWAP&instFamilyList=…&dateAggrType=monthly` 给出官方历史资金费月度文件（`static.okx.com/cdn/okex/traderecords/swaprates/monthly/YYYYMM/{币}-USDT-SWAP-fundingrates-YYYY-MM.zip`）。已下载 16 币（默认 8 + new8）2022-01 → 2026-10，并与 API 近 3 个月合并（BNB 2022-12 起）；与 API 重叠的 2064 条逐条完全一致。存为 `output/okx_funding_history_official_deep.csv`（不入库）。此前 OKX 回测在 2026-08 之前用 Gate 费率代替，以后可改用这份真实 OKX 历史。
+- 公式：每根 4h `[t, t+4h)` 内两所各自结算的资金费之和 `fG`、`fO`；`Δ = Σ_{过去 W 天}(fG − fO) / W`（日均费差，只用已结算数据）。`Δ > θ` → 空 Gate、多 OKX（收 Gate 付 OKX），`Δ < −θ` 反向；持有到 `pos·Δ < 0.5θ` 后下一根开盘平仓。每笔收益 = 资金费差 + 两腿价格差变化 − 4 腿手续费（吃单 5.1 / 压力 15.1 bps，maker 2 bps 对照）。W 1 / 3 / 7 天 × θ 0.02% / 0.05% / 0.1% 每天；安慰剂：随机方向、Δ 后移 30 天。
+- 数据：官方 4h 永续开盘价（Gate / OKX 两所交集）+ 两所官方资金费；默认 8 币与未调参 new8，训练 2022-02-15 → 2024-10-21，测试 → 2026-03-05，post 之后。
+- 结果（吃单实费，bps/笔，默认 8 训练 / 测试 · new8 训练 / 测试）：
+  - 费差确实有持续性（W7 θ0.05% 每笔收到资金费差 +41 / +58 · +33 / +65 bps，时移 30 天后降到 ±10 ~ 20），但大部分格子仍被 4 腿费用吃掉：W1 全部 −13 ~ −23；W3 θ0.05% −12 / 0 · −4 / +4。
+  - 最好的 W7 θ0.05%：−12 / +36 · +17 / +42，每家每年只有约 6–8 笔，折合每个币每年 −0.3% ~ +0.5%；压力费下 −52 / −4 · −23 / +2。maker 口径也只是每币每年 < 1%。
+  - 2026-03 后两所费差收敛，几乎没有触发（默认 8 币 W3 / W7 θ0.05% 为 0 笔）。
+- 结论：**否决，不实现**。费差信号真实，但幅度太小，扣掉 4 腿成本后经济上可以忽略，近期也不再出现。不再重测跨所资金费差 carry。副产品：OKX 官方深历史资金费已可用。
+- CSV（不入库）：`output/research_cross_venue_funding_spread_carry_4h.csv`；脚本 `scratch/xvfund/run.py`，下载 `scratch/okxfund/`。
