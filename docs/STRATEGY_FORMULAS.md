@@ -5475,3 +5475,11 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：#8 与 #9 的风险调整后增量基本只存在于默认 8 大币；换到未见币上 #8 和 #9 都比默认更差，#9 主要是放大了敞口（收益多、Sharpe 不变、回撤更深）。对冲对乘数从「强观察」降为「弱观察」，#8 的 `ls_parity_cap` 也应视为默认币池特定；两者都不改默认、不进影子子账本。策略页上 #8 / #9 的整段数字应按本检验和 18:05 扰动打折。
 - CSV：`output/research_hedge_pair_out_of_universe.csv`、`output/research_hedge_pair_out_of_universe_summary.csv`（脚本 scratch/hpoou/hpoou.py）。
 - 下一族：结构不同的方向（出场 / 执行层未覆盖的想法）；不再重测对冲对乘数或 `ls_parity_cap` 的参数、相位、扰动或币池。
+
+### 2026-11-13 17:58 PST — 整段回测因果性：真实数据截断对拍 + 全可选参数回归测试（回测正确性，不改默认）
+
+- 查重：已有单元测试只覆盖默认参数（`test_backtest_no_lookahead`）和个别可选参数（分批入场、SAR、Choppiness、Elder 等各自的无前视测试）；没有在官方数据上检查「所有可选参数同时打开」时整段回测是否只用已收盘数据。
+- 方法：官方 4h 8 币（Gate、OKX 各 4500 根）+ 官方资金费，默认 perp_both 10×。先跑全量，再把所有 K 线和资金费截断到 T（全样本的 55% / 80% / 95% 处，即 2025-12-22、2026-06-22、2026-10-08 UTC），逐根比较 T 之前的权益。变体三种：#1 默认；#9；「全开」= `ls_parity_cap` 3 + 对冲对 W180 c0.5 h1.5 + `staged_entry_f1` 0.5 + `tp_r` 2 / `tp_frac` 0.5 + `sar_hold_bars` 6 + `chop_n` 30 + Elder 13 / 1.0。
+- 结果：2 所 × 3 变体 × 3 个截断点 = 18 组，每组比较 2391–4131 根，T 之前权益最大绝对差全部为 **0.0**（逐位一致）。「全开」变体交易数 283 / 284 笔（默认 204 笔），说明可选逻辑确实生效。回测没有前视。
+- 回归测试：新增 `tests/test_causality_all_options.py`。用测试专用确定性序列，分「默认」和「全开」两组，篡改第 k 根之后的 OHLC，断言 k 之前的权益与已平仓交易完全一致。全量测试 388 通过。
+- CSV：`output/research_backtest_causality_truncation.csv`（脚本 scratch/la/la.py）。不改代码逻辑、不改默认。
