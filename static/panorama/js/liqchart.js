@@ -7,13 +7,17 @@ import { fitCanvas, C, hexA } from './charts.js';
 import * as F from './fmt.js';
 import { t } from './i18n.js';
 
-const FONT = '10px "JetBrains Mono", Menlo, Consolas, monospace';
+const FONT = '11px "JetBrains Mono", Menlo, Consolas, monospace';
+const MIN_SPAN = 5 * 60000;           // never zoom the time axis in below 5 minutes
+const TICK_STEPS = [1, 2, 5, 10, 15, 30];
+const DECADES = { 1: '$10', 2: '$100', 3: '$1K', 4: '$10K', 5: '$100K', 6: '$1M', 7: '$10M', 8: '$100M' };
 
 export function createLiqChart(root, { onPick, getNow, getSel }) {
   const cv = root.querySelector('canvas');
   const tip = root.querySelector('.lq-tip');
   const ctl = root.querySelector('.lq-ctl');
   const st = { side: 'all', min: 0, range: 60 };
+  const view = { span: 60 * 60000 };
   let points = [], buckets = [], geom = null, mouse = null, highlight = null, hoverPt = null, lastDraw = 0, data = [];
 
   ctl.addEventListener('click', (e) => {
@@ -36,7 +40,7 @@ export function createLiqChart(root, { onPick, getNow, getSel }) {
 
   // merge raw liquidations into bubbles
   function cluster(liqs, now) {
-    const t0 = now - st.range * 60000, win = st.range > 30 ? 30000 : 10000, map = new Map();
+    const t0 = now - st.range * 60000, win = view.span > 20 * 60000 ? 30000 : view.span > 8 * 60000 ? 15000 : 5000, map = new Map();
     for (const q of liqs) {
       if (q.ts < t0) break;
       if (st.side !== 'all' && q.side !== st.side) continue;
@@ -63,37 +67,61 @@ export function createLiqChart(root, { onPick, getNow, getSel }) {
     lastDraw = nowPerf;
     const now = getNow(), sel = getSel();
     const { ctx, w, h } = fitCanvas(cv);
-    const padL = 46, padR = 10, padT = 10, stripH = 34, axisH = 14;
+    const padL = 52, padR = 12, padT = 12, stripH = Math.max(34, Math.min(80, h * 0.12)), axisH = 16;
     const plotH = h - padT - stripH - axisH - 8, plotW = w - padL - padR;
     if (plotW < 60 || plotH < 40) return;
-    const span = st.range * 60000, t0 = now - span;
+    // QTW: the axes follow the data. With a fixed 1H axis a page opened a few minutes
+    // ago (or a REST seed that only reaches 20 min back) squeezed every bubble into one
+    // narrow column at the right edge. Span = oldest liquidation in range → now (≥ 5 min,
+    // ≤ the selected range); value axis = the decades the visible sizes actually cover.
+    const maxSpan = st.range * 60000;
+    let oldest = now;
+    for (const q of data) {
+      if (q.ts < now - maxSpan) break;
+      if (st.side !== 'all' && q.side !== st.side) continue;
+      oldest = Math.min(oldest, q.ts);
+    }
+    const span = Math.min(maxSpan, Math.max(MIN_SPAN, (now - oldest) * 1.06));
+    view.span = span;
+    // bubbles are merged clusters, so the value axis is fitted to the cluster totals
+    const cl = cluster(data, now);
+    let vmin = Infinity, vmax = 0;
+    for (const c of cl) { vmin = Math.min(vmin, c.notional); vmax = Math.max(vmax, c.notional); }
+    const t0 = now - span;
     const X = (ts) => padL + ((ts - t0) / span) * plotW;
-    const yLo = 1, yHi = 7;
+    let yLo = vmax ? Math.floor(Math.log10(Math.max(10, vmin))) : 1;
+    let yHi = vmax ? Math.ceil(Math.log10(Math.max(10, vmax)) + 0.15) : 7;
+    if (yHi - yLo < 3) { yLo = Math.max(1, yHi - 3); yHi = yLo + 3; }
     const Y = (n) => padT + (1 - (Math.min(yHi, Math.max(yLo, Math.log10(Math.max(1, n)))) - yLo) / (yHi - yLo)) * plotH;
     geom = { padL, padT, plotW, plotH, stripH, t0, span };
     ctx.font = FONT; ctx.textBaseline = 'middle';
 
     // grid + axes
-    for (const [v, lab] of [[2, '$100'], [3, '$1K'], [4, '$10K'], [5, '$100K'], [6, '$1M']]) {
+    for (let v = yLo; v <= yHi; v++) {
+      const lab = DECADES[v] || '1e' + v;
       const y = padT + (1 - (v - yLo) / (yHi - yLo)) * plotH;
       ctx.strokeStyle = C.grid; ctx.setLineDash([2, 4]); ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke(); ctx.setLineDash([]);
       ctx.fillStyle = C.dim2; ctx.textAlign = 'right'; ctx.fillText(lab, padL - 6, y);
     }
-    const step = st.range > 30 ? 15 : 5;
+    const spanMin = span / 60000;
+    const step = TICK_STEPS.find((s) => spanMin / s <= Math.max(4, Math.floor(plotW / 110))) || 30;
     ctx.textAlign = 'center';
-    for (let m = 0; m <= st.range; m += step) {
+    for (let m = 0; m <= spanMin + 1e-9; m += step) {
       const x = X(now - m * 60000);
       ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
       ctx.fillStyle = C.dim2; ctx.fillText(m ? `-${m}m` : t('fn.now'), Math.min(w - 18, Math.max(padL + 10, x)), h - axisH / 2);
     }
 
     // bottom strip: totals per bucket (shorts up, longs down)
-    const bmin = st.range > 30 ? 5 : 1, nb = Math.round(st.range / bmin), bw = plotW / nb;
-    buckets = Array.from({ length: nb }, (_, i) => ({ i, l: 0, s: 0, nl: 0, ns: 0, from: t0 + i * bmin * 60000, mins: bmin }));
+    const bmin = spanMin > 30 ? 5 : spanMin > 12 ? 2 : spanMin > 6 ? 1 : 0.5;
+    const nb = Math.max(1, Math.ceil(spanMin / bmin)), bw = plotW / (spanMin / bmin);
+    // buckets end at "now"; the oldest one may be partly left of the axis and is clipped
+    const tb = now - nb * bmin * 60000;
+    buckets = Array.from({ length: nb }, (_, i) => ({ i, l: 0, s: 0, nl: 0, ns: 0, from: tb + i * bmin * 60000, mins: bmin }));
     for (const q of data) {
       if (q.ts < t0) break;
       if (highlight && q.pair !== highlight) continue;
-      const b = buckets[Math.min(nb - 1, Math.floor((q.ts - t0) / (bmin * 60000)))];
+      const b = buckets[Math.max(0, Math.min(nb - 1, Math.floor((q.ts - tb) / (bmin * 60000))))];
       if (q.side === 'long') { b.l += q.notional; b.nl++; } else { b.s += q.notional; b.ns++; }
     }
     const bmax = Math.max(1, ...buckets.map((b) => Math.max(b.l, b.s)));
@@ -101,18 +129,23 @@ export function createLiqChart(root, { onPick, getNow, getSel }) {
     geom.mid = mid; geom.bw = bw;
     ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(padL, mid); ctx.lineTo(w - padR, mid); ctx.stroke();
     let hoverBucket = null;
-    if (mouse && mouse.y > padT + plotH + 4 && mouse.x >= padL) hoverBucket = buckets[Math.min(nb - 1, Math.floor((mouse.x - padL) / bw))];
+    const BX = (b) => X(b.from);
+    if (mouse && mouse.y > padT + plotH + 4 && mouse.x >= padL) {
+      const tAt = t0 + ((mouse.x - padL) / plotW) * span;
+      hoverBucket = buckets[Math.max(0, Math.min(nb - 1, Math.floor((tAt - tb) / (bmin * 60000))))];
+    }
     for (const b of buckets) {
-      const x = padL + b.i * bw + 1, su = (b.s / bmax) * (stripH / 2 - 1), lu = (b.l / bmax) * (stripH / 2 - 1);
+      const xr = BX(b) + 1, x = Math.max(padL, xr), su = (b.s / bmax) * (stripH / 2 - 1), lu = (b.l / bmax) * (stripH / 2 - 1);
       const a = hoverBucket && hoverBucket !== b ? 0.35 : 0.8;
-      ctx.fillStyle = hexA(C.green, a); ctx.fillRect(x, mid - su, Math.max(1, bw - 2), su);
-      ctx.fillStyle = hexA(C.red, a); ctx.fillRect(x, mid, Math.max(1, bw - 2), lu);
+      const bwx = Math.max(1, xr + bw - 2 - x);
+      ctx.fillStyle = hexA(C.green, a); ctx.fillRect(x, mid - su, bwx, su);
+      ctx.fillStyle = hexA(C.red, a); ctx.fillRect(x, mid, bwx, lu);
     }
     ctx.textAlign = 'right'; ctx.fillStyle = C.dim2; ctx.fillText(bmin + 'm', padL - 6, mid);
 
     // bubbles
-    const cl = cluster(data, now);
-    points = cl.map((c) => ({ ...c, x: X(c.ts), y: Y(c.notional), r: Math.min(22, 2 + Math.sqrt(c.notional) / 28) }));
+    const rMax = Math.max(12, Math.min(34, plotH / 14));
+    points = cl.map((c) => ({ ...c, x: X(Math.max(t0, c.ts)), y: Y(c.notional), r0: Math.min(rMax, 2 + (Math.sqrt(c.notional) / 28) * (rMax / 22)) })).map((p) => ({ ...p, r: p.r0, y: Math.max(padT + Math.min(p.r0, plotH / 2), p.y) }));
     hoverPt = null;
     if (mouse && mouse.y <= padT + plotH + 4) {
       let bd = Infinity;
@@ -125,7 +158,7 @@ export function createLiqChart(root, { onPick, getNow, getSel }) {
     for (const p of points) {
       const col = p.side === 'long' ? C.red : C.green;
       const dim = focus && p.pair !== focus;
-      const age = (now - p.ts) / 1000;
+      const age = Math.max(0, (now - p.ts) / 1000);
       ctx.globalAlpha = dim ? 0.1 : 0.5 + 0.4 * Math.max(0, 1 - (now - p.ts) / span);
       ctx.fillStyle = col;
       if (!dim && p.notional >= 1e5) { ctx.shadowColor = col; ctx.shadowBlur = 12; } else ctx.shadowBlur = 0;

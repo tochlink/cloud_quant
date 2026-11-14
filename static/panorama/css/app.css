@@ -611,3 +611,81 @@ canvas { display: block; }
 /* QTW: the vol-cone cards' sub-lines (e.g. 多 $4.52万 / 空 $36.04万) were cut off at 1366 and 1536 */
 .a-fn .card small { white-space: normal; overflow-wrap: anywhere; line-height: 1.25; }
 .lq-item .px { font-size: 10.5px; letter-spacing: -.02em; }
+
+/* ---------- QTW layout v2 (paged desktop) ----------
+   kean: several tabs looked broken on big screens. Every page now fills its
+   viewport with flex/grid (min-height: 0) and the canvases take the space left
+   over, so nothing overflows and there are no large dead areas at
+   1366×768 · 1536×864 · 1920×1080 · 2560×1440. Lists render as many rows as fit. */
+@media (min-width: 1181px) {
+  /* page 1 · overview + book ladder: sparkline is a horizontal strip under the ladder
+     (it used to be a 92px-wide, full-height column that read as a giant vertical spike) */
+  .a-ov .pb.ov { flex: none; }
+  .a-ov .cv-dist { height: clamp(64px, 11vh, 150px); }
+  .a-ov .ladder-wrap { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) clamp(34px, 7vh, 110px); gap: 6px; min-height: 0; }
+  .a-ov .ladder { min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
+  .a-ov .ladder .lr { line-height: 15px; }
+  .a-ov .ld-spark { min-height: 0; height: 100%; border-top: 1px solid var(--line); }
+  /* page 1 · spot: the candle chart takes the free height, depth table stays compact below */
+  .a-sp .pb.sp { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+  .a-sp .cv-candles { flex: 1 1 0; height: auto; min-height: 120px; }
+  .a-sp .sp-legend, .a-sp .sp-top { flex: none; }
+  .a-sp .depth { flex: none; }
+  .a-sp .drow { line-height: 15px; }
+  /* page 1 · basis chart gets a real share of the column, wire inspector the rest */
+  .a-bs .pb.bs { flex: 0 0 36%; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  .a-bs .cv-basis { height: 100%; min-height: 0; }
+  .a-bs .bs-stats { justify-content: space-between; min-height: 0; overflow: hidden; }
+  .a-bs .pb.wi { min-height: 0; }
+  .a-bs .wire { font-size: 10.5px; line-height: 16px; }
+  .a-bs .wire .wr { grid-template-columns: 84px 116px minmax(0, 1fr); }
+
+  /* page 2 · input cards scale with the page instead of floating far apart */
+  .a-sh .inputs { width: clamp(170px, 12vw, 300px); justify-content: flex-start; gap: 8px; }
+  .a-sh .icard { flex: 1 1 0; min-height: 0; max-height: 170px; display: flex; flex-direction: column; }
+  .a-sh .icard canvas { flex: 1 1 0; height: auto; min-height: 20px; }
+  .a-sh .fills { width: clamp(214px, 13vw, 320px); }
+  .a-sh .shell-foot { padding: 0 calc(clamp(214px, 13vw, 320px) + 24px) 0 calc(clamp(170px, 12vw, 300px) + 24px); }
+
+  /* page 3 · liquidations: stat cards in one row on top, timeline left, ranking + live feed right */
+  .a-lq .lq-grid {
+    grid-template-columns: minmax(0, 1fr) clamp(300px, 24vw, 520px);
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas: "cards cards" "chart top" "chart feed";
+  }
+  .a-lq .lq-cards { grid-area: cards; grid-template-rows: none; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .a-lq .lq-chart { grid-area: chart; min-height: 0; }
+  .a-lq .lq-cv { min-height: 0; }
+  .a-lq .lq-side-top { grid-area: top; min-height: 0; }
+  .a-lq .lq-side-feed { grid-area: feed; min-height: 0; display: flex; flex-direction: column; }
+  .a-lq .lq-feed { flex: 1 1 0; min-height: 0; overflow: hidden; }
+  .a-lq .lq-cards .card { justify-content: center; }
+
+  /* page 4 · perp rankings: lists fill the column height (row count follows the height) */
+  .a-dv .dv { grid-template-rows: minmax(0, 1fr); }
+  .a-dv .dv-col { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .a-dv .dv-list { flex: 1 1 0; min-height: 0; overflow: hidden; margin-bottom: 4px; }
+  .a-dv .dv-row { line-height: 15px; }
+
+  /* page 5 · tape on top, 60s buy/sell flow as a full-width strip under it
+     (it used to be squeezed into a 150px column at the table's right edge) */
+  .a-tp .tp { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) clamp(96px, 24%, 230px); gap: 6px; }
+  .a-tp .flow { min-height: 0; border-top: 1px solid var(--line); padding-top: 4px; }
+  .a-tp .flow-h { display: flex; justify-content: space-between; }
+  .a-tp .cv-flow { min-height: 0; flex: 1 1 0; }
+  .a-tp .tape td { line-height: 15px; }
+  /* tape columns do not need 2/3 of a wide screen; give the vol cone half the page */
+  main.grid[data-page="5"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); grid-template-areas: "tp fn"; }
+  .a-fn .liq-list { background: rgba(5, 10, 22, .55); padding: 2px 6px; border: 1px solid var(--line); }
+}
+/* big screens: slightly larger text in the dense lists so 2560×1440 stays readable */
+@media (min-width: 2200px) and (min-height: 1200px) {
+  .ladder, .depth, .tape, .dv-row, .lq-feed, .liq-list { font-size: 13px; }
+  .a-ov .ladder .lr, .a-sp .drow, .a-tp .tape td, .a-dv .dv-row { line-height: 18px; }
+  .a-bs .wire { font-size: 12px; line-height: 18px; }
+  .a-bs .wire .wr { grid-template-columns: 96px 132px minmax(0, 1fr); }
+  .card b { font-size: 18px; } .card label, .card small, .dv-h { font-size: 11px; }
+  .icard .ic-t, .icard .ic-v { font-size: 14px; } .icard .ic-s { font-size: 11px; }
+  .wcard .wc-h, .wcard .wc-s { font-size: 12px; } .wcard .wc-h em { font-size: 14px; }
+  .ph { font-size: 12px; min-height: 30px; }
+}

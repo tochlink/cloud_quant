@@ -2,9 +2,9 @@ import { t, setLang, getLang, onLang, applyDom } from './i18n.js';
 import { rest, GateWS, SPOT_WS, PERP_WS } from './gate.js';
 import * as F from './fmt.js';
 import { C, drawCandles, drawSpark, drawBars, drawBasis, drawFlow, drawDist } from './charts.js';
-import { createLiqChart } from './liqchart.js';
+import { createLiqChart } from './liqchart.js?v=20261114.2';
 import { createShell } from './shell3d.js';
-import { createFunnel } from './funnel.js';
+import { createFunnel } from './funnel.js?v=20261114.2';
 import { createPulse } from './pulse3d.js';
 import { createHeatmap } from './heatmap.js';
 import { createPicker } from './picker.js';
@@ -131,9 +131,9 @@ async function pollFutAll() {
     const recs = [...S.futAll.values()].filter((r) => Number.isFinite(r.oi) && Number.isFinite(r.funding));
     const liquid = recs.filter((r) => r.oi >= 1_000_000);
     S.dv = {
-      oiTop: liquid.slice().sort((a, b) => b.oi - a.oi).slice(0, 12),
-      fHi: liquid.slice().sort((a, b) => b.funding - a.funding).slice(0, 6),
-      fLo: liquid.slice().sort((a, b) => a.funding - b.funding).slice(0, 6),
+      oiTop: liquid.slice().sort((a, b) => b.oi - a.oi).slice(0, 60),
+      fHi: liquid.slice().sort((a, b) => b.funding - a.funding).slice(0, 30),
+      fLo: liquid.slice().sort((a, b) => a.funding - b.funding).slice(0, 30),
       pos: recs.filter((r) => r.funding > 0).length,
       neg: recs.filter((r) => r.funding < 0).length,
     };
@@ -502,7 +502,7 @@ function onTrade(mkt, pair, side, price, amount, ts) {
   S.rateCur.set(pair, (S.rateCur.get(pair) || 0) + 1);
   if (pair === S.sel) {
     S.tape.unshift({ ts, mkt, side, price, amount, notional });
-    if (S.tape.length > 40) S.tape.length = 40;
+    if (S.tape.length > 80) S.tape.length = 80;
     S.flow.push({ ts: Date.now(), side, notional });
     S.ver.tape++;
   }
@@ -622,6 +622,16 @@ function perSecond() {
 
 // ---------------------------------------------------------------- rendering
 // replace innerHTML only when it actually changed (keeps hover state stable)
+// how many list rows of height rowPx fit inside element el (QTW: lists fill their panel)
+function rowsFit(el, rowPx, min, max) {
+  const h = el ? el.clientHeight : 0;
+  return Math.max(min, Math.min(max, Math.floor((h + 0.5) / rowPx)));
+}
+function lineH(el, fallback) {
+  const v = el ? parseFloat(getComputedStyle(el).lineHeight) : NaN;
+  return Number.isFinite(v) && v > 0 ? v : fallback;
+}
+
 function setHtml(id, html) {
   const el = $(id);
   if (el && el._html !== html) { el._html = html; el.innerHTML = html; }
@@ -743,8 +753,10 @@ function renderBook() {
   const ba = bk.asks[0][0], bb = bk.bids[0][0], spread = ba - bb, mid = (ba + bb) / 2;
   setText('ld-spread', t('ld.spread', { v: F.price(spread, F.priceDigits(mid)) }));
   // ladder: as many levels per side as fit the panel
-  const lw = document.querySelector('.ladder-wrap');
-  const lv = Math.max(3, Math.min(10, Math.floor((lw.clientHeight - 16 - 24) / 2 / 16)));
+  const ld = $('ladder'), lrow = ld.querySelector('.lr');
+  const rh = lrow ? lrow.getBoundingClientRect().height : 17;
+  const midH = ld.querySelector('.mid')?.getBoundingClientRect().height || 26;
+  const lv = Math.max(3, Math.min(20, Math.floor((ld.clientHeight - midH - 1) / 2 / Math.max(12, rh))));
   const a5 = bk.asks.slice(0, lv).reverse(), b5 = bk.bids.slice(0, lv);
   const m5 = Math.max(...a5.map((x) => x[1]), ...b5.map((x) => x[1]));
   const row = (x, c, m) => `<div class="lr ${c}" data-p="${x[0]}"><i style="width:${((x[1] / m) * 100).toFixed(1)}%"></i><span>${F.price(x[0])}</span><span>${F.amt(x[1])}</span></div>`;
@@ -813,9 +825,9 @@ function renderBasis() {
 }
 
 function renderWire() {
-  const rowsFit = Math.max(6, Math.floor($('wire').clientHeight / 15));
+  const wireEl = $('wire'), nWire = rowsFit(wireEl, lineH(wireEl, 15), 6, 80);
   setText('wi-rate', S.wirePaused ? t('wi.paused') : S.fps + ' msg/s');
-  if (!S.wirePaused) $('wire').innerHTML = S.wire.slice(0, rowsFit).map((e) =>
+  if (!S.wirePaused) $('wire').innerHTML = S.wire.slice(0, nWire).map((e) =>
     `<div class="wr${e.hl ? ' hl' : ''}"><span class="ts">${F.hmsms(e.ts)}</span><span class="${e.cls}">${F.esc(e.ch)}</span><span>${F.esc(e.txt)}</span></div>`).join('');
   setText('wi-total', F.num(S.frames));
   setText('wi-bytes', F.bytes((spotWS?.bytes || 0) + (futWS?.bytes || 0)));
@@ -857,10 +869,16 @@ function renderWhales() {
 
 let tapeVer = -1;
 function renderTape() {
-  if (tapeVer !== S.ver.tape) {
-    tapeVer = S.ver.tape;
+  const tsc = document.querySelector('.tape-scroll'), tRow = $('tape-body').firstElementChild;
+  const theadH = document.querySelector('.tape thead')?.getBoundingClientRect().height || 18;
+  const nTape = matchMedia('(min-width: 1181px)').matches
+    ? Math.max(6, Math.min(80, Math.floor((tsc.clientHeight - theadH + 0.5) / ((tRow && tRow.getBoundingClientRect().height) || 18))))
+    : 30;
+  const tapeKey = S.ver.tape + '|' + nTape;
+  if (tapeVer !== tapeKey) {
+    tapeVer = tapeKey;
     const thS = whaleTh('spot', S.sel).th, thP = whaleTh('perp', S.sel).th;
-    $('tape-body').innerHTML = S.tape.slice(0, 30).map((x) => {
+    $('tape-body').innerHTML = S.tape.slice(0, nTape).map((x) => {
       const th = x.mkt === 'spot' ? thS : thP;
       const sc = x.side === 'buy' ? 'up' : 'dn';
       return `<tr class="${x.notional >= th ? 'big' : ''}"><td>${F.hms(x.ts)}</td><td class="m-${x.mkt}">${F.esc(t(x.mkt))}</td>` +
@@ -968,10 +986,13 @@ function renderLiq() {
       `<i class="bar-r" style="width:${((b.l / mx) * 100).toFixed(1)}%"></i><i class="bar-g" style="left:${((b.l / mx) * 100).toFixed(1)}%;width:${((b.s / mx) * 100).toFixed(1)}%"></i>` +
       `<span class="dv-b">${F.esc(F.base(b.pair))}</span><span>${F.usd(b.l + b.s)}</span><span class="${b.l >= b.s ? 'dn' : 'up'}">${((b.l / (b.l + b.s)) * 100).toFixed(0)}%</span></div>`).join(''));
   }
-  if (lqVer === S.ver.liqs) return;
-  lqVer = S.ver.liqs;
+  const feed = $('lq-feed'), fRow = feed.querySelector('.lq-item');
+  const nFeed = matchMedia('(min-width: 1181px)').matches ? rowsFit(feed, (fRow && fRow.getBoundingClientRect().height) || 22, 4, 60) : 10;
+  const lqKey = S.ver.liqs + '|' + nFeed;
+  if (lqVer === lqKey) return;
+  lqVer = lqKey;
   const fresh = Date.now() + S.offset - 5000;
-  $('lq-feed').innerHTML = S.liqAll.slice(0, 10).map((q) => `<div class="lq-item${q.ts > fresh ? ' new' : ''}" data-pair="${F.esc(q.pair)}">` +
+  $('lq-feed').innerHTML = S.liqAll.slice(0, nFeed).map((q) => `<div class="lq-item${q.ts > fresh ? ' new' : ''}" data-pair="${F.esc(q.pair)}">` +
     `<span class="ts">${F.hms(q.ts)}</span><b>${F.esc(F.base(q.pair))}</b>` +
     `<span class="lq-tag ${q.side === 'long' ? 'dn' : 'up'}">${F.esc(t(q.side === 'long' ? 'fn.liq.long' : 'fn.liq.short'))}</span>` +
     `<em>${F.usd(q.notional)}</em><span class="px">@ ${F.price(q.px)}</span></div>`).join('') ||
@@ -987,19 +1008,25 @@ function renderDeriv() {
   setText('dv-vol-t', F.usd(fm.vol));
   setText('dv-pos', String(dv.pos));
   setText('dv-neg', String(dv.neg));
-  if (dvVer === S.ver.dv) return;
-  dvVer = S.ver.dv;
+  // rows per list follow the panel height (12 / 6 / 6 when the lists are not height-bound)
+  const paged = matchMedia('(min-width: 1181px)').matches;
+  const rowPx = paged ? ($('dv-oi').querySelector('.dv-row')?.getBoundingClientRect().height || 20) : 0;
+  const nOi = paged ? rowsFit($('dv-oi'), rowPx, 5, 60) : 12;
+  const nF = paged ? rowsFit($('dv-fhi'), rowPx, 3, 30) : 6;
+  const key = S.ver.dv + '|' + nOi + '|' + nF;
+  if (dvVer === key) return;
+  dvVer = key;
   const maxOi = dv.oiTop[0]?.oi || 1;
   const row = (r, cols, w, cl) => `<div class="dv-row${r.contract === S.sel ? ' sel' : ''}" data-pair="${F.esc(r.contract)}">` +
     `<i class="${cl}" style="width:${(w * 100).toFixed(1)}%"></i><span class="dv-b">${F.esc(F.base(r.contract))}</span>${cols}</div>`;
-  $('dv-oi').innerHTML = dv.oiTop.map((r, i) => row(r,
+  $('dv-oi').innerHTML = dv.oiTop.slice(0, nOi).map((r, i) => row(r,
     `<span>${F.usd(r.oi)}</span><span class="${F.cls(r.chg)}">${F.pct(r.chg)}</span>`, r.oi / maxOi, 'bar-c')).join('');
   const apr = (r) => r.funding * (365 * 86400 / (S.fundInterval.get(r.contract) || 28800)) * 100;
-  const maxF = Math.max(1e-9, ...dv.fHi.concat(dv.fLo).map((r) => Math.abs(r.funding)));
+  const maxF = Math.max(1e-9, ...dv.fHi.slice(0, nF).concat(dv.fLo.slice(0, nF)).map((r) => Math.abs(r.funding)));
   const frow = (r) => row(r, `<span class="${F.cls(r.funding)}">${(r.funding * 100).toFixed(4)}%</span><span class="${F.cls(r.funding)}">${apr(r).toFixed(1)}%</span>`,
     Math.abs(r.funding) / maxF, r.funding >= 0 ? 'bar-g' : 'bar-r');
-  $('dv-fhi').innerHTML = dv.fHi.map(frow).join('');
-  $('dv-flo').innerHTML = dv.fLo.map(frow).join('');
+  $('dv-fhi').innerHTML = dv.fHi.slice(0, nF).map(frow).join('');
+  $('dv-flo').innerHTML = dv.fLo.slice(0, nF).map(frow).join('');
 }
 
 function renderHeatHeader() {
@@ -1085,6 +1112,7 @@ function loop(now) {
       last: S.spotAll.get(S.sel)?.last,
       sigma1m: sigma1m(),
       labels: { now: t('fn.now'), wait: t('fn.wait') },
+      reserveTop: ($('liq-list').offsetHeight || 0) + 12,
     });
     const cvn = $('cv-funnel');
     if (cvn._hover) {
