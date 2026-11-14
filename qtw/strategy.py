@@ -168,6 +168,56 @@ def hedge_pair_mask(sig: dict, close: dict, window: int, corr_min: float) -> dic
     return out
 
 
+def es_tail_fatness(close, window: int, alpha: float = 0.05) -> tuple[np.ndarray, np.ndarray]:
+    """ES NORM 尾部厚度（name_es_w 的组成部分）。r_t = Δln(close)；第 t 根用最近 window 根 r（含第 t 根，有限值 ≥ window//2）：
+    σ = 样本标准差（ddof 0），e = φ(Φ⁻¹(α)) / α（正态下 ES/σ），
+    F_L = −mean(r ≤ q_α) / (σ·e)（左尾 / 多头），F_S = mean(r ≥ q_{1−α}) / (σ·e)（右尾 / 空头）。正态 ≈ 1，尾越厚越大。历史不足 → NaN。"""
+    from statistics import NormalDist
+    lc = np.log(np.asarray(close, dtype=float))
+    T, W, a = len(lc), int(window or 0), float(alpha)
+    FL, FS = np.full(T, np.nan), np.full(T, np.nan)
+    if W < 2 or T == 0:
+        return FL, FS
+    r = np.diff(lc, prepend=np.nan)
+    en = NormalDist().pdf(NormalDist().inv_cdf(a)) / a
+    for i in range(W, T):
+        x = r[i - W + 1:i + 1]
+        x = x[np.isfinite(x)]
+        if len(x) < W // 2:
+            continue
+        sd = x.std()
+        if sd <= 0:
+            continue
+        ql, qh = np.quantile(x, a), np.quantile(x, 1 - a)
+        FL[i] = (-x[x <= ql].mean()) / (sd * en)
+        FS[i] = (x[x >= qh].mean()) / (sd * en)
+    return FL, FS
+
+
+def es_tail_mult(sig: dict, close: dict, window: int, k: float, alpha: float = 0.05, lo: float = 0.5, hi: float = 1.5) -> dict:
+    """可选 ES NORM 尾部厚度单币乘子（name_es_w，0 = 关闭）。第 t 根收盘合成信号 sig[s]：多头取 F_L、空头取 F_S（es_tail_fatness，
+    用 close[s] 即该市场收盘），m_s = clip(F^−k, lo, hi)（F 非有限或 ≤ 0 → 1；无信号 → 1），再在有信号的币之间归一：
+    M_s = m_s / mean_{sig≠0}(m)。调用方第 t+1 根把 M_s 乘到单币波动乘数上（与 name_vol_mult 同口径，在多空平价 / 对冲对之前；
+    总敞口上限不变）。研究：docs/STRATEGY_FORMULAS.md「ES NORM 尾部厚度定仓」（scratch/dsz）。"""
+    syms = list(sig)
+    n = len(np.asarray(sig[syms[0]])) if syms else 0
+    if not syms or int(window or 0) < 2:
+        return {s: np.ones(n) for s in syms}
+    MS, A = {}, {}
+    for s in syms:
+        g = np.sign(np.asarray(sig[s], dtype=float))
+        FL, FS = es_tail_fatness(close[s], window, alpha)
+        F = np.where(g > 0, FL, np.where(g < 0, FS, np.nan))
+        ok = np.isfinite(F) & (F > 0)
+        MS[s] = np.where(ok, np.clip(np.where(ok, F, 1.0) ** (-float(k)), lo, hi), 1.0)
+        A[s] = g != 0
+    M = np.vstack([MS[s] for s in syms])
+    act = np.vstack([A[s] for s in syms])
+    cnt = act.sum(0)
+    den = np.where(cnt > 0, (M * act).sum(0) / np.maximum(cnt, 1), 1.0)
+    return {s: MS[s] / den for s in syms}
+
+
 def name_vol_mult(close, target: float, lookback: int, bars_per_year: float = 2190) -> np.ndarray:
     """单币波动率封顶（可选，name_vol_target = 0 关闭）：σ_t = 最近 lookback 根对数收益的样本标准差 × √bars_per_year
     （含第 t 根收盘），返回逐根 m_t = min(1, target / σ_t)；调用方在第 t+1 根用 m_t 乘单笔风险上限与单币权重上限（只缩不放）。

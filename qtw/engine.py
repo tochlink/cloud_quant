@@ -21,7 +21,7 @@ from .paths import OUTPUT_DIR
 from .backtest import short_breaker
 from .risk import cap_at_entry, scale_to_room, size
 from . import leverage as LV
-from .strategy import bar_close_equity, btc_regime_blocks_long, combine, hedge_pair_mask, indicators, last_cross, ls_parity_scales, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
+from .strategy import bar_close_equity, btc_regime_blocks_long, combine, es_tail_mult, hedge_pair_mask, indicators, last_cross, ls_parity_scales, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
 from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
@@ -394,6 +394,36 @@ def apply_ls_parity(rows: list[dict], cap: float, eq: float, rk: dict, atr_mult:
                       "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
 
 
+def apply_es_tail(rows: list[dict], closes: dict, window: int, k: float, alpha: float, eq: float, rk: dict, atr_mult: float) -> None:
+    """可选 ES NORM 尾部厚度单币乘子（strategy.name_es_w，0 = 关闭），与回测同口径（qtw.strategy.es_tail_mult）：交易池内有信号的币，
+    按各自交易市场（row["market"]）在该市场所有有信号币之间归一，row["name_vol_mult"] × M_s（在 apply_ls_parity 之前）。
+    closes：{"spot"/"perp": {symbol: 以开盘时间为索引的收盘价 Series}}；对齐后历史不足 window+1 根时该市场不改。未持仓行的建议仓位按新乘数重算。"""
+    if not window or window < 2:
+        return
+    live = [r for r in rows if r.get("in_universe") and not r.get("error") and r.get("signal") in (1, -1) and r.get("name_vol_mult") is not None]
+    for mk in ("spot", "perp"):
+        mine = [r for r in live if r.get("market") == mk]
+        cm = closes.get(mk) or {}
+        if not mine or any(r["symbol"] not in cm for r in live):
+            continue
+        J = pd.DataFrame({r["symbol"]: cm[r["symbol"]] for r in live}).dropna()
+        if len(J) < window + 1:
+            continue
+        J = J.iloc[-(window + 1):]
+        n = len(J)
+        M = es_tail_mult({r["symbol"]: np.full(n, int(r["signal"])) for r in live}, {s: J[s].to_numpy() for s in J}, window, k, alpha)
+        for r in mine:
+            f = float(M[r["symbol"]][-1])
+            r["es_tail_mult"] = f
+            r["name_vol_mult_pre_es"] = r["name_vol_mult"]
+            r["name_vol_mult"] = r["name_vol_mult"] * f
+            if r.get("stop_source") == "suggested" and r.get("ref_price"):
+                z = size(side=r["side"], equity=eq, price=r["ref_price"], atr=r["atr"], max_risk=rk["max_risk_per_trade"] * r["name_vol_mult"],
+                         max_weight=rk["max_weight_per_name"] * r["name_vol_mult"], atr_mult=atr_mult)
+                r.update({"target_notional_usdt": z.notional, "target_qty": z.qty, "target_weight": z.weight,
+                          "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
+
+
 def apply_hedge_pair(rows: list[dict], perp_close: dict, window: int, corr_min: float, mult: float, eq: float, rk: dict,
                      atr_mult: float) -> None:
     """可选多空对冲对乘数（strategy.hedge_pair_w，0 = 关闭），与回测同口径（qtw.strategy.hedge_pair_mask）：交易池内有信号的币里，
@@ -443,7 +473,9 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         need = max(need, 400)  # 影子账本需要足够历史
     hp_w = int(st.get("hedge_pair_w", 0) or 0)
     if hp_w >= 2:
-        need = max(need, hp_w + 5)  # 对冲对乘数需要 W+1 根对齐的永续收盘
+        need = max(need, hp_w + 5)
+    if int(st.get("name_es_w", 0) or 0) >= 2:
+        need = max(need, int(st["name_es_w"]) + 5)  # ES 尾部厚度需要 W+1 根对齐收盘  # 对冲对乘数需要 W+1 根对齐的永续收盘
     bk = book(cfg)
     syms = listed_symbols(cfg, bk)
     frames, errs = mcache.many(venue, syms, st["interval"], need)
@@ -623,6 +655,10 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         row.update({"entry_timing": entry, "exit_timing": exit_, "state": state,
                     "position_side": pos.side if pos else "flat"})
         rows.append(row)
+    es_w = int(st.get("name_es_w", 0) or 0)
+    if es_w >= 2:
+        cl = {m: {s: df.set_index("open_time")["close"].astype(float) for s, df in (frames.get(m) or {}).items() if df is not None and len(df)} for m in ("spot", "perp")}
+        apply_es_tail(rows, cl, es_w, float(st.get("name_es_k", 2.0)), float(st.get("name_es_alpha", 0.05)), eq, rk, st["atr_stop_mult"])
     apply_ls_parity(rows, float(st.get("ls_parity_cap", 0) or 0), eq, rk, st["atr_stop_mult"])
     if hp_w >= 2:
         pc = {s: df.set_index("open_time")["close"].astype(float) for s, df in (frames.get("perp") or {}).items() if df is not None and len(df)}

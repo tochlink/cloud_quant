@@ -24,7 +24,7 @@ from . import leverage as LV
 from . import rebalance as RB
 from .risk import scale_to_room, size
 from .settings import taker_rate
-from .strategy import btc_regime_blocks_long, combine, hedge_pair_mask, ls_parity_scales, name_vol_mult, port_vol_factor, indicators, market_of, side_of, trend_ok, chop_ok, elder_short_ok
+from .strategy import btc_regime_blocks_long, combine, es_tail_mult, hedge_pair_mask, ls_parity_scales, name_vol_mult, port_vol_factor, indicators, market_of, side_of, trend_ok, chop_ok, elder_short_ok
 
 BARS_PER_YEAR = {"15m": 35040, "1h": 8760, "4h": 2190, "1d": 365}
 
@@ -171,6 +171,12 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     SIG = {s: combine(PX["spot"]["signal"][s], PX["perp"]["signal"][s]) for s in syms}
     if signals is not None:
         SIG = {s: np.asarray(v, dtype=int) for s, v in signals({m: {s: ind[m][s].loc[idx] for s in syms} for m in ind}, idx, syms).items()}
+    # 可选 ES NORM 尾部厚度单币乘子（name_es_w，0 = 关闭）：每个市场按该市场收盘与上一根合成信号算 M_s，乘到 NVM（第 i 根用 i−1）
+    es_w, es_k, es_a = int(st.get("name_es_w", 0) or 0), float(st.get("name_es_k", 2.0) or 2.0), float(st.get("name_es_alpha", 0.05) or 0.05)
+    if es_w >= 2:
+        for m_ in ("spot", "perp"):
+            ESM = es_tail_mult(SIG, {s: PX[m_]["close"][s] for s in syms}, es_w, es_k, es_a)
+            NVM[m_] = {s: np.asarray(NVM[m_][s], dtype=float) * ESM[s] for s in syms}
     # 可选 BTC 熊市体制过滤：BTC 现货收盘 < SMA_N（上一根）时不新开多单（不平已有仓）。BTCUSDT 不在数据里则不生效
     rg_n = int(st.get("btc_regime_ma", 0) or 0)
     RGL = np.zeros(len(idx), dtype=bool)
@@ -661,7 +667,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": round(FEE["spot"] * 10_000, 4), "spot_taker_bps": round(FEE["spot"] * 10_000, 4), "perp_taker_bps": round(FEE["perp"] * 10_000, 4), "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
-        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_band_down": float(st.get("rebalance_band_down", 0) or 0), "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l, "name_vol_target": nv_t, "name_vol_lookback": nv_l, "chop_n": int(st.get("chop_n", 0) or 0), "chop_max": float(st.get("chop_max", 50) or 50), "elder_short_gate_n": el_n, "elder_short_gate_x": el_x, "sar_hold_bars": sar_h, "sar_risk_mult": sar_k, "sar_atr_mult": sar_m, "ls_parity_cap": lsp_c, "hedge_pair_w": hp_w, "hedge_pair_c": hp_c, "hedge_pair_h": hp_h, "staged_entry_f1": xs_f1,
+        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_band_down": float(st.get("rebalance_band_down", 0) or 0), "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l, "name_vol_target": nv_t, "name_vol_lookback": nv_l, "chop_n": int(st.get("chop_n", 0) or 0), "chop_max": float(st.get("chop_max", 50) or 50), "elder_short_gate_n": el_n, "elder_short_gate_x": el_x, "sar_hold_bars": sar_h, "sar_risk_mult": sar_k, "sar_atr_mult": sar_m, "ls_parity_cap": lsp_c, "hedge_pair_w": hp_w, "hedge_pair_c": hp_c, "hedge_pair_h": hp_h, "name_es_w": es_w, "name_es_k": es_k, "name_es_alpha": es_a, "staged_entry_f1": xs_f1,
         "resizes": int(sum(t.resizes for t in closed + open_trades)), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
         "trade_mode": t_mode, "perp_leverage": L_req, "leverage_scales_exposure": XS != 1.0, "exposure_mult": XS,

@@ -77,6 +77,12 @@ DEFAULTS: dict[str, Any] = {
         "hedge_pair_w": 0,
         "hedge_pair_c": 0.5,
         "hedge_pair_h": 1.5,
+        # 2026-11-13：可选 ES NORM 尾部厚度单币乘子（默认关闭；回测与模拟盘 / 实盘定仓同口径，engine.apply_es_tail）。每币按其交易市场最近
+        # name_es_w 根 4h 对数收益的 ES/σ 相对正态的厚度 F（多看左尾、空看右尾），乘子 clip(F^−k, 0.5, 1.5) 后在有信号的币间归一。
+        # 研究（scratch/dsz）：深历史留出 3 组 + 未调参 8 币 + 20 组随机 16 选 8 都更好、安慰剂更差，但 2026-03 后约持平 → 强观察，非默认。0=关闭，建议 W120 k2
+        "name_es_w": 0,
+        "name_es_k": 2.0,
+        "name_es_alpha": 0.05,
         # 2026-11-13：可选跨根分批入场（默认关闭，仅回测生效）。新确认入场在第 i 根开盘只开计划名义的 f1，第 i+1 根开盘补满到计划名义，
         # 止损保持首笔；反手仓不分批。研究（scratch/xse_*.py、scratch/phc4–6）：多空永续 10× 下 f1 0.10–0.35 在 4 个 4h 相位 × 两所 × 真实 / 压力费率
         # 全部不输（f1 0.10 平均 +4.8 点，Sharpe +0.06），固定 f1 0.10 月度样本外 32/32 胜；但 2026-03 后逐月只约 5/8 更好，未改默认。
@@ -294,6 +300,15 @@ def validate(s: dict) -> dict:
     st["hedge_pair_h"] = float(st.get("hedge_pair_h", 1.5) if st.get("hedge_pair_h") is not None else 1.5)
     if not 0.25 <= st["hedge_pair_h"] <= 3:
         raise ValueError("对冲对乘数需在 0.25–3 之间")
+    st["name_es_w"] = int(st.get("name_es_w", 0) or 0)
+    if st["name_es_w"] and not 20 <= st["name_es_w"] <= 1000:
+        raise ValueError("ES 尾部厚度窗口需为 0（关闭）或 20–1000 根")
+    st["name_es_k"] = float(st.get("name_es_k", 2.0) if st.get("name_es_k") is not None else 2.0)
+    if not 0.25 <= st["name_es_k"] <= 5:
+        raise ValueError("ES 尾部厚度指数 k 需在 0.25–5 之间")
+    st["name_es_alpha"] = float(st.get("name_es_alpha", 0.05) if st.get("name_es_alpha") is not None else 0.05)
+    if not 0.01 <= st["name_es_alpha"] <= 0.25:
+        raise ValueError("ES 尾部分位 α 需在 0.01–0.25 之间")
     st["staged_entry_f1"] = float(st.get("staged_entry_f1", 0) or 0)
     if st["staged_entry_f1"] and not 0.05 <= st["staged_entry_f1"] <= 0.95:
         raise ValueError("分批入场首笔比例需为 0（关闭）或 0.05–0.95")
