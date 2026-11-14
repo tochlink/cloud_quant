@@ -5,16 +5,18 @@ import { fitCanvas, C, hexA } from './charts.js';
 import { price as fmtPrice, usd } from './fmt.js';
 
 const FONT = '10px "JetBrains Mono", Menlo, Consolas, monospace';
+const FZ = 0.42;   // half depth of the floor grid
 
 export function createFunnel(cv) {
   const sparks = [];
+  const fit = { key: '', S: 1, cx: 0, cy: 0 };
 
   function liq(p, notional, side) {
     sparks.push({ p, notional, side, t0: performance.now(), z: (Math.random() - 0.5) * 0.9 });
     if (sparks.length > 40) sparks.shift();
   }
 
-  /** data: { closes:[{t,c}] (oldest→newest, ≤60), last, sigma1m, labels:{now, wait} } */
+  /** data: { closes:[{t,c}] (oldest→newest, ≤60), last, sigma1m, labels:{now, wait}, reserveTop (px kept free for the overlay list) } */
   function draw(now, data) {
     const { ctx, w, h } = fitCanvas(cv);
     ctx.font = FONT;
@@ -24,14 +26,42 @@ export function createFunnel(cv) {
     }
     const yaw = -0.62 + 0.12 * Math.sin(now / 5200), pitch = 0.3 + 0.05 * Math.sin(now / 7300);
     const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
-    const S = Math.min(w * 0.34, h * 0.8), cx = w * 0.5, cy = h * 0.5, D = 4.2;
-    const P = (x, y, z) => {
+    const D = 4.2;
+    // unit projection (scale 1, origin 0); the scene is then fitted to the canvas
+    const U = (x, y, z, cyw_ = cyw, syw_ = syw, cp_ = cp, sp_ = sp) => {
       const X = x - 0.1;
-      const x1 = X * cyw - z * syw, z1 = X * syw + z * cyw;
-      const y1 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
+      const x1 = X * cyw_ - z * syw_, z1 = X * syw_ + z * cyw_;
+      const y1 = y * cp_ - z1 * sp_, z2 = y * sp_ + z1 * cp_;
       const f = D / (D + z2);
-      return [cx + x1 * S * f, cy - y1 * S * f * 0.9];
+      return [x1 * f, -y1 * f * 0.9];
     };
+    // QTW: fit the whole scene (floor grid, history, ±2σ cone, labels) into the canvas.
+    // The old fixed scale left most of a tall / wide panel empty and pushed the cone
+    // to one side. The box is computed at the mean camera angle so it does not breathe.
+    const top = Math.max(8, data.reserveTop || 0);
+    const fitKey = w + 'x' + h + 'x' + top;
+    if (fit.key !== fitKey) {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      // what is actually visible: history wall (z = 0), the forward cone (|r| ≤ 0.72),
+      // the floor under them, at both ends of the camera sway
+      const pts = [];
+      for (const x of [-1.25, -0.6, 0]) for (const y of [-0.95, 0.72]) pts.push([x, y, 0]);
+      for (const x of [0.3, 0.95]) for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; pts.push([x, Math.cos(a) * 0.72 * x, Math.sin(a) * 0.65 * x]); }
+      for (const x of [-1.3, 1.0]) for (const z of [-FZ, FZ]) pts.push([x, -0.95, z]);
+      for (const sw of [-1, 1]) {
+        const yw = -0.62 + 0.12 * sw, pt = 0.3 + 0.05 * sw;
+        for (const [px, py, pz] of pts) {
+          const [u, v] = U(px, py, pz, Math.cos(yw), Math.sin(yw), Math.cos(pt), Math.sin(pt));
+          x0 = Math.min(x0, u); x1 = Math.max(x1, u); y0 = Math.min(y0, v); y1 = Math.max(y1, v);
+        }
+      }
+      const padL = 14, padR = 96, padB = 22;   // right: ±1σ price labels, bottom: time axis
+      const sc = Math.max(10, Math.min((w - padL - padR) / (x1 - x0), (h - top - padB) / (y1 - y0)));
+      fit.key = fitKey; fit.S = sc;
+      fit.cx = padL + ((w - padL - padR) - sc * (x1 - x0)) / 2 - sc * x0;
+      fit.cy = top + ((h - top - padB) - sc * (y1 - y0)) / 2 - sc * y0;
+    }
+    const P = (x, y, z) => { const [u, v] = U(x, y, z); return [fit.cx + u * fit.S, fit.cy + v * fit.S]; };
     const last = data.last, sig = data.sigma1m;
     let dev = 0;
     for (const k of data.closes) dev = Math.max(dev, Math.abs(k.c / last - 1));
@@ -46,8 +76,8 @@ export function createFunnel(cv) {
     };
 
     // floor grid
-    for (let gx = -1.3; gx <= 1.01; gx += 0.1) line([P(gx, floor, -0.6), P(gx, floor, 0.6)], 'rgba(60,90,150,.16)', 1);
-    for (let gz = -0.6; gz <= 0.61; gz += 0.15) line([P(-1.3, floor, gz), P(1.0, floor, gz)], 'rgba(60,90,150,.16)', 1);
+    for (let gx = -1.3; gx <= 1.01; gx += 0.1) line([P(gx, floor, -FZ), P(gx, floor, FZ)], 'rgba(60,90,150,.2)', 1);
+    for (let gz = -FZ; gz <= FZ + 0.01; gz += FZ / 3) line([P(-1.3, floor, gz), P(1.0, floor, gz)], 'rgba(60,90,150,.2)', 1);
 
     // history with curtain
     const n = data.closes.length, nowT = data.closes[n - 1].t;
@@ -111,7 +141,7 @@ export function createFunnel(cv) {
     ctx.fillText('+1σ ' + fmtPrice(last * (1 + sig * Math.sqrt(30))), up[0] + 6, up[1] - 4);
     ctx.fillText('−1σ ' + fmtPrice(last * (1 - sig * Math.sqrt(30))), dn[0] + 6, dn[1] + 12);
     ctx.fillStyle = C.dim2;
-    const ax = (x, txt) => { const q = P(x, floor, 0.62); ctx.fillText(txt, q[0] - 12, q[1] + 12); };
+    const ax = (x, txt) => { const q = P(x, floor, FZ + 0.02); ctx.fillText(txt, q[0] - 12, q[1] + 12); };
     ax(XH(60), '-60m'); ax(XH(30), '-30m'); ax(0, data.labels.now); ax(XF(30), '+30m');
 
     // hover: nearest point of the price history
