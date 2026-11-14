@@ -6370,3 +6370,15 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（`output/research_official_candle_revision_check.csv`，差异明细 `_diffs.csv` 为空）：32 条序列共 31 920 根，OHLC 和成交量**全部逐位相同**，包括存档时刚收盘约 2.7 小时的最后一根。
 - 附带发现：Gate 永续 K 线有 `v`（张数）和 `sum`（计价金额）两个量字段，生产代码（`qtw/market/gate.py`）用的是 `v`，存档也一致；研究脚本若误用 `sum` 会得到完全不同的成交量（本次第一次比对就踩到）。成交量类研究需要注意口径。
 - 结论：官方已收盘 4h K 线是稳定的，回测和对拍可复现。不改代码。未覆盖的部分：收盘后几秒内取到的 K 线（引擎实际取数的时间点）是否会在随后几分钟里被补齐；这需要在线采样，不能用历史下载验证。
+
+### 2026-11-14 03:15 PST 引擎 vs 回测：未调参 new8 币池（BTC 不在币池内）的有持仓逐根对拍（执行 / 引擎验证）· 通过
+
+- 动机：此前所有有持仓对拍只用默认 8 币，BTC 都在币池里。还没验证过两件事：
+  - 换一组币，引擎是否仍和回测一致（含 54 ~ 85 笔被保护降杠杆的开仓）；
+  - BTC 不在币池时，引擎（`engine.py` 单独取 BTCUSDT 现货）和回测（`btc_spot=`）的 BTC 体制闸门是否一致。11-14 01:25 修过一次这里的回测缺陷。
+- 方法（`scratch/eng8/full.py`、`cmp.py`，由 eng7 改写）：
+  - 币池换成 LINK / LTC / DOT / TRX / BCH / ATOM / NEAR / UNI，BTC 现货只作体制数据，回测断言 `btc_regime_source = btc_spot`；
+  - 官方 Gate / OKX 4h + 官方资金费，2026-03-05 起两边空仓，到 2026-11-13，每家 1524 根；
+  - perp_both 10×，默认参数，下单精度 1e-8，用来隔离取整影响。
+- 结果（`output/research_engine_backtest_stateful_parity_new8.csv`、`_entries.csv` 为空）：两家开仓 62 / 62 全部逐笔匹配（其中多单 14 / 14，说明两边的 BTC 体制闸门一致），ATR 止损 Gate 43 / 43、OKX 45 / 45。期末收益 Gate 引擎 +17.096% vs 回测 +17.102%，OKX +3.992% vs +3.991%；最大权益相对差 Gate 0.033%（2026-06-17 一根）、OKX 0.001%。资金费 Gate −9.07 vs −8.997 USDT，OKX −10.941 vs −10.942 USDT。
+- 结论：引擎在未调参币和「BTC 不在币池」的配置下与回测一致，不改代码、不改默认。
