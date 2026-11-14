@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import copy
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -173,6 +174,32 @@ def sig_daily_4h(ind, idx, syms, p):
     return out
 
 
+def sig_capitulation(ind, idx, syms, p):
+    """全市场急跌投降反弹（短线，1h）：第 i 根收盘时篮子（交易池等权）L 根对数收益均值 ≤ −X、且至少 ceil(b×n) 个币下跌 → 事件；
+    事件后 H 根内全部币做多（第 i+1 根开盘入场，持有 H 根后信号归零离场），持仓期内不重复触发。用永续收盘（无则现货）。"""
+    L, X, H, br = int(p["lookback"]), float(p["drop"]), int(p["hold"]), float(p["breadth"])
+    src = ind.get("perp") or ind["spot"]
+    C = np.column_stack([src[s]["close"].astype(float).to_numpy() if s in src else _c(ind["spot"][s]).to_numpy() for s in syms])
+    n = len(C)
+    R = np.full_like(C, np.nan)
+    if n > L:
+        R[L:] = np.log(C[L:]) - np.log(C[:-L])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        b = np.nanmean(R, axis=1)
+    need = int(np.ceil(br * len(syms)))
+    ev = (b <= -X) & ((R < 0).sum(axis=1) >= need)
+    st = np.zeros(n, dtype=int)
+    i = 0
+    while i < n:
+        if ev[i]:
+            st[i:min(n, i + H)] = 1
+            i += H
+        else:
+            i += 1
+    return {s: st.copy() for s in syms}
+
+
 # 每套策略对执行层（cfg.strategy）的覆盖：候选策略一律关闭 #1 专用的趋势过滤 / BTC 体制 / 确认根数（信号自带逻辑）
 _NEUTRAL = {"trend_ma": 0, "btc_regime_ma": 0, "confirm_bars": 1, "short_breaker_bars": 0, "chop_n": 0, "elder_short_gate_n": 0}
 
@@ -234,6 +261,13 @@ STRATEGIES: list[dict] = [
              "（btc_regime_symbol ETHUSDT），空单与已有仓不受影响。双重留出 5 组深历史 Sharpe 全部更高、2026-03 后收益 5/5 更高，"
              "但调参窗口 2026-03 前少 23–37 点，尚未改默认（docs/STRATEGY_FORMULAS.md「体制过滤的数据来源替换」）。",
      "params": {"btc_regime_ma": 1200, "btc_regime_symbol": "ETHUSDT"}, "signal": None, "overrides": {"btc_regime_symbol": "ETHUSDT"}},
+    {"id": "capitulation_1h", "no": 13, "name": "全市场急跌投降反弹（短线 1h，候选）", "interval": "1h", "kind": "短线·事件",
+     "desc": "1 小时 K 线：交易池等权篮子 24 小时对数收益 ≤ −10% 且至少 7/8 个币下跌时，下一根开盘等权做多全部币，持有 24 小时离场；"
+             "持仓期内不重复触发。单币名义上限 6.25% 权益（8 币合计约 0.5×），不设紧止损（50×ATR 灾难线）。"
+             "OKX 官方 1h 永续 2022 年起 47 次事件，压力费均值 +177 bps/笔，未调参 8 币同样为正；叠加默认后深历史 Sharpe 0.62 → 0.92（docs/STRATEGY_FORMULAS.md「投降反弹」）。",
+     "params": {"lookback": 24, "drop": 0.10, "hold": 24, "breadth": 0.875}, "signal": sig_capitulation,
+     "overrides": {"interval": "1h", "atr_stop_mult": 50.0, "name_vol_target": 0.0, "slow_ma": 150},
+     "risk_overrides": {"max_weight_per_name": 0.0625, "max_risk_per_trade": 0.05}},
 ]
 BY_ID = {s["id"]: s for s in STRATEGIES}
 
@@ -284,6 +318,13 @@ VERDICTS.setdefault("ma_trend_crowd_es", {"status": "观察", "reason": ("强观
     "信号与 #1 相同，只改仓位，不进影子子账本。CSV：output/research_sizing_stack_crowd_es_pv.csv、output/research_sizing_stack_crowd_es_neighborhood.csv")})
 
 
+VERDICTS.setdefault("capitulation_1h", {"status": "观察", "reason": ("强观察（短线）。"
+    "2026-11-14 研究（scratch/capit）：OKX 官方 1h 永续 2022-01 起，事件 = 8 币篮子 24h 对数收益 ≤ −10% 且 ≥ 7/8 下跌，等权做多 24h，"
+    "压力费 15.1 bps×2 + 资金费：训练 +173 / 测试 +191 bps/笔（28 / 18 次），每年为正；未调参 new8 训练 +240 / 测试 +126；"
+    "止损全部变差；叠加默认 0.5× 后深历史 Sharpe 0.62 → 0.92、调参窗 1.48 → 1.85、回撤略浅；2026-03 后只有 1 次事件，无法逐月检验。"
+    "进影子子账本做真实纸面前向检验。CSV：output/research_basket_capitulation_validation.csv、output/research_basket_capitulation_combo_default.csv。")})
+
+
 def strategy_cfg(cfg: dict, sid: str) -> dict:
     """在默认 cfg 上套该策略的执行层覆盖。#1 原样返回（深拷贝）；沿用 #1 信号的变体只覆盖仓位参数。"""
     c = copy.deepcopy(cfg)
@@ -295,6 +336,7 @@ def strategy_cfg(cfg: dict, sid: str) -> dict:
         return c
     c["strategy"].update(_NEUTRAL)
     c["strategy"].update(spec["overrides"])
+    c["risk"].update(spec.get("risk_overrides") or {})
     return c
 
 
