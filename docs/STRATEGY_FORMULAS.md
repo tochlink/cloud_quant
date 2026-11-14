@@ -5423,3 +5423,14 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：对冲对乘数单独（基于默认）12 个月 WF 输，但叠加在候选 #8 的 `ls_parity_cap` C3 上时：全样本、压力、安慰剂、walk-forward 都赢，后段 5/8 个月更好（还没到 6/9 的默认门槛）。升为强观察：作为候选 #8 的增强版（C3 + 对冲对 W180 c0.5 h1.25–1.5）候选，下一步考虑实现为回测 / 引擎可选参数（默认关闭）并加入策略页作可选策略；不改默认。
 - CSV：`output/research_hedged_pair_x_ls_parity_perp_both_10x.csv`、`output/research_hedged_pair_on_ls_parity_c3_placebo_180_0.5_1.5.csv`、`output/research_hedged_pair_on_ls_parity_c3_walkforward.csv` + `_monthly_vs_off.csv`（脚本 scratch/hpn/hpn_lsp.py、hpn_c3.py、hpn_wf_c3.py）。
 - 下一步：把对冲对乘数实现为可选参数（回测 + 引擎同一计算函数、默认关闭、逐位对拍），再做 C3 + RB30 + 对冲对的组合与 4h 相位检验。
+
+### 2026-11-13 17:40 PST — 对冲对乘数的 4h K 线相位检验（单独 / 叠加 C3 / 叠加 C3+RB30，验证，不改默认）
+
+- 方法：同「候选 #8 C3+RB30 的 4h 相位检验」（`scratch/phc/phase_long_lib.py`）：T0 = 2025-09-24 前用官方 4h，之后用官方 1h 按起点偏移 h ∈ {0,1,2,3} 重组 4h；统计窗 2025-10-15 → 末根；h0 与官方逐根一致（健全性通过：official 与 phase_0 两所两费率结果完全相同）。对冲对乘数固定 W180 c0.5 h1.5；变体：base、HP、C3、C3+HP、C3+RB30、C3+RB30+HP；perp_both 10× + 官方资金费，真实 + 压力费率。
+- 结果（4 个相位，增量 = 叠加后 − 未叠加）：
+  - **C3+RB30+HP vs C3+RB30**：两所、两种费率下整段收益 4/4 相位都更高（平均 Gate +9.9 / +6.1 点，OKX +12.8 / +9.6 点，真实 / 压力），2026-03 后 4/4 相位都更高（+6.0 ~ +8.6 点），后段月度平均 5.25–5.75 / 8 更好；Sharpe 平均 +0.01 ~ +0.05（2–3/4 相位更高）；回撤平均只深约 0.5 点。四相位平均：Gate +102.88% / 2.04 / −12.35% vs +92.95% / 2.00 / −11.82%；OKX +104.70% / 2.04 / −12.32% vs +91.86% / 1.99 / −11.86%。
+  - **C3+HP vs C3**：收益与后段同样 4/4 相位更高（平均 +6.2 ~ +9.8 点），Sharpe +0.03 ~ +0.06，但回撤平均深 1.5 ~ 2.0 点。
+  - **HP 单独 vs base**：收益 2–4/4 相位更高但 Sharpe 只有 0–1/4 相位更高、回撤平均深约 2 ~ 2.5 点，后段增益仅 +0.9 ~ +2.9 点——单独使用不过相位检验（与上一节「单独 12 个月 WF 输」一致）。
+  - 对照默认：C3+RB30+HP 四相位平均真实费率两所都赢（收益 +7 ~ +9 点、Sharpe +0.02 ~ +0.03），压力费率收益持平、Sharpe 低约 0.06 ~ 0.07、回撤深约 1.7 点——仍然不够改默认。
+- 结论：对冲对乘数作为候选 #8（C3+RB30）的增强项，通过相位检验（4/4 相位收益与后段都赢、Sharpe 不输、回撤几乎不变），优于叠在 C3 单独上（回撤代价更大）。不改默认；下一步按计划实现为可选参数（`hedge_pair_w` / `hedge_pair_c` / `hedge_pair_h`，默认关闭，回测与引擎共用同一计算函数并逐位对拍），再在策略页 #8 之外新增「#8 + 对冲对」可选候选。
+- CSV：`output/research_hedged_pair_phase_offset_perp_both_10x.csv`、`output/research_hedged_pair_phase_offset_perp_both_10x_summary.csv`（脚本 scratch/hpph/hpph.py）。
