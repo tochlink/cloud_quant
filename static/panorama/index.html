@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>全景交易情况 · QTW</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='10' fill='%234b3aa6'/%3E%3Cpath d='M7 21l6-6 4 4 8-9' stroke='%2373f0e0' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<meta name="description" content="Real-time crypto market HUD powered by Gate.io public spot & perpetual data.">
+<link rel="stylesheet" href="css/app.css">
+<script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="pulse" id="pulse">
+    <canvas id="cv-pulse"></canvas>
+    <div class="pulse-cap"><span data-i18n="pl.title"></span><b id="pl-stat"></b></div>
+    <div class="pulse-focus" id="pl-focus"></div>
+  </div>
+  <div class="hstats">
+    <div class="hstat"><label id="h-sym">BTC</label><b id="h-price">—</b></div>
+    <div class="hstat"><label data-i18n="h.chg"></label><b id="h-chg">—</b></div>
+    <div class="hstat"><label data-i18n="h.breadth"></label><b id="h-breadth">—</b></div>
+    <div class="hstat"><label data-i18n="h.vol"></label><b id="h-vol">—</b></div>
+    <div class="hstat"><label data-i18n="h.oi"></label><b id="h-oi">—</b></div>
+  </div>
+  <div class="hright">
+    <div class="clock-row">
+      <div class="tz" id="tz">
+        <button class="tz-btn" type="button" aria-haspopup="listbox"><i class="tz-cc">UTC</i><span class="tz-name">UTC</span><span class="pk-caret">▾</span></button>
+        <div class="tz-pop" hidden>
+          <div class="tz-h" data-i18n="tz.title"></div>
+          <div class="tz-list" role="listbox"></div>
+        </div>
+      </div>
+      <div class="clock" id="clock">--:--:--</div>
+    </div>
+    <div class="hctl">
+      <div class="picker" id="picker">
+        <button class="pk-btn" type="button" aria-haspopup="listbox"><span class="pk-sym" id="pk-sym">BTC</span><span class="pk-px" id="pk-px">—</span><span class="pk-chg" id="pk-chg">—</span><span class="pk-caret">▾</span></button>
+        <div class="pk-pop" hidden>
+          <div class="pk-search"><span class="pk-ico">⌕</span><input class="pk-q" type="text" autocomplete="off" spellcheck="false" aria-label="search"><kbd>/</kbd></div>
+          <div class="pk-quick"></div>
+          <div class="pk-tabs"><button type="button" data-s="vol" class="on" data-i18n="pk.vol"></button><button type="button" data-s="up" data-i18n="pk.up"></button><button type="button" data-s="dn" data-i18n="pk.dn"></button><button type="button" data-s="perp" data-i18n="pk.perp"></button></div>
+          <div class="pk-head"><span data-i18n="pk.coin"></span><span data-i18n="pk.price"></span><span data-i18n="pk.chg"></span><span data-i18n="pk.qv"></span></div>
+          <div class="pk-list" role="listbox"></div>
+          <div class="pk-foot"><span data-i18n="pk.hint"></span><span class="pk-count"></span></div>
+        </div>
+      </div>
+      <div class="conn"><i id="c-rest"></i>REST<i id="c-spot"></i>SPOT<i id="c-fut"></i>PERP</div>
+      <button id="lang-btn" class="lang" type="button" aria-label="language"><span data-l="zh">中</span><span class="sep">/</span><span data-l="en">EN</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="tickerbar">
+  <span class="live-tag" data-i18n="live"></span>
+  <div class="marquee"><div class="mq-track" id="mq-top"></div></div>
+</div>
+
+<main class="grid" id="grid" data-page="1">
+
+  <!-- ===== Market overview ===== -->
+  <section class="panel a-ov">
+    <div class="ph"><span class="pt" data-i18n="ov.title"></span><span class="ptag">GATE · USDT</span></div>
+    <div class="pb ov">
+      <div class="ov-label" data-i18n="ov.vol"></div>
+      <div class="ov-big up" id="ov-vol">—</div>
+      <div class="ov-sub" id="ov-sub">—</div>
+      <div class="breadth"><i id="ov-bar-up"></i><i id="ov-bar-dn"></i></div>
+      <div class="kv3">
+        <div><label data-i18n="ov.up"></label><b class="up" id="ov-up">—</b></div>
+        <div><label data-i18n="ov.dn"></label><b class="dn" id="ov-dn">—</b></div>
+        <div><label data-i18n="ov.breadth"></label><b id="ov-breadth">—</b></div>
+      </div>
+      <div class="kv3">
+        <div><label data-i18n="ov.oi"></label><b id="ov-oi">—</b></div>
+        <div><label data-i18n="ov.pvol"></label><b id="ov-pvol">—</b></div>
+        <div><label data-i18n="ov.fund"></label><b id="ov-fund">—</b></div>
+      </div>
+      <div class="movers">
+        <div><label data-i18n="ov.gainer"></label><b class="up" id="ov-gainer">—</b></div>
+        <div><label data-i18n="ov.loser"></label><b class="dn" id="ov-loser">—</b></div>
+      </div>
+      <div class="dist-h"><span data-i18n="ov.dist"></span><b id="ov-median">—</b></div>
+      <canvas class="cv-dist" id="cv-dist"></canvas>
+    </div>
+    <div class="ph sub"><span class="pt" data-i18n="ld.title"></span><span class="sym-name">BTC</span><span class="ptag" id="ld-spread">—</span></div>
+    <div class="pb ladder-wrap">
+      <div class="ladder" id="ladder"></div>
+      <canvas class="ld-spark" id="cv-ld"></canvas>
+    </div>
+  </section>
+
+  <!-- ===== Spot chart + depth ===== -->
+  <section class="panel a-sp">
+    <div class="ph"><span class="pt"><span class="sym-name">BTC</span> <span data-i18n="sp.title"></span></span><span class="ptag" id="sp-chg">—</span></div>
+    <div class="pb sp">
+      <div class="sp-top">
+        <div class="sp-price" id="sp-price">—</div>
+        <div class="sp-hl"><span><label>H</label><b id="sp-high">—</b></span><span><label>L</label><b id="sp-low">—</b></span><span><label data-i18n="sp.qv"></label><b id="sp-qv">—</b></span></div>
+      </div>
+      <canvas class="cv-candles" id="cv-candles"></canvas>
+      <div class="sp-legend"><div class="seg" id="kl-int"><button type="button" data-v="1m" class="on">1m</button><button type="button" data-v="5m">5m</button><button type="button" data-v="15m">15m</button><button type="button" data-v="1h">1H</button><button type="button" data-v="4h">4H</button><button type="button" data-v="1d">1D</button></div><span class="k-hint" data-i18n="k.hint"></span></div>
+      <div class="depth">
+        <div class="dh"><span data-i18n="dp.price"></span><span data-i18n="dp.size"></span><span data-i18n="dp.cum"></span></div>
+        <div id="depth-asks"></div>
+        <div class="dspread" id="depth-spread">—</div>
+        <div id="depth-bids"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Latency & basis + wire inspector ===== -->
+  <section class="panel a-bs">
+    <div class="ph"><span class="pt" data-i18n="bs.title"></span><span class="ptag"><span class="sym-name">BTC</span> · SPOT / PERP / INDEX</span></div>
+    <div class="pb bs">
+      <canvas class="cv-basis" id="cv-basis"></canvas>
+      <div class="bs-stats">
+        <div><label data-i18n="bs.latS"></label><b id="bs-lat-s">—</b></div>
+        <div><label data-i18n="bs.latF"></label><b id="bs-lat-f">—</b></div>
+        <div><label data-i18n="bs.basis"></label><b id="bs-basis">—</b></div>
+        <div><label data-i18n="bs.prem"></label><b id="bs-prem">—</b></div>
+        <div><label data-i18n="bs.mark"></label><b id="bs-mark">—</b></div>
+        <div><label data-i18n="bs.index"></label><b id="bs-index">—</b></div>
+      </div>
+    </div>
+    <div class="ph sub"><span class="pt" data-i18n="wi.title"></span><span class="ptag" id="wi-rate">— msg/s</span></div>
+    <div class="pb wi">
+      <div class="wire" id="wire"></div>
+      <div class="wi-stats">
+        <div><label data-i18n="wi.total"></label><b id="wi-total">—</b></div>
+        <div><label data-i18n="wi.bytes"></label><b id="wi-bytes">—</b></div>
+        <div><label data-i18n="wi.subs"></label><b id="wi-subs">—</b></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Neural shell ===== -->
+  <section class="panel a-sh">
+    <div class="ph"><span class="pt" data-i18n="sh.title"></span><span class="ph-note"></span><div class="seg skin-seg" id="skin-seg"><button type="button" data-v="torus" data-i18n="skin.torus"></button><button type="button" data-v="globe" data-i18n="skin.globe"></button><button type="button" data-v="galaxy" data-i18n="skin.galaxy"></button></div><span class="ptag" id="sh-count">—</span></div>
+    <div class="shell-wrap" id="shell-wrap">
+      <canvas id="cv-shell"></canvas>
+      <canvas id="cv-wires"></canvas>
+      <div id="shell-labels"></div>
+      <div class="inputs" id="inputs"></div>
+      <div class="fills">
+        <div class="fills-h"><span data-i18n="wh.title"></span><span class="ptag" id="wh-th">—</span></div>
+        <div class="whales" id="whales"></div>
+        <div class="hist-h"><span data-i18n="wh.hist"></span><b id="hist-now">—</b></div>
+        <canvas class="cv-hist" id="cv-hist"></canvas>
+      </div>
+      <div class="shell-foot" data-i18n="sh.legend"></div>
+      <div class="shell-tip" id="shell-tip"></div>
+      <div class="shell-wait" id="shell-wait" data-i18n="sh.wait"></div>
+    </div>
+  </section>
+
+  <!-- ===== Market-wide liquidations ===== -->
+  <section class="panel a-lq">
+    <div class="ph"><span class="pt" data-i18n="lq.title"></span><span class="ph-note" data-i18n="lq.note"></span><span class="ptag" id="lq-stat">—</span></div>
+    <div class="lq-grid">
+      <div class="lq-cards">
+        <div class="card"><label data-i18n="lq.c.long"></label><b class="dn" id="lq-long">—</b><small id="lq-long-n">—</small></div>
+        <div class="card"><label data-i18n="lq.c.short"></label><b class="up" id="lq-short">—</b><small id="lq-short-n">—</small></div>
+        <div class="card"><label data-i18n="lq.c.max"></label><b id="lq-max">—</b><small id="lq-max-s">—</small></div>
+        <div class="card"><label data-i18n="lq.c.ratio"></label><b id="lq-ratio">—</b><div class="lq-split"><i id="lq-split-l"></i><i id="lq-split-s"></i></div></div>
+      </div>
+      <div class="lq-chart" id="lq-chart">
+        <div class="lq-ctl">
+          <div class="seg" data-k="side"><button type="button" data-v="all" class="on" data-i18n="lq.f.all"></button><button type="button" data-v="long" data-i18n="lq.f.long"></button><button type="button" data-v="short" data-i18n="lq.f.short"></button></div>
+          <div class="seg" data-k="min"><button type="button" data-v="0" class="on" data-i18n="lq.f.any"></button><button type="button" data-v="1000">≥$1K</button><button type="button" data-v="10000">≥$10K</button><button type="button" data-v="100000">≥$100K</button></div>
+          <div class="seg" data-k="range"><button type="button" data-v="15">15m</button><button type="button" data-v="60" class="on">1H</button></div>
+          <span class="lq-hint" data-i18n="lq.hint"></span>
+        </div>
+        <div class="lq-cv"><canvas id="cv-liq"></canvas><div class="shell-tip lq-tip"></div></div>
+      </div>
+      <div class="lq-side">
+        <div class="dv-h"><span data-i18n="lq.top"></span><span data-i18n="lq.top.cols"></span></div>
+        <div class="dv-list" id="lq-top"></div>
+      </div>
+      <div class="lq-side">
+        <div class="dv-h"><span data-i18n="lq.feed"></span><span class="live-mini"><i></i>LIVE</span></div>
+        <div class="lq-feed" id="lq-feed"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Market heatmap ===== -->
+  <section class="panel a-hm">
+    <div class="ph"><span class="pt" data-i18n="hm.title"></span><span class="ph-note" id="hm-note"></span><span class="ptag" id="hm-stat">—</span></div>
+    <div class="hm-wrap">
+      <canvas class="cv-heat" id="cv-heat"></canvas>
+      <div class="shell-tip" id="hm-tip"></div>
+    </div>
+    <div class="hm-legend"><span>≤ -8%</span><i class="hm-scale"></i><span>≥ +8%</span></div>
+  </section>
+
+  <!-- ===== Perpetual rankings ===== -->
+  <section class="panel a-dv">
+    <div class="ph"><span class="pt" data-i18n="dv.title"></span><span class="ptag" id="dv-count">—</span></div>
+    <div class="cards4 dv-sum">
+      <div class="card"><label data-i18n="dv.sum.oi"></label><b id="dv-oi-t">—</b></div>
+      <div class="card"><label data-i18n="dv.sum.vol"></label><b id="dv-vol-t">—</b></div>
+      <div class="card"><label data-i18n="dv.sum.pos"></label><b class="up" id="dv-pos">—</b></div>
+      <div class="card"><label data-i18n="dv.sum.neg"></label><b class="dn" id="dv-neg">—</b></div>
+    </div>
+    <div class="pb dv">
+      <div class="dv-col">
+        <div class="dv-h"><span data-i18n="dv.oi"></span><span data-i18n="dv.oi.cols"></span></div>
+        <div class="dv-list" id="dv-oi"></div>
+      </div>
+      <div class="dv-col">
+        <div class="dv-h"><span data-i18n="dv.fhi"></span><span data-i18n="dv.f.cols"></span></div>
+        <div class="dv-list" id="dv-fhi"></div>
+        <div class="dv-h"><span data-i18n="dv.flo"></span><span data-i18n="dv.f.cols"></span></div>
+        <div class="dv-list" id="dv-flo"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Execution tape ===== -->
+  <section class="panel a-tp">
+    <div class="ph"><span class="pt" data-i18n="tp.title"></span><span class="ptag"><span class="sym-name">BTC</span> · SPOT + PERP</span></div>
+    <div class="pb tp">
+      <div class="tape-scroll">
+        <table class="tape">
+          <thead><tr><th id="tp-time-h"></th><th data-i18n="tp.mkt"></th><th data-i18n="tp.side"></th><th data-i18n="tp.price"></th><th data-i18n="tp.amt"></th><th data-i18n="tp.usd"></th></tr></thead>
+          <tbody id="tape-body"></tbody>
+        </table>
+      </div>
+      <div class="flow">
+        <div class="flow-h" data-i18n="tp.flow"></div>
+        <canvas class="cv-flow" id="cv-flow"></canvas>
+        <div class="flow-leg"><span class="up" id="fl-buy">—</span><span class="dn" id="fl-sell">—</span></div>
+      </div>
+    </div>
+    <div class="cards4">
+      <div class="card"><label data-i18n="tp.c.last"></label><b id="tc-last">—</b></div>
+      <div class="card"><label data-i18n="tp.c.buy"></label><b id="tc-buy">—</b></div>
+      <div class="card"><label data-i18n="tp.c.vol"></label><b id="tc-vol">—</b></div>
+      <div class="card"><label data-i18n="tp.c.whales"></label><b id="tc-whales">—</b></div>
+    </div>
+  </section>
+
+  <!-- ===== Vol cone & liquidation funnel ===== -->
+  <section class="panel a-fn">
+    <div class="ph"><span class="pt" data-i18n="fn.title"></span><span class="ptag"><span class="sym-name">BTC</span> · 1m · ±1σ / ±2σ</span></div>
+    <div class="pb fn">
+      <canvas class="cv-funnel" id="cv-funnel"></canvas>
+      <div class="liq-list" id="liq-list"></div>
+    </div>
+    <div class="cards4">
+      <div class="card"><label data-i18n="fn.c.fund"></label><b id="fc-fund">—</b><small id="fc-fund-r">—</small></div>
+      <div class="card"><label data-i18n="fn.c.vol"></label><b id="fc-vol">—</b><small data-i18n="fn.c.volsub"></small></div>
+      <div class="card"><label data-i18n="fn.c.lsr"></label><b id="fc-lsr">—</b><small id="fc-lsr-s">—</small></div>
+      <div class="card"><label data-i18n="fn.c.liq"></label><b id="fc-liq">—</b><small id="fc-liq-s">—</small></div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="tickerbar bottom">
+  <nav class="pg-tabs" id="pg-tabs" aria-label="pages" data-i18n-title="pg.t">
+    <a class="pg-home" href="/" data-i18n-title="pg.home.t"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.7 4.3a1 1 0 0 1 0 1.4L9.41 12l6.3 6.3a1 1 0 0 1-1.42 1.4l-7-7a1 1 0 0 1 0-1.4l7-7a1 1 0 0 1 1.42 0Z" fill="currentColor"/></svg><span data-i18n="pg.home"></span></a>
+    <button type="button" data-p="1" class="on" data-i18n="pg.1"></button><button type="button" data-p="2" data-i18n="pg.2"></button><button type="button" data-p="3" data-i18n="pg.3"></button><button type="button" data-p="4" data-i18n="pg.4"></button><button type="button" data-p="5" data-i18n="pg.5"></button>
+  </nav>
+  <div class="marquee"><div class="mq-track slow" id="mq-bottom"></div></div>
+</footer>
+<div class="disclaimer" data-i18n="disclaimer"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
