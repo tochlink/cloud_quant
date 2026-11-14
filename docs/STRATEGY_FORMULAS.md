@@ -6891,3 +6891,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 与 #1 合成（动量 L14 / L30 R7，相关 0.20）：OKX 深历史 0.47 → 0.64 / 0.68，但调参窗 1.37 → 1.48 / 1.16；Gate 调参窗 1.35 → 1.15 / 0.91；2026-03 后逐月只有 3–4/9 个月好于 #1。
 - 结论：**否决，不实现、不进观察名单**。日线截面反转在加密主流币上不存在可交易的优势；截面动量只在 core16 的个别格子为正，在未调参币池上反向，与默认合成也不稳定。不再重测日线 / 4h 截面排名 sleeve 族。
 - CSV（不入库）：`output/research_xsec_reversal_momentum_sleeve_1d.csv`；脚本 `scratch/xsrev/run.py`。
+
+## 短线新族：15m BTC 冲击 → 山寨币滞后补涨 / 补跌（lead-lag catch-up，2026-11-14 ~11:40 PST，研究，不改默认；否决，不实现）
+
+- 动机：4h 层的「BTC 领先信号」已否决（2026-11-10），但 15m 层 BTC 急动后山寨币是否在数小时内补齐（单笔边际可能大于 1h 费率族的 0.1–0.2%）没测过。
+- 公式：BTC 永续 15m 对数收益 `br_L = ln C_t − ln C_{t−L}`，`sd = rolling_std(br_L, 960 根).shift(1)`；冲击 `imp = sign(br_L)` 当 `|br_L| ≥ X·sd`。滞后条件：山寨同窗收益 `ar_L·imp < c·|br_L|`（c = 0 表示不加滞后条件、全部跟随）。山寨币在下一根 15m 开盘按 imp 方向开仓，持有 H 根后开盘平仓，不重叠；扣官方资金费。
+- 参数：L = 1 / 2 / 4，X = 3 / 4 / 6，c = 0 / 0.5 / 1.0，H = 4 / 16 / 48（1h / 4h / 12h）；真实费 5.1 bps/边、压力 15.1 bps/边；时移安慰剂 +1d / +7d。
+- 数据：官方 OKX 15m 永续 2024-11-13 → 2026-11-14，默认 8 去掉 BTC 的 7 币 + 未调参 new8（信号用 OKX BTC 永续）；分段 train 2024-11→2025-10 / test 2025-10→2026-03-05 / post 2026-03-05→。
+- 结果（压力费，均值 bps/笔）：81 组里没有一组在 d8 与 new8 的 train / test / post 六段同时为正。无滞后条件全部跟随普遍 −20 ~ −60（毛利仅约 0 ~ +10 bps，被费率吃光）；c 0.5 / X6 / H48 的 post +164 / +188 bps 只有 42–57 笔，同格 test −219 / −74，new8 train −11 / −23，属孤立小样本。毛利与「BTC 冲击后山寨币均值回归」也不显著，镜像方向同样无利可图。
+- 结论：否决。15m 山寨币对 BTC 冲击的补齐在当根内已基本完成，残余的滞后补涨远小于往返费率；不进观察名单，此族（任意 L / X / c / H）不再重测。CSV：`output/research_15m_btc_impulse_alt_catchup.csv`；脚本 `scratch/btclag/run.py`。
