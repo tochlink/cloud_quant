@@ -7252,3 +7252,27 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 高 DVOL 不开多：post 段 −2 ~ −4 点。
 - 结论：**否决**。长线 4h 书用隐含波动率做闸门没有稳定信息，DVOL 只保留在短线事件（14:55 节，观察）。不再重测 DVOL 长线闸门。
 - CSV（不入库）：`output/research_dvol_regime_gate_4h_BTC.csv`、`output/research_dvol_regime_gate_4h_ETH.csv`；脚本 `scratch/dvreg/run.py`（环境变量 DVSRC=BTC/ETH）。
+
+## 短线组合：#13 投降反弹 ∪ ETH DVOL z168≥3 冲击——合并成一个「急跌 / 恐慌后做多 8 币篮子」子账本（1h 永续，2026-11-14 ~14:50 PST，研究，不改默认；合并版升为强观察，未实现）
+
+- 查重：14:55 节 DVOL 事件只算了单笔均值，并留了下一步「与 #13 合并子账本、同时持仓处理、逐年逐月稳定性」。此前没有把两个触发源并成一个账本测过；BTC+ETH 双 DVOL 源也是首次。
+- 公式（因果，均为第 t 根 1h 收盘已知、下一根开盘入场）：
+  - CAP：篮子 24h 平均对数收益 ≤ −10% 且 8 币中 ≥7 个下跌（#13 原规则）。
+  - DVOL：`z168 = (DVOL − 均值_168h) / 标准差_168h ≥ 3`（ETH；BOTH = ETH 或 BTC）。
+  - 合并：触发 = CAP 或 DVOL；等权做多 8 币永续，总名义 1× 子账本权益，持有 48h。
+  - 持仓处理两种：nonoverlap（持仓中忽略新触发）；extend（持仓中再触发则离场延到最后一次触发 + 48h，不加仓）。
+  - 费用：每边 5.1 bps，压力档 15.1 bps，真实资金费逐根计入。安慰剂：触发平移 720h。
+- 数据：OKX 官方 1h 永续 d8（2022-02→）+ 未调参 new8；Gate 官方 1h 永续 d8（2025-09→，跨所）；Deribit 官方 DVOL 1h。分段 train → 2024-10-21 → test → 2026-03-05 → post。
+- 结果（nonoverlap，真实费用；子账本复利收益 / 日 Sharpe / 最大回撤）：
+  - OKX d8：CAP 单独 +29 / +59 / +3.5%，DVOL 单独 +52 / +95 / +18.6%，**合并 +191 / +83 / +22.8%**，Sharpe 1.26 / 1.47 / 1.82，最大回撤 −32 / −21 / −15%。
+  - new8 未调参：合并 +185 / +76 / +43%，Sharpe 1.2 / 1.4 / 2.5（CAP 单独 +40 / +56 / +3.9%）。
+  - Gate d8 2025-09→：合并 +35%（Sharpe 0.9），post +22.9%；CAP +32%，DVOL +13%。
+  - 压力费用：OKX d8 合并 +158 / +69 / +20%，Gate post +20%。
+  - 安慰剂（平移 720h）：OKX d8 +11 / −21 / −3%，new8 −12 / +12 / −2%，Gate −12%。真实触发明显好于平移。
+  - 逐年（OKX d8 合并）：2022 +10%、2023 +55%、2024 +120%、2025 +43%、2026 +22%，五年全正（CAP 单独 2022 −15%，DVOL 单独 2022 −36%）。
+  - post 逐月（2026-03→11，三套数据一致）：+4 个月（8 月 +18%、10 月 +8.5%），3 个月小亏（最大 6 月 −1.7%），2 个月空仓。
+  - extend 模式全面弱于 nonoverlap（d8 post +13.5% vs +22.8%，回撤更深），否决。
+  - 加 BTC DVOL 源（BOTH）：train/test 更高，但 post 段 OKX +0.6%、Gate −2.7%（压力档为负），否决。
+- 注意：合并后的单笔均值（217 bps）高于两个单独源，部分来自「先到的触发占住 48h 窗口」的取舍，结果对事件顺序有一定敏感；样本仍小（post 仅 12 笔）。
+- 结论：**合并版（CAP ∪ ETH DVOL z168≥3，48h，不重叠）升为强观察，不改默认、未实现**。它是 #13 的升级候选：触发更多（post 12 笔 vs 1 笔），未见币和 Gate 跨所都成立。下一步：在 8788 的 #13 影子子账本中加入 ETH DVOL 实时触发（Deribit 公共接口，每小时取一次），纸面前向记录；同时测与默认 4h 书合成后的组合曲线。
+- CSV（不入库）：`output/research_dvol_capitulation_combined_subbook_1h.csv`（分段 × 场所 × 模式 × 费用 × 安慰剂）、`output/research_dvol_capitulation_combined_subbook_1h_periods.csv`（逐年 / post 逐月）；脚本 `scratch/dvcap/run.py`（在 scratch/capit 下运行）。
