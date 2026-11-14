@@ -6125,3 +6125,18 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - CSV（本地，不入库）：`output/research_deep_history_btc_regime_vote.csv`、`output/research_deep_history_btc_regime_vote_monthly.csv`；脚本 `scratch/drgv/run.py`（复用 `scratch/deep/*.pkl` 官方 K 线）。
 - 下一族：结构性方向——条件加仓按趋势强度（普通加仓已关闭，只在 ADX / MA 间距分位高时加）已被 pyramid 关闭覆盖，故改为执行侧：止损触发后同根是否按 1h 收盘确认再平（止损确认延迟，非新闸门）；先查重轮换日志。
 - 实现（2026-11-14 00:50 PST，默认关闭，不改默认）：可选参数 `btc_regime_vote_k`（0 = 单线；k > 0 时用 `regime_vote_lengths(N)` = N × (0.5, 0.75, 1, 1.25, 1.5) 五条 SMA 投票，N = 1200 即 600–1800），`qtw/strategy.py::btc_regime_blocks_long(close, n, vote_k)` 由回测与引擎共用；引擎 `_btc_regime_state` 取 1.5N + 5 根 BTC 现货 K 线（N = 1200 → 1805 根，在 `CANDLE_KEEP_BARS` 2100 内），设置校验 0–5 且 1.5N ≤ 2000。新增可选策略 #11 `ma_trend_regime_vote`（只覆盖 `btc_regime_vote_k` 3，状态 观察 / 强观察，不进影子子账本）。三组深历史生产 `run_backtest`（k = 3）与 `scratch/drgv` 投票口径逐位一致（`scratch/drgv/parity.py`）；`tests/test_regime_vote.py` 5 项，全套 415 项通过。
+
+### 2026-11-14 00:55 PST 深历史：BTC 体制离场（BTC 跌破 SMA_N / 多周期投票时平掉已有多单；2026-11-10 14:55 只在调参窗口测过，出场层，不改默认）
+
+- 查重：体制离场 2026-11-10 只在 4500 根调参窗口测过（否决：N ≤ 900 伤 2026-03 后）；从未在 2024-10-21 前未见段测过；也没有测过「不锁定」版本与投票触发。
+- 公式：bear_t = BTC 现货收盘_t < SMA_N（或 `btc_regime_blocks_long(c, 1200, k)` 投票，k = 3/4），与信号同一根收盘、下一根开盘执行。包装 `indicators`：合成前的多头信号 +1 在 bear 时置 0（空头不动），三种模式——lock：bear 触发后多头信号锁 0 直到原始信号离开 +1；nolock：只在 bear 的那些根置 0（BTC 回到线上且多头信号仍在即重新开多）；cross：只在 BTC 下穿那一根触发并锁定。入场体制线仍为默认 1200。N ∈ {600, 1200, 1500}；安慰剂：把 s1200 的 bear 序列循环平移 1095–6570 根（6 档，lock 与 nolock 各一组）。perp_both 10× + 官方资金费，三组深历史（OKX8 / Gate8 / OKX7 无 BNB），切点 2026-03-05，真实 + 压力费。
+- 结果（真实费，未见段日 Sharpe OKX8 / Gate8 / OKX7；调参窗口收益；2026-03 后收益）：
+  - 基线：0.71 / 0.09 / 0.77；调参 +197.8 / +197.9 / +192.7%；后段 +59.9 / +60.3 / +50.8%。
+  - s1200 nolock：1.12 / 0.37 / 1.05；调参 +198.2 / +197.8 / +188.5%；后段逐位相同（2026-03 后 BTC 一直在线下，本来就不持多）。压力费 0.95 / 0.20 / 0.93（基线 0.56 / −0.07 / 0.65）。逐月更好 / 更差：未见段 6/3、5/4、8/8；调参窗口 2026-03 前 11/5、9/7、8/4。主要来自 2023 年（OKX8 +48.9% 对 +21.2%，Gate +36.6% 对 +14.0%，OKX7 +37.6% 对 +11.7%）。
+  - v5k3 nolock：1.12 / 0.37 / 1.04，与 s1200 nolock 几乎相同；v5k4 nolock 1.04 / 0.32 / 0.99。
+  - s600 nolock：1.23 / 0.37 / 1.11 但调参窗口 −16 ~ −21 点、回撤 −27%（否决，与 11-10 结论一致）。
+  - lock 版（11-10 的口径）：s1200 1.02 / 0.28 / 0.92，但 2026-03 后 −9 点（锁定挡住了后段的多头）；cross 版提升小（0.90 / 0.22 / 0.89）。
+  - 安慰剂（s1200 bear 平移）：lock 组未见段 Sharpe OKX8 0.08–1.17、Gate −0.09–0.42、OKX7 0.38–1.01，真实 lock 都在区间内；nolock 组 OKX8 0.03–1.07、Gate −0.22–0.41、OKX7 0.35–0.95，真实 nolock 在 OKX8 / OKX7 高于全部 6 个平移、Gate 排第 2/7；且平移后调参窗口收益普遍 −40 ~ −110 点，真实时点不伤调参窗口。
+- 解读：未见段长期多头本身几乎没有 alpha（18:55 节），所以任何「少持多」都容易在未见段显得更好；nolock 真实时点在 2/3 组超过所有平移安慰剂、且不伤调参窗口与 2026-03 后，比 lock 版明显更干净。**重要混杂**：nolock 把信号置 0 会清掉「止损后锁定到信号改变」的锁，BTC 回到线上时被止损的币会重新开多——2023 年的大部分增益可能来自这条「体制切换时解除止损锁」的副作用，而不是平仓本身。改默认前必须先拆开这两个效应。
+- 结论：观察（s1200 nolock / v5k3 nolock），默认不变、代码不改。下一轮：拆解——(a) 只平仓、保留原有止损锁；(b) 不平仓、只在 BTC 上穿时解除止损锁；看增益归属，并补 2026-03 前调参窗口逐月与 walk-forward。
+- CSV（本地，不入库）：`output/research_deep_history_btc_regime_exit.csv`、`..._monthly.csv`、`output/research_deep_history_btc_regime_exit_placebo_nolock*.csv`；脚本 `scratch/drx/run.py`、`scratch/drx/plc.py`。
