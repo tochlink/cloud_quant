@@ -200,6 +200,48 @@ def sig_capitulation(ind, idx, syms, p):
     return {s: st.copy() for s in syms}
 
 
+def sig_capitulation_dvol(ind, idx, syms, p):
+    """#14 投降 ∪ 隐含波动冲击（短线，1h）：第 i 根收盘时满足任一 → 事件，第 i+1 根开盘等权做多全部币，持有 H 根，持仓期内不重复触发。
+    ① #13 投降：篮子 L 根对数收益均值 ≤ −X 且至少 ceil(b×n) 个币下跌；
+    ② Deribit 官方 DVOL（dvol_currency，默认 ETH）已收盘小时线的 W 小时 z 分数 ≥ k（z = (DVOL − 均值_W) / 标准差_W）。
+    DVOL 取不到（离线 / 非时间索引）时 ② 不触发，只剩 ①，绝不补造数据。测试可用 p["_dvol_values"] 注入与 idx 对齐的真实序列。"""
+    from . import dvol as DV
+    L, X, br = int(p["lookback"]), float(p["drop"]), float(p["breadth"])
+    H, W, k = int(p["hold"]), int(p["dvol_window"]), float(p["dvol_z"])
+    src = ind.get("perp") or ind["spot"]
+    C = np.column_stack([src[s]["close"].astype(float).to_numpy() if s in src else _c(ind["spot"][s]).to_numpy() for s in syms])
+    n = len(C)
+    R = np.full_like(C, np.nan)
+    if n > L:
+        R[L:] = np.log(C[L:]) - np.log(C[:-L])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        b = np.nanmean(R, axis=1)
+    ev = (b <= -X) & ((R < 0).sum(axis=1) >= int(np.ceil(br * len(syms))))
+    if "_dvol_values" in p:
+        x = pd.Series(np.asarray(p["_dvol_values"], dtype=float))
+        z = ((x - x.rolling(W).mean()) / x.rolling(W).std()).to_numpy()
+    else:
+        ms = DV.idx_to_ms(idx)
+        z = np.full(n, np.nan)
+        if ms is not None and n:
+            try:
+                z = DV.zscore_on(ms, DV.series(str(p.get("dvol_currency", "ETH")), start_ms=int(ms[0]) - (W + 24) * 3_600_000), W)
+            except Exception:
+                z = np.full(n, np.nan)
+    with np.errstate(invalid="ignore"):
+        ev = ev | (np.nan_to_num(z, nan=-np.inf) >= k)
+    st = np.zeros(n, dtype=int)
+    i = 0
+    while i < n:
+        if ev[i]:
+            st[i:min(n, i + H)] = 1
+            i += H
+        else:
+            i += 1
+    return {s: st.copy() for s in syms}
+
+
 # 每套策略对执行层（cfg.strategy）的覆盖：候选策略一律关闭 #1 专用的趋势过滤 / BTC 体制 / 确认根数（信号自带逻辑）
 _NEUTRAL = {"trend_ma": 0, "btc_regime_ma": 0, "confirm_bars": 1, "short_breaker_bars": 0, "chop_n": 0, "elder_short_gate_n": 0}
 
@@ -268,6 +310,15 @@ STRATEGIES: list[dict] = [
      "params": {"lookback": 24, "drop": 0.10, "hold": 24, "breadth": 0.875}, "signal": sig_capitulation,
      "overrides": {"interval": "1h", "atr_stop_mult": 50.0, "name_vol_target": 0.0, "slow_ma": 150},
      "risk_overrides": {"max_weight_per_name": 0.0625, "max_risk_per_trade": 0.05}},
+    {"id": "capitulation_dvol_1h", "no": 14, "name": "投降 ∪ ETH 隐含波动冲击反弹（短线 1h，候选）", "interval": "1h", "kind": "短线·事件",
+     "desc": "1 小时 K 线：#13 投降事件（篮子 24h 对数收益 ≤ −10% 且至少 7/8 下跌）或 Deribit 官方 ETH DVOL 已收盘小时线 168h z 分数 ≥ 3，"
+             "任一成立 → 下一根开盘等权做多全部币，持有 48 小时离场，持仓期内不重复触发。单币名义上限 6.25% 权益（8 币合计约 0.5×），"
+             "50×ATR 灾难线。OKX 官方 1h 永续子账本 train / test / 2026-03 后 +191% / +83% / +22.8%（#13 规则 +29% / +59% / +3.5%），"
+             "叠加 #1 后三段 Sharpe 0.72 / 1.48 / 2.28 → 1.47 / 2.15 / 2.66（docs/STRATEGY_FORMULAS.md「投降 ∪ DVOL」两节）。",
+     "params": {"lookback": 24, "drop": 0.10, "hold": 48, "breadth": 0.875, "dvol_currency": "ETH", "dvol_window": 168, "dvol_z": 3.0},
+     "signal": sig_capitulation_dvol,
+     "overrides": {"interval": "1h", "atr_stop_mult": 50.0, "name_vol_target": 0.0, "slow_ma": 150},
+     "risk_overrides": {"max_weight_per_name": 0.0625, "max_risk_per_trade": 0.05}},
 ]
 BY_ID = {s["id"]: s for s in STRATEGIES}
 
@@ -323,6 +374,13 @@ VERDICTS.setdefault("capitulation_1h", {"status": "观察", "reason": ("强观�
     "压力费 15.1 bps×2 + 资金费：训练 +173 / 测试 +191 bps/笔（28 / 18 次），每年为正；未调参 new8 训练 +240 / 测试 +126；"
     "止损全部变差；叠加默认 0.5× 后深历史 Sharpe 0.62 → 0.92、调参窗 1.48 → 1.85、回撤略浅；2026-03 后只有 1 次事件，无法逐月检验。"
     "进影子子账本做真实纸面前向检验。CSV：output/research_basket_capitulation_validation.csv、output/research_basket_capitulation_combo_default.csv。")})
+
+VERDICTS.setdefault("capitulation_dvol_1h", {"status": "观察", "reason": ("强观察（短线，#13 升级候选）。"
+    "2026-11-14 研究（scratch/dvcap、scratch/dvstack）：OKX 官方 1h 永续 d8 子账本 train / test / post +191% / +83% / +22.8%，日 Sharpe 1.26 / 1.47 / 1.82；"
+    "未调参 new8 +185% / +76% / +43%；Gate 2025-09 起 +35%；触发平移 720h 安慰剂 +11% / −21% / −3%；2022–2026 每年为正；"
+    "post 逐月 4 好 / 3 小亏 / 2 空仓。叠加 #1（w 0.5）三段 Sharpe 0.72 / 1.48 / 2.28 → 1.47 / 2.15 / 2.66，压力费同向。"
+    "进影子子账本做真实纸面前向检验（DVOL 实时取 Deribit 公共接口）。"
+    "CSV：output/research_dvol_capitulation_combined_subbook_1h.csv、output/research_dvol_cap_overlay_on_4h_book.csv。")})
 
 
 def strategy_cfg(cfg: dict, sid: str) -> dict:
