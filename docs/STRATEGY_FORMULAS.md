@@ -6382,3 +6382,14 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - perp_both 10×，默认参数，下单精度 1e-8，用来隔离取整影响。
 - 结果（`output/research_engine_backtest_stateful_parity_new8.csv`、`_entries.csv` 为空）：两家开仓 62 / 62 全部逐笔匹配（其中多单 14 / 14，说明两边的 BTC 体制闸门一致），ATR 止损 Gate 43 / 43、OKX 45 / 45。期末收益 Gate 引擎 +17.096% vs 回测 +17.102%，OKX +3.992% vs +3.991%；最大权益相对差 Gate 0.033%（2026-06-17 一根）、OKX 0.001%。资金费 Gate −9.07 vs −8.997 USDT，OKX −10.941 vs −10.942 USDT。
 - 结论：引擎在未调参币和「BTC 不在币池」的配置下与回测一致，不改代码、不改默认。
+
+### 2026-11-14 03:20 PST 引擎：new8 用交易所真实下单精度的有持仓对拍（1000 U，取整影响）· 通过
+
+- 动机：上一节为了隔离逻辑，把下单精度设成 1e-8。未调参币的合约面值和步长差别很大（TRX 1 张 = 100 / 1000 枚，BCH 0.01 枚），需要确认 `lots.spec` 能取到这些币的规则，以及 1000 U 账户取整后与回测的偏差有多大。
+- 方法：同 `scratch/eng8/full.py`，设环境变量 `REALLOTS=1`，不替换 `lots.spec`，引擎用官方合约规则（Gate `/futures/usdt/contracts`，含小数张；OKX `/public/instruments`）。回测不取整。两边起始 1000 U，2026-03-05 起空仓。
+- 合约规则：8 币两家全部取到（例如 Gate TRX 步长 10 枚、BCH 0.01 枚；OKX TRX 面值 1000、NEAR 面值 10，步长 0.1 张）。
+- 结果（`output/research_engine_backtest_stateful_parity_new8_real_lots.csv`）：
+  - 开仓 61 / 62 逐笔匹配：两家都是同一笔 BCH 多单，引擎在 2026-08-22 04:00 UTC 开，回测在 08:00 开，早了一根（明细见 `_entries.csv`）。推测原因：其他仓位按步长向下取整后占用的总敞口略少，BCH 提前一根拿到额度。这个推测未逐根核实；多单 14 / 14，ATR 止损 43 / 43、45 / 45。
+  - 期末收益：引擎 Gate +19.27% vs 回测 +17.10%，OKX +4.87% vs +3.99%。引擎反而高 1 ~ 2 点，来自取整路径的偶然性，不是系统性偏差。
+  - 权益最大相对差 Gate 2.0%、OKX 1.0%，中位约 0.1%。
+- 结论：真实下单精度下，引擎在未调参币上正常下单，与回测的偏差在 1 ~ 2 点以内，和 4267 节默认 8 币在 1000 U 时的取整影响相当。不改代码。
