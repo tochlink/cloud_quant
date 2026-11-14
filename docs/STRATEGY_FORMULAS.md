@@ -7233,3 +7233,22 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - t 值普遍 < 2.3，事件少。
 - 结论：**观察（有真实信息但样本小），不改默认、不实现**。候选规格：ETH 或 BTC DVOL z168 ≥ 3 → 下一根开盘等权做多 8 币永续，持有 48h。下一步：做与 #13 合并的子账本、同时持仓时的处理、按年和按月稳定性，再决定是否加纸面影子。
 - CSV（不入库）：`output/research_dvol_implied_vol_event_1h.csv`（主网格 + 安慰剂）、`output/research_dvol_implied_vol_event_1h_nbhd.csv`（邻域 / 无条件基准 / 剔除 #13）、`output/deribit_dvol_1h.csv`；脚本 `scratch/dvol/`（fetch.py、run.py、chk.py，需在 scratch/capit 下运行）。
+
+## 长线新族：Deribit DVOL 隐含波动率体制闸门（4h 默认书，只拦新开仓；2026-11-14 ~15:10 PST，研究，不改默认；否决）
+
+- 查重：DVOL 此前只用于 1h 短线事件（14:55 节）；长线书从未用隐含波动率做闸门。价格合成的恐慌指数、波动分位、借贷利率闸门属于不同数据或不同族。
+- 公式（因果）：DVOL 小时线收盘后才可用（时间戳 + 1h），按 4h 开盘前向填充。
+  - 特征：`z_W = (DVOL − 均值_W) / 标准差_W`（W = 30 / 90 天，阈值 k = 1 / 1.5 / 2）；`chg_W = ln` 变化（7 / 30 天，阈值 0.2 / 0.4）；365 天分位（映射到 0.8 / 0.9 分位）。
+  - 闸门（只拦新开仓，已有同向仓保留）：
+    - long：高 DVOL 时不开多；short：低 DVOL 时不开空；
+    - short_hi：高 DVOL 时不开空；long_lo：低 DVOL（市场自满）时不开多；
+    - 另有 hold 版本。
+  - 信号源 BTC / ETH 各一套；安慰剂为平移 90 天。
+- 数据：OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-01→），官方 4h；默认参数，同脚本基线。
+- 结果：
+  - 没有任何格子在 3 套数据的 deep、tune_pre 两段同时稳定更好，且 2026-03 后不变差。
+  - BTC short_hi W90 z1.0（DVOL 高时不开空）deep 段 +12 ~ +22 点、tune_pre +15 ~ +28 点，post 持平，但只拦了约 5 笔交易。邻格 z1.5 deep 段 −12 ~ −17 点，ETH 同格也更差，属于孤立尖峰。
+  - long_lo（低 DVOL 不开多）deep 段 +18 ~ +24 点，但 tune_pre 或 post 段 −7 ~ −58 点。
+  - 高 DVOL 不开多：post 段 −2 ~ −4 点。
+- 结论：**否决**。长线 4h 书用隐含波动率做闸门没有稳定信息，DVOL 只保留在短线事件（14:55 节，观察）。不再重测 DVOL 长线闸门。
+- CSV（不入库）：`output/research_dvol_regime_gate_4h_BTC.csv`、`output/research_dvol_regime_gate_4h_ETH.csv`；脚本 `scratch/dvreg/run.py`（环境变量 DVSRC=BTC/ETH）。
