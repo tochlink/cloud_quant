@@ -26,7 +26,7 @@ mimetypes.add_type("text/css", ".css")
 
 from . import __version__, db, engine, realtime, stream, vault, worker
 from . import settings as S
-from .backtest import run_backtest
+from .backtest import btc_spot_for_regime, run_backtest
 from . import equity_series
 from .live import guard
 from .logsafe import setup_logging
@@ -1010,8 +1010,12 @@ def backtest(body: dict = Body(default={})):
             fund, fund_info = LV.funding_series(cfg["venue"], list(frames["perp"]), t0, fetch=True)
         except Exception as e:  # noqa: BLE001
             fund_info = {"error": str(e)[:200]}
+        # 标的里没有 BTCUSDT 时单独取 BTC 现货供体制过滤（与模拟盘 / 实盘引擎同口径）
+        btc_df, btc_err = btc_spot_for_regime(cfg, frames, bars)
+        if btc_err:
+            errs = {**errs, "BTCUSDT(regime)": btc_err}
         try:
-            res = run_backtest(frames, cfg, funding=fund)
+            res = run_backtest(frames, cfg, funding=fund, btc_spot=btc_df)
         except ValueError as e:
             raise HTTPException(502, f"{e}；行情错误：{errs}") from e
         prov = mcache.data_provenance(frames)
