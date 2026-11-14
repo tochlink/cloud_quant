@@ -45,6 +45,11 @@ DEFAULTS: dict[str, Any] = {
         # （output/research_long_history_regime_filter_and_knobs_50_150.csv、research_long_history_btc_regime_fee_stress.csv、
         #   research_long_history_btc_regime_walkforward.csv）
         "btc_regime_ma": 1200,
+        # 2026-11-14：可选 BTC 体制线多周期投票（默认 0 = 单线 SMA_N）。k > 0 时改为：BTC 收盘低于 N×(0.5, 0.75, 1, 1.25, 1.5)
+        # 五条 SMA（N = 1200 → 600 / 900 / 1200 / 1500 / 1800）中 ≥ k 条才拦新开多。深历史未见段 k = 3：日 Sharpe OKX8 / Gate8 / OKX7
+        # 0.81 / 0.31 / 0.80（单线 0.71 / 0.09 / 0.77），压力费同向、回撤更浅，2026-03 后与单线逐位相同；但差异只来自少数几次体制切换，
+        # 强观察、未改默认（scratch/drgv/run.py、output/research_deep_history_btc_regime_vote.csv）。k = 1 或 ≥ 4 均已否决。
+        "btc_regime_vote_k": 0,
         # 2026-11-11：可选震荡指数入场闸门（默认关闭）。上一根 CHOP_n > chop_max 时不新开 / 反手开仓，离场、止损、调仓不变。
         # 严格月度 walk-forward（候选 off + n{42,56,70}×T{48,50,52}，回看 3/6/12 个月按 Calmar/Sharpe 选）：Gate/OKX、真实与压力费率
         # 24 组全部 ≥ 固定关闭、回撤低 0.5–5 个百分点，但收益主要来自 2026-03 之前，n42 固定参数整段明显差于关闭（参数敏感），
@@ -273,6 +278,11 @@ def validate(s: dict) -> dict:
     st["btc_regime_ma"] = int(st.get("btc_regime_ma", 0) or 0)
     if st["btc_regime_ma"] and not 50 <= st["btc_regime_ma"] <= 2000:
         raise ValueError("BTC 熊市过滤 SMA 需为 0（关闭）或 50–2000")
+    st["btc_regime_vote_k"] = int(st.get("btc_regime_vote_k", 0) or 0)
+    if not 0 <= st["btc_regime_vote_k"] <= 5:
+        raise ValueError("BTC 体制线投票门槛需为 0（单线）或 1–5")
+    if st["btc_regime_vote_k"] and st["btc_regime_ma"] and round(st["btc_regime_ma"] * 1.5) > 2000:
+        raise ValueError("BTC 体制线投票最长一条为 1.5×N，需 ≤ 2000 根（N ≤ 1333）")
     st["chop_n"] = int(st.get("chop_n", 0) or 0)
     if st["chop_n"] and not 5 <= st["chop_n"] <= 300:
         raise ValueError("震荡指数周期需为 0（关闭）或 5–300")

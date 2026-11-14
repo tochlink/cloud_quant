@@ -89,13 +89,26 @@ def trend_ok(sig: int, close: float, tma: float, trend_ma: int) -> bool:
     return close > tma if sig > 0 else close < tma
 
 
-def btc_regime_blocks_long(close, n: int):
+REGIME_VOTE_FRACS = (0.5, 0.75, 1.0, 1.25, 1.5)
+
+
+def regime_vote_lengths(n: int) -> list[int]:
+    """多周期投票用的 5 条 SMA 长度：n × (0.5, 0.75, 1, 1.25, 1.5)，n = 1200 时为 600 / 900 / 1200 / 1500 / 1800。"""
+    return [int(round(int(n) * f)) for f in REGIME_VOTE_FRACS]
+
+
+def btc_regime_blocks_long(close, n: int, vote_k: int = 0):
     """BTC 熊市体制过滤（仅拦新开多单）：BTC 现货收盘 < SMA_n 时为 True。
     n = 0 关闭；SMA 尚未形成（历史不足 n 根）时为 False（不拦），与研究口径一致。
+    vote_k > 0（可选，默认 0 = 单线）：改为多周期投票——收盘低于 regime_vote_lengths(n) 中 ≥ vote_k 条 SMA 时为 True，
+    未形成的 SMA 不计票（研究：docs/STRATEGY_FORMULAS.md 2026-11-14 00:35「多周期投票」，k = 3 为强观察）。
     调用方用「上一根已收盘 K 线」的值决定本根是否允许开多（因果）。"""
     c = pd.Series(close, dtype=float)
     if not n:
         return pd.Series(False, index=c.index)
+    if vote_k and int(vote_k) > 0:
+        votes = sum((c < c.rolling(m).mean()).fillna(False).astype(int) for m in regime_vote_lengths(n))
+        return votes >= int(vote_k)
     return (c < c.rolling(int(n)).mean()).fillna(False)
 
 

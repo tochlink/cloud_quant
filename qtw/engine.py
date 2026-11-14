@@ -21,7 +21,7 @@ from .paths import OUTPUT_DIR
 from .backtest import short_breaker
 from .risk import cap_at_entry, scale_to_room, size
 from . import leverage as LV
-from .strategy import bar_close_equity, btc_regime_blocks_long, combine, es_tail_mult, hedge_pair_mask, side_crowd_scales, indicators, last_cross, ls_parity_scales, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
+from .strategy import bar_close_equity, btc_regime_blocks_long, regime_vote_lengths, combine, es_tail_mult, hedge_pair_mask, side_crowd_scales, indicators, last_cross, ls_parity_scales, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
 from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
@@ -316,14 +316,16 @@ def _btc_regime_state(cfg: dict) -> dict:
     BTC K 线取不到时不拦（并返回错误文本），历史不足 N 根时同样不拦。"""
     st = cfg["strategy"]
     n = int(st.get("btc_regime_ma", 0) or 0)
+    vk = int(st.get("btc_regime_vote_k", 0) or 0)
     if not n:
-        return {"n": 0, "blocked": False, "error": ""}
+        return {"n": 0, "vote_k": 0, "blocked": False, "error": ""}
+    need = max(regime_vote_lengths(n)) if vk > 0 else n
     try:
-        df = mcache.candles(cfg["venue"], "BTCUSDT", st["interval"], n + 5, "spot")
-        b = btc_regime_blocks_long(df["close"], n)
-        return {"n": n, "blocked": bool(b.iloc[-1]) if len(b) else False, "error": ""}
+        df = mcache.candles(cfg["venue"], "BTCUSDT", st["interval"], need + 5, "spot")
+        b = btc_regime_blocks_long(df["close"], n, vk)
+        return {"n": n, "vote_k": vk, "blocked": bool(b.iloc[-1]) if len(b) else False, "error": ""}
     except Exception as e:  # noqa: BLE001 —— 真实错误原样上报
-        return {"n": n, "blocked": False, "error": str(e)}
+        return {"n": n, "vote_k": vk, "blocked": False, "error": str(e)}
 
 
 BARS_PER_YEAR_MS = 365 * 24 * 3600 * 1000

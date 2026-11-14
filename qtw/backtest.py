@@ -182,7 +182,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     RGL = np.zeros(len(idx), dtype=bool)
     if rg_n and "BTCUSDT" in spot_d:
         b = spot_d["BTCUSDT"].sort_values("open_time").set_index("open_time")
-        RGL = btc_regime_blocks_long(b["close"], rg_n).reindex(idx).fillna(False).to_numpy(dtype=bool)
+        RGL = btc_regime_blocks_long(b["close"], rg_n, int(st.get("btc_regime_vote_k", 0) or 0)).reindex(idx).fillna(False).to_numpy(dtype=bool)
     MK = {"long": "perp" if t_mode == "perp_both" else "spot", "short": "perp"}
     # 可选动态多空风险平价 up（ls_parity_cap，0 = 关闭）：按上一根已收盘合成信号把较小一侧信号书的单币风险 / 权重乘数放大到与较大一侧相同（≤ cap 倍）
     lsp_c = float(st.get("ls_parity_cap", 0) or 0)
