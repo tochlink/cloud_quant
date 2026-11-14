@@ -6,6 +6,7 @@ import logging
 import math
 import threading
 
+import numpy as np
 import pandas as pd
 
 from . import settings as S
@@ -20,7 +21,7 @@ from .paths import OUTPUT_DIR
 from .backtest import short_breaker
 from .risk import cap_at_entry, scale_to_room, size
 from . import leverage as LV
-from .strategy import bar_close_equity, btc_regime_blocks_long, combine, indicators, last_cross, ls_parity_scales, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
+from .strategy import bar_close_equity, btc_regime_blocks_long, combine, hedge_pair_mask, indicators, last_cross, ls_parity_scales, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
 from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
@@ -393,6 +394,38 @@ def apply_ls_parity(rows: list[dict], cap: float, eq: float, rk: dict, atr_mult:
                       "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
 
 
+def apply_hedge_pair(rows: list[dict], perp_close: dict, window: int, corr_min: float, mult: float, eq: float, rk: dict,
+                     atr_mult: float) -> None:
+    """可选多空对冲对乘数（strategy.hedge_pair_w，0 = 关闭），与回测同口径（qtw.strategy.hedge_pair_mask）：交易池内有信号的币里，
+    若另一币持反向信号、且两币最近 window 根永续对数收益相关 ≥ corr_min，则该币 row["name_vol_mult"] × mult（在 apply_ls_parity 之后，
+    乘数可叠加）。perp_close：{symbol: 以开盘时间为索引的永续收盘价 Series}，按开盘时间内连接对齐；未持仓行的建议仓位按新乘数重算。
+    关闭、对齐后历史不足或不足两币时不改任何字段。"""
+    if not window or window < 2 or mult == 1.0:
+        return
+    live = [r for r in rows if r.get("in_universe") and not r.get("error") and r.get("signal") in (1, -1)
+            and r.get("name_vol_mult") is not None and r["symbol"] in perp_close]
+    if len(live) < 2:
+        return
+    J = pd.DataFrame({r["symbol"]: perp_close[r["symbol"]] for r in live}).dropna()
+    if len(J) < window + 1:
+        return
+    J = J.iloc[-(window + 1):]
+    n = len(J)
+    m = hedge_pair_mask({r["symbol"]: np.full(n, int(r["signal"])) for r in live}, {s: J[s].to_numpy() for s in J}, window, corr_min)
+    for r in live:
+        hit = bool(m[r["symbol"]][-1])
+        r["hedge_pair"] = hit
+        if not hit:
+            continue
+        r["name_vol_mult_pre_hedge"] = r["name_vol_mult"]
+        r["name_vol_mult"] = r["name_vol_mult"] * mult
+        if r.get("stop_source") == "suggested" and r.get("ref_price"):
+            z = size(side=r["side"], equity=eq, price=r["ref_price"], atr=r["atr"], max_risk=rk["max_risk_per_trade"] * r["name_vol_mult"],
+                     max_weight=rk["max_weight_per_name"] * r["name_vol_mult"], atr_mult=atr_mult)
+            r.update({"target_notional_usdt": z.notional, "target_qty": z.qty, "target_weight": z.weight,
+                      "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
+
+
 def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     cfg = vol_scaled_cfg(cfg, book(cfg))
     st, rk = cfg["strategy"], cfg["risk"]
@@ -408,6 +441,9 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         need = max(need, nv_l + 5)  # 单币波动率封顶需要 lookback+1 根收盘
     if st.get("short_breaker_bars"):
         need = max(need, 400)  # 影子账本需要足够历史
+    hp_w = int(st.get("hedge_pair_w", 0) or 0)
+    if hp_w >= 2:
+        need = max(need, hp_w + 5)  # 对冲对乘数需要 W+1 根对齐的永续收盘
     bk = book(cfg)
     syms = listed_symbols(cfg, bk)
     frames, errs = mcache.many(venue, syms, st["interval"], need)
@@ -588,6 +624,9 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
                     "position_side": pos.side if pos else "flat"})
         rows.append(row)
     apply_ls_parity(rows, float(st.get("ls_parity_cap", 0) or 0), eq, rk, st["atr_stop_mult"])
+    if hp_w >= 2:
+        pc = {s: df.set_index("open_time")["close"].astype(float) for s, df in (frames.get("perp") or {}).items() if df is not None and len(df)}
+        apply_hedge_pair(rows, pc, hp_w, float(st.get("hedge_pair_c", 0.5)), float(st.get("hedge_pair_h", 1.5)), eq, rk, st["atr_stop_mult"])
     # 待入场标的：按剩余总敞口等比缩放后的建议仓位
     pend = {r["symbol"]: r for r in rows if r.get("state") == "entry_pending"}
     alloc = scale_to_room({s: r["target_notional_usdt"] for s, r in pend.items()},

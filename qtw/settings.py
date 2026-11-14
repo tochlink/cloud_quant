@@ -70,6 +70,13 @@ DEFAULTS: dict[str, Any] = {
         # C3 Gate +228.7% / OKX +235.8%（基线 +163.3% / +165.4%），Sharpe 2.01 / 2.04，回撤 −16.0%，2026-03 后两所 6/9 月更好；
         # C 越大越好、无内部最优，超额集中在 2025-10，未改默认。0=关闭，建议试用 2–3
         "ls_parity_cap": 0.0,
+        # 2026-11-13：可选多空对冲对乘数（默认关闭；回测与模拟盘 / 实盘定仓同口径，engine.apply_hedge_pair）。上一根收盘若另一币持反向信号、
+        # 且两币最近 hedge_pair_w 根永续对数收益相关 ≥ hedge_pair_c，则该币单笔风险 / 单币权重乘数 × hedge_pair_h（总敞口上限不变）。
+        # 研究（scratch/hpn、scratch/hpph）：单独使用 12 个月 walk-forward 两所都输、相位检验 Sharpe 0–1/4，不建议单独用；
+        # 叠加 ls_parity_cap 3 + 单笔风险 3% + 组合波动 50%（策略页 #9）时 4 个 4h 相位收益与 2026-03 后都更高。0=关闭，建议 W180 c0.5 h1.5
+        "hedge_pair_w": 0,
+        "hedge_pair_c": 0.5,
+        "hedge_pair_h": 1.5,
         # 2026-11-13：可选跨根分批入场（默认关闭，仅回测生效）。新确认入场在第 i 根开盘只开计划名义的 f1，第 i+1 根开盘补满到计划名义，
         # 止损保持首笔；反手仓不分批。研究（scratch/xse_*.py、scratch/phc4–6）：多空永续 10× 下 f1 0.10–0.35 在 4 个 4h 相位 × 两所 × 真实 / 压力费率
         # 全部不输（f1 0.10 平均 +4.8 点，Sharpe +0.06），固定 f1 0.10 月度样本外 32/32 胜；但 2026-03 后逐月只约 5/8 更好，未改默认。
@@ -278,6 +285,15 @@ def validate(s: dict) -> dict:
     st["ls_parity_cap"] = float(st.get("ls_parity_cap", 0) or 0)
     if st["ls_parity_cap"] and not 1 <= st["ls_parity_cap"] <= 10:
         raise ValueError("多空风险平价放大上限需为 0（关闭）或 1–10")
+    st["hedge_pair_w"] = int(st.get("hedge_pair_w", 0) or 0)
+    if st["hedge_pair_w"] and not 20 <= st["hedge_pair_w"] <= 1000:
+        raise ValueError("对冲对相关窗口需为 0（关闭）或 20–1000 根")
+    st["hedge_pair_c"] = float(st.get("hedge_pair_c", 0.5) if st.get("hedge_pair_c") is not None else 0.5)
+    if not -1 <= st["hedge_pair_c"] <= 1:
+        raise ValueError("对冲对相关阈值需在 −1 到 1 之间")
+    st["hedge_pair_h"] = float(st.get("hedge_pair_h", 1.5) if st.get("hedge_pair_h") is not None else 1.5)
+    if not 0.25 <= st["hedge_pair_h"] <= 3:
+        raise ValueError("对冲对乘数需在 0.25–3 之间")
     st["staged_entry_f1"] = float(st.get("staged_entry_f1", 0) or 0)
     if st["staged_entry_f1"] and not 0.05 <= st["staged_entry_f1"] <= 0.95:
         raise ValueError("分批入场首笔比例需为 0（关闭）或 0.05–0.95")

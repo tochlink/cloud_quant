@@ -138,6 +138,36 @@ def ls_parity_scales(sig: dict, nvm_long: dict, nvm_short: dict, cap: float) -> 
     return ls, ss
 
 
+def hedge_pair_mask(sig: dict, close: dict, window: int, corr_min: float) -> dict:
+    """可选多空对冲对乘数（hedge_pair_w，0 = 关闭）的掩码。第 t 根收盘：若存在另一币 q，合成信号 sig[q][t] = −sig[s][t] ≠ 0，
+    且两币最近 window 根永续对数收益的样本相关 ρ_{s,q}[t]（pandas rolling corr，含第 t 根）≥ corr_min，则 s（与 q）为「对冲腿」= True。
+    调用方第 t+1 根把对冲腿的单笔风险 / 单币权重乘数 × hedge_pair_h（与 name_vol_mult、ls_parity_scales 同口径，总敞口上限不变）。
+    close[s] 必须与 sig[s] 按同一时间轴对齐。研究：docs/STRATEGY_FORMULAS.md「对冲对乘数」（scratch/hpn、scratch/hpph）。"""
+    syms = list(sig)
+    n = len(np.asarray(sig[syms[0]])) if syms else 0
+    out = {s: np.zeros(n, dtype=bool) for s in syms}
+    w = int(window or 0)
+    if w < 2 or len(syms) < 2:
+        return out
+    G = {s: np.asarray(sig[s]) for s in syms}
+    R = {}
+    for s in syms:
+        c = np.asarray(close[s], dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            R[s] = pd.Series(np.r_[np.nan, np.diff(np.log(c))])
+    for i, a in enumerate(syms):
+        for b in syms[i + 1:]:
+            opp = G[a] * G[b] == -1
+            if not opp.any():
+                continue
+            rho = R[a].rolling(w, min_periods=w).corr(R[b]).to_numpy()
+            with np.errstate(invalid="ignore"):
+                hit = opp & (rho >= float(corr_min))  # 历史不足（NaN）→ False
+            out[a] |= hit
+            out[b] |= hit
+    return out
+
+
 def name_vol_mult(close, target: float, lookback: int, bars_per_year: float = 2190) -> np.ndarray:
     """单币波动率封顶（可选，name_vol_target = 0 关闭）：σ_t = 最近 lookback 根对数收益的样本标准差 × √bars_per_year
     （含第 t 根收盘），返回逐根 m_t = min(1, target / σ_t)；调用方在第 t+1 根用 m_t 乘单笔风险上限与单币权重上限（只缩不放）。
