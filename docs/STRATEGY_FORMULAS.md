@@ -7097,3 +7097,16 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - post 只有 1–2 次事件，无法检验。
 - 结论：双篮子确认（默认 8 + new8 同时投降）列**弱观察**，不实现：增益来自剔除 3–4 次事件，不能跨所检验；16 币交易池否决。#13 维持默认 8 币触发 / 交易。前向记录：每次 #13 触发时同时记 new8 篮子是否也满足条件。
 - CSV（不入库）：`output/research_capitulation_16name_universe_1h.csv`；脚本 `scratch/cap16/run.py`。
+
+## 长线新族：OKX 官方 USDT 借贷利率（杠杆需求）体制闸门（4h 默认书，2026-11-14 ~13:50 PST，研究，不改默认；弱观察，不实现）
+
+- 查重：文档 / `output/research_*.csv` 无 lending / 借贷利率 / 保险基金；此前的拥挤度信息源是资金费、基差、OI、多空比、稳定币溢价，没用过现货杠杆借贷利率。
+- 数据：OKX 官方公共接口 `GET /api/v5/finance/savings/lending-rate-history?ccy=USDT`（逐小时 `lendingRate` 年化，2021-12-14 → 2026-11-14，43108 条，脚本 `scratch/lend/dl.py`，原始 CSV `scratch/lend/okx_usdt_lending_rate_1h.csv`，不入库）。Gate 没有可回溯的公共借贷利率历史，所以利率只用 OKX 的，作为全市场信号同时作用于 OKX 和 Gate 两所 K 线回测。K 线为官方 4h：OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-01→）。
+- 公式：`r` = 截至第 i 根开盘的最近一小时 lendingRate；`z = (r − mean_{W 天}) / std_{W 天}`，W 30 / 90；`chg = ln r_t − ln r_{t−W 天}`，W 7 / 30。long：z > q 时拦新开多（已持多不动）；short：z < −q 拦新开空；short_hi：z > q 拦新开空；long_lo：z < −q 拦新开多；long_hold：z > q 时多单持仓也平掉；q 1 / 1.5 / 2（chg 版 0.5 / 1）。安慰剂 = 利率序列平移 90 天。生产 `run_backtest(signals=...)`，perp_both 10× + 官方资金费 + BTC 体制，实费。
+- 结果（深历史未见 / 调参前段 / post，收益 %）：
+  - 基线：OKX d8 +35.1 / +85.1 / +59.9，Gate d8 −3.6 / +84.3 / +60.3，OKX d7 +65.3 / +92.9 / +50.8。
+  - long W30 z1.0：+46.8 / +95.1 / +41.9，+4.5 / +92.4 / +42.6，+84.8 / +102.2 / +37.6；深历史 Sharpe 0.71→0.85、0.09→0.21、0.77→0.89。W30 z1.5 / z2.0、W90 z1.0 / z1.5 同向，三组样本在深历史和调参前段都更好；平移安慰剂基本等于基线（+34.9 / +0.3 / +65.0）。
+  - 但 2026-03 后全部明显更差（−12 ~ −25 个点），逐月只赢 0–2/9；long_hold W30 z1.5 深历史最好（+53.0 / +18.8 / +95.9），post 也输（Gate +50.8 vs +60.3）。
+  - short / short_hi / long_lo 基本无影响或变差；chg 版不稳（调参前段多为变差）。
+- 结论：**弱观察，不实现、不改默认**。「USDT 借贷利率异常高时不追多」在深历史和调参前段的三组样本上都成立，也优于平移安慰剂，但 2026-03 后失效（逐月 ≤ 2/9），不满足改默认规则。每月复查 post 段；不再重测 chg / short 侧变体。
+- CSV（不入库）：`output/research_usdt_lending_rate_regime_4h.csv`；脚本 `scratch/lend/run.py`。
