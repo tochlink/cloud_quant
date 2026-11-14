@@ -7015,3 +7015,18 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（压力费，core16）：carry 只在 tune 段为正（Sharpe 约 +0.5 ~ +2.0，例 OKX L7 R7 +42%），deep 未见段几乎全负（OKX L7 R7 −32%，Gate −24%），post 段 core16 两家都负（OKX −7 ~ −21%，Gate −2 ~ −10%）；fall 未调参币池 post 为正（Sharpe 0.5 ~ 1.6）但 deep 段约 0、OKX 负。真实费下 carry 深历史 Sharpe>0 的格只占 35%，post 51%。与 #1 相关 ≈ 0，0.5 权重合成在 tune 段提升 Sharpe，但 deep 与 post 段都拉低（OKX post 2.17 → 1.6 ~ 1.96，逐月更好只有 2–5 / 9）。anti 全面更差。随机安慰剂最大值与真实格同量级。
 - 结论：否决，不进观察名单，不实现。截面资金费溢价只在 2024-10→2026-03 一段牛市里成立，不跨深历史与 2026-03 后。永不重测本族（含 L / R / q 变体）。
 - CSV：`output/research_xsec_funding_carry_sleeve_1d.csv`；脚本 `scratch/xscarry/run.py`。
+
+## 短线新族：1h 期现基差极端事件（永续反向 / 顺势单边，或空永续 + 多现货收敛套；2026-11-14 ~13:05 PST，研究，不改默认；否决，不实现）
+
+- 查重：期现基差此前只当作 4h 默认账本的新开仓闸门测过（2026-11-10 两次），季度交割基差闸门也测过；「1h 基差极端本身作为短线交易事件」与「期现收敛套」从未测过。
+- 公式（因果）：同一交易所 1h 收盘基差 b_t = 永续收盘 / 现货收盘 − 1；z_t = (b_t − mean_168(b)) / std_168(b)。|z_t| ≥ k（k = 2 / 3 / 4）时在下一根开盘入场、持有 H = 4 / 12 / 24 / 48 小时，同币不重叠，要求期间 K 线连续：
+  - fade：z > 0（溢价过高）空永续、z < 0 多永续，计官方资金费；follow 为反向；
+  - arb：z > 0 空永续 + 多现货（z < 0 反之），收益 = 两腿价差变化 + 资金费，成本 = 永续 2×taker + 现货 2×taker。
+  - 安慰剂：入场整体后移 168 小时。
+- 数据：OKX 官方 1h 永续 + 本轮新取的 OKX 官方 1h 现货（history-candles，8 币，2022-01-29 → 2026-11-14，BNB 现货从 2023 起）；Gate 官方 1h 永续 + Gate 官方 1h 现货（最近 9000 根，2025-10 起）。资金费沿用 Gate / OKX 官方口径。切分 deep（< 2024-10-21）/ tune / post（≥ 2026-03-05）。
+- 结果（压力费）：
+  - arb：每笔毛利只有 +1 ~ +23 bps（k4 深历史最高 17 ~ 23 bps），四腿成本 70 bps，所有格 −47 ~ −70 bps/笔。
+  - fade：OKX 所有 k / H 在 post 段都为负（k4：−40 ~ −171 bps/笔，H4 / H12 的 t 为 −2.1 / −2.2），deep 段 −58 ~ +2；Gate k4 H24 tune +106 bps 但只有 22 笔、t 0.85，post 段 +7。168 小时后移安慰剂与真实格同量级、经常更好。
+  - follow：几乎全负，只有 OKX k4 H48 tune / post 为正，而且 deep 段 −187 bps，不稳。
+- 结论：否决，不实现，默认不变。1h 层面基差偏离太小，收敛套付不起现货手续费；单边方向上的信息量不比安慰剂多。以后不再重测本族。
+- CSV：`output/research_basis_extreme_1h.csv`（汇总）、`output/research_basis_extreme_1h_events.csv`（逐事件）；脚本 `scratch/basis1h/`（fetch.py、run.py）。
