@@ -7341,3 +7341,18 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 但不稳：同一事件 H12 / H24 在 train / test 为负；邻格 z ≤ −2 全段为负或接近 0，S6 平滑版 post 为负，z720 版剔除 #14 后 train 为负；train 段（最长、事件最多）只有约 +10 bps。BTC 溢价与 Δ24 事件无一致方向。
 - 结论：**否决**为独立短线策略，不实现。ETH Coinbase 折价 z168 ≤ −3 → 做多 48h 列**弱观察**（只一个阈值、只一个持有期成立，train ≈ 0），不并入 #14。不再重测 Coinbase 溢价短线事件网格。
 - CSV（不入库）：`output/research_coinbase_premium_shock_event_1h.csv`、`output/research_coinbase_premium_shock_event_1h_incremental.csv`；脚本 `scratch/cbev/`（run.py、inc.py，需在 scratch/capit 目录运行）。
+
+## 长线新族：资金费调整价格（多头持有总收益指数）上算默认均线信号（4h，2026-11-14 ~15:25 PST，研究，不改默认；否决）
+
+- 查重：已测信号价格源（指数价 / 标记价 / 另一交易所成交价，否决）、资金费空头闸门、资金费成本感知仓位、资金费 carry、现金套利覆盖层；从未把已结算资金费并进信号所用的价格序列。本族改的是「趋势看的是什么」：看多头持有人实际得到的总收益，而不是裸价格。
+- 数据：官方 4h 现货 + 永续（OKX d8 2023-02→、Gate d8 2022-07→、OKX d7 去 BNB 2022-04→）；资金费用 OKX 官方深历史（market-data-history module 3）和 Gate 官方历史，回测计费与信号用同一份；默认参数，同脚本基线；吃单费。
+- 公式（因果）：`C_adj_t = C_t × exp(−k × Σ 已结算资金费(结算时间 ≤ 第 t 根收盘))`，开高低同乘；在调整后的 K 线上用默认 `indicators`（同快慢均线、ATR、确认根数）算信号，再与另一市场信号 `combine`；止损、仓位、执行全部用真实价格。
+  - perp：只调整永续信号；both：现货信号也用同一资金费调整。k = 0.5 / 1 / 2 / 4。
+  - 安慰剂：资金费时间后移 90 天（k=1）；反号 k = −1。
+- 结果（deep / tune / post 收益 %，Sharpe）：
+  - OKX d8 基线 +32.5 / +83.7 / +60.1（0.68 / 1.45 / 2.24）；perp k1 +11.5 / +69.9 / +53.4；k0.5 +29.1 / +71.1 / +54.2；both k1 +14.9 / +73.3 / +46.6。
+  - Gate d8 基线 −3.6 / +84.3 / +60.3；perp k0.5 −20.6 / +82.7 / +59.9；perp k1 −15.4 / +76.4 / +53.3。
+  - OKX d7 基线 +50.3 / +91.0 / +50.9；perp k0.5 +43.7 / +81.9 / +45.5；perp k1 +21.5 / +81.0 / +44.6。
+  - post 段收益随 k 单调变差（OKX d8 perp：60.1 → 54.2 → 53.4 → 49.8 → 41.5）；只有 Gate both k4 的 tune 段孤立变好（+108），其 post 段 −20 点。安慰剂（后移 90 天、反号）多数比真实调整更接近基线，说明真实资金费信息对信号是负贡献，不是噪声扰动。
+- 结论：**否决**。把资金费并进信号价格会让均线在资金费高的牛市段提前转弱、错过趋势；资金费成本应留在计费和仓位层（已有），不进入信号。不再重测资金费调整价格 / 总收益指数信号。
+- CSV（不入库）：`output/research_funding_adjusted_price_signal_4h.csv`；脚本 `scratch/fadj/run.py`。
