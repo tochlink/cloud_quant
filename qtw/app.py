@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import logging
 import math
+import mimetypes
 import threading
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
@@ -16,6 +17,12 @@ import json
 
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+# Windows can map .js to text/plain via the registry; browsers then refuse to run
+# ES modules (the 全景 page is <script type="module">). Pin the standard types.
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/javascript", ".mjs")
+mimetypes.add_type("text/css", ".css")
 
 from . import __version__, db, engine, realtime, stream, vault, worker
 from . import settings as S
@@ -1148,6 +1155,9 @@ def export(name: str):
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+# 全景交易情况：kean 的 Gate 公共行情 3D 看板（纯静态，浏览器直连 Gate 公共 API / WS，
+# 不经过后端、不需要 API Key）。/panorama 自动跳到 /panorama/。
+app.mount("/panorama", StaticFiles(directory=STATIC_DIR / "panorama", html=True), name="panorama")
 
 
 @app.get("/")
