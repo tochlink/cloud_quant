@@ -146,7 +146,7 @@ def main():
     ap.add_argument("--tol-bars", type=float, default=1.0)
     a = ap.parse_args()
     from qtw import db, settings as S
-    from qtw.backtest import run_backtest
+    from qtw.backtest import btc_spot_for_regime, run_backtest
     from qtw.market import cache as mcache
     from qtw.paths import OUTPUT_DIR as OUTPUT
 
@@ -156,7 +156,11 @@ def main():
     fr, _ = mcache.many(venue, cfg["symbols"], cfg["strategy"]["interval"], a.bars)
     n = min(len(df) for m in fr.values() for df in m.values())
     fr = {m: {s: df.iloc[-n:].reset_index(drop=True) for s, df in d.items()} for m, d in fr.items()}
-    res = run_backtest(fr, {**cfg, "venue": venue})
+    rc = {**cfg, "venue": venue}
+    btc_df, btc_err = btc_spot_for_regime(rc, fr, a.bars)  # 标的里没有 BTCUSDT 时单独取 BTC 现货供体制过滤（与引擎同口径）
+    if btc_err:
+        print(btc_err)
+    res = run_backtest(fr, rc, btc_spot=btc_df)
     hours = {"15m": 0.25, "1h": 1, "4h": 4, "1d": 24}.get(cfg["strategy"]["interval"], 4)
     per, summ, missed = reconcile(fills[fills["venue"].str.lower() == venue], res["trades"], hours, a.tol_bars)
     out = pathlib.Path(OUTPUT)

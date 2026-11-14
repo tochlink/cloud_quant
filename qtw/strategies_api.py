@@ -10,6 +10,7 @@ from fastapi import APIRouter, Body, HTTPException
 from . import carry, shadow
 from . import settings as S
 from . import strategies as R
+from .backtest import btc_spot_for_regime
 from .market import cache as mcache
 
 router = APIRouter()
@@ -83,13 +84,18 @@ def strategies_backtest(sid: str, body: dict = Body(default={})):
             fund = {s: carry.fetch_gate_funding(s, since) for s in syms}
             res = carry.simulate(fr, fund, c, **spec["params"])
         else:
-            res = R.run(sid, fr, c)
+            # 标的里没有 BTCUSDT 时单独取 BTC 现货供体制过滤（与模拟盘 / 实盘引擎同口径）
+            btc_df, btc_err = btc_spot_for_regime(c, fr, bars)
+            if btc_err:
+                errs = {**errs, "BTCUSDT(regime)": btc_err}
+            res = R.run(sid, fr, c, btc_spot=btc_df)
         if iv == "4h":
-            base = R.run("ma_trend", fr, cfg) if sid != "ma_trend" else res
+            base = R.run("ma_trend", fr, cfg, btc_spot=btc_spot_for_regime(cfg, fr, bars)[0]) if sid != "ma_trend" else res
         else:
             f4, _ = mcache.many(cfg["venue"], syms, "4h", 4500)
             n4 = min(len(f4[m][s]) for m in f4 for s in syms)
-            base = R.run("ma_trend", {m: {s: f4[m][s].iloc[-n4:].reset_index(drop=True) for s in syms} for m in f4}, cfg)
+            f4 = {m: {s: f4[m][s].iloc[-n4:].reset_index(drop=True) for s in syms} for m in f4}
+            base = R.run("ma_trend", f4, cfg, btc_spot=btc_spot_for_regime(cfg, f4, 4500)[0])
 
         def weekly(r, t0=None):
             e = r["equity"]

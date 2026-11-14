@@ -295,13 +295,13 @@ def signal_fn(sid: str):
     return lambda ind, idx, syms: spec["signal"](ind, idx, syms, spec["params"])
 
 
-def run(sid: str, data: dict, cfg: dict) -> dict:
+def run(sid: str, data: dict, cfg: dict, btc_spot=None) -> dict:
     """跑一套策略的组合回测（同一执行引擎）。资金费率套利走独立模拟（qtw.carry），这里不支持。"""
     spec = BY_ID[sid]
     if spec.get("separate_sim"):
         raise ValueError("资金费率套利使用独立的期现对冲模拟")
     c = strategy_cfg(cfg, sid)
-    res = B.run_backtest(data, c, signals=signal_fn(sid))
+    res = B.run_backtest(data, c, signals=signal_fn(sid), btc_spot=btc_spot)
     if spec["signal"] is not None:
         res["summary"]["rule_id"] = sid
         res["summary"]["signal_rule"] = spec["desc"]

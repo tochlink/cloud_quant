@@ -125,9 +125,11 @@ def _trade_quality(closed) -> dict:
 
 
 def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict | None = None, signals=None,
-                 funding: dict | None = None) -> dict:
+                 funding: dict | None = None, btc_spot: pd.DataFrame | None = None) -> dict:
     """signals：可选，多策略注册表（qtw.strategies）用的信号函数 f(ind, idx, syms) -> {symbol: 逐根 {-1,0,1}}，
-    替换默认双均线合成信号；执行、止损、仓位、费用与默认完全同一套。None = 默认策略 #1（逐字节不变）。"""
+    替换默认双均线合成信号；执行、止损、仓位、费用与默认完全同一套。None = 默认策略 #1（逐字节不变）。
+    btc_spot：可选，BTCUSDT 现货 K 线，只供 BTC 体制过滤（btc_regime_ma）使用、不参与交易。标的里没有 BTCUSDT 时，
+    引擎 / 模拟盘仍会单独读取 BTC 现货判断体制，回测必须传入它才与实盘同口径；标的里有 BTCUSDT 时忽略此参数。"""
     st, rk = cfg["strategy"], cfg["risk"]
     # 分市场 taker 费率：多单在现货、空单在永续成交（下一根开盘市价 = taker），每条市价腿各收一次
     FEE = {"spot": taker_rate(cfg, "spot"), "perp": taker_rate(cfg, "perp")}
@@ -177,11 +179,14 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         for m_ in ("spot", "perp"):
             ESM = es_tail_mult(SIG, {s: PX[m_]["close"][s] for s in syms}, es_w, es_k, es_a)
             NVM[m_] = {s: np.asarray(NVM[m_][s], dtype=float) * ESM[s] for s in syms}
-    # 可选 BTC 熊市体制过滤：BTC 现货收盘 < SMA_N（上一根）时不新开多单（不平已有仓）。BTCUSDT 不在数据里则不生效
+    # 可选 BTC 熊市体制过滤：BTC 现货收盘 < SMA_N（上一根）时不新开多单（不平已有仓）。BTC 现货取自标的数据，
+    # 标的里没有 BTCUSDT 时取 btc_spot（与引擎 _btc_regime_state 单独读取 BTC 同口径）；两者都没有则不生效（summary 注明）
     rg_n = int(st.get("btc_regime_ma", 0) or 0)
     RGL = np.zeros(len(idx), dtype=bool)
-    if rg_n and "BTCUSDT" in spot_d:
-        b = spot_d["BTCUSDT"].sort_values("open_time").set_index("open_time")
+    rg_src_df = spot_d["BTCUSDT"] if "BTCUSDT" in spot_d else (btc_spot if btc_spot is not None and len(btc_spot) else None)
+    rg_source = ("symbols" if "BTCUSDT" in spot_d else "btc_spot") if (rg_n and rg_src_df is not None) else ("missing" if rg_n else "off")
+    if rg_n and rg_src_df is not None:
+        b = rg_src_df.sort_values("open_time").set_index("open_time")
         RGL = btc_regime_blocks_long(b["close"], rg_n, int(st.get("btc_regime_vote_k", 0) or 0)).reindex(idx).fillna(False).to_numpy(dtype=bool)
     MK = {"long": "perp" if t_mode == "perp_both" else "spot", "short": "perp"}
     # 可选动态多空风险平价 up（ls_parity_cap，0 = 关闭）：按上一根已收盘合成信号把较小一侧信号书的单币风险 / 权重乘数放大到与较大一侧相同（≤ cap 倍）
@@ -670,6 +675,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "signal_rule": "combine(spot_sma, perp_sma): 现货多且永续不空→现货多；永续空且现货不多→永续空；冲突→空仓",
         "long_prices": "spot OHLC", "short_prices": "perp (USDT 永续) OHLC",
         "excluded_symbols": " ".join(excluded),
+        "btc_regime_source": rg_source,
         "spot_signal_long_bars": int(sum((PX["spot"]["signal"][s][warm:] == 1).sum() for s in syms)),
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
@@ -687,3 +693,19 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     }
     return {"summary": summary, "equity": ec.drop(columns=["peak"]), "bar_open_times": [pd.Timestamp(t).isoformat() for t in times],
             "trades": pd.DataFrame([asdict(t) for t in closed + open_trades])}
+
+
+def btc_spot_for_regime(cfg: dict, data: dict, bars: int):
+    """标的里没有 BTCUSDT 且开启 BTC 体制过滤时，读取官方 BTCUSDT 现货 K 线（同交易所、同周期）供 run_backtest(btc_spot=...)；
+    返回 (df 或 None, 错误文本)。取不到时不拦并报错，与引擎 _btc_regime_state 一致；不使用任何替代数据。"""
+    st = cfg["strategy"]
+    n = int(st.get("btc_regime_ma", 0) or 0)
+    if not n or "BTCUSDT" in (data.get("spot") or {}):
+        return None, ""
+    from .strategy import regime_vote_lengths
+    need = max(regime_vote_lengths(n)) if int(st.get("btc_regime_vote_k", 0) or 0) > 0 else n
+    try:
+        from .market import cache as mcache
+        return mcache.candles(cfg["venue"], "BTCUSDT", st["interval"], max(int(bars), need + 5), "spot"), ""
+    except Exception as e:  # noqa: BLE001 —— 真实错误原样上报
+        return None, f"BTCUSDT 体制过滤 K 线获取失败：{e}"[:300]
