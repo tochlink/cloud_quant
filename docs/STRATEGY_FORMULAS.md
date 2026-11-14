@@ -7210,3 +7210,26 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 实盘须放独立子账户，否则同币永续空会和默认书的永续多在单向持仓模式下互相抵消。
   - 不再测择时开关和 L3。
 - CSV（不入库）：`output/research_idle_capital_cash_carry_overlay_4h.csv`、`output/research_idle_capital_cash_carry_overlay_4h_diag.csv`；脚本 `scratch/ccov/run.py`。
+
+## 短线新族：Deribit 官方 DVOL（隐含波动率指数）冲击事件——隐含波动急升后做多 8 币永续篮子（1h，2026-11-14 ~14:55 PST，研究，不改默认；列观察）
+
+- 查重：此前只用价格合成过「恐慌指数」（无期权数据的 VIX 替代）、波动分位、事件冷却；#13 投降反弹用的是篮子价格跌幅。从未用过真实期权隐含波动率。截面反转（xsrev）、CME 缺口、日历和时段族都已测，与本族无关。
+- 数据：Deribit 公共接口 `public/get_volatility_index_data`（BTC / ETH DVOL，1h，2022-01 → 2026-11-14，共 85,388 行，真实记录）→ `output/deribit_dvol_1h.csv`。交易数据是 OKX 官方 1h 永续：默认 8 币，外加未调参的 new8；资金费按真实结算计入。
+- 公式（因果）：时间戳为 t 的 DVOL 小时线在第 t 根 1h 收盘时已知，下一根开盘入场。
+  - `z_W = (DVOL − 均值_W) / 标准差_W`，W = 72 / 168 小时；`jmp_L = ln(DVOL / DVOL_{t−L})`；`VRP 分位 = 2160h 滚动分位 (DVOL − RV24_BTC)`。
+  - 事件：z ≥ k 或 z ≤ −k（k = 2 / 3），细分 BTC 24h 涨 / 跌；jmp ≥ 或 ≤ ±0.1 / 0.2；VRP 分位 ≥ 0.95 或 ≤ 0.05。
+  - 交易：等权做多或做空篮子，持有 H = 12 / 24 / 48 小时，不重叠。
+  - 费用：每边 5.1 bps；压力档 15.1 bps。安慰剂：事件平移 720 小时。
+  - 分段：train 2022-02 → 2024-10-21，test → 2026-03-05，post 之后。
+- 结果：
+  - 主网格 312 格中，31 格在 d8 和 new8 的三段全部为正；平移安慰剂只有 11 格。无条件每根都做多的 24 / 48h 收益为 −23 ~ +5 bps，即没有正漂移。
+  - 正格全部是做多（隐含波动急升后反弹），做空全部失败。
+  - 最稳的是 z168 ≥ 3、持有 48h（bps，括号内为 t）：
+    - BTC DVOL：d8 +136 (1.5) / +242 (2.2) / +47 (0.3)，new8 +111 / +214 / +83；
+    - ETH DVOL：d8 +124 / +241 (2.1) / +168 (0.9)，new8 +110 / +243 (2.1) / +304 (1.8)。
+    - 事件数约 48 / 31 / 13。
+  - 与 #13 投降事件（48h 内）重叠 24–29%。剔除重叠后（noCAP）6 段仍全部为正，例如 BTC +142 / +200 / +47、new8 +101 / +145 / +83，说明不只是 #13 的翻版。
+  - 邻域：k = 3.5 大多为正；k = 2.5 在 post 段转负或接近 0。z72 弱于 z168；jmp24 ≥ 0.1 也为正，但与 #13 重叠约 40%。
+  - t 值普遍 < 2.3，事件少。
+- 结论：**观察（有真实信息但样本小），不改默认、不实现**。候选规格：ETH 或 BTC DVOL z168 ≥ 3 → 下一根开盘等权做多 8 币永续，持有 48h。下一步：做与 #13 合并的子账本、同时持仓时的处理、按年和按月稳定性，再决定是否加纸面影子。
+- CSV（不入库）：`output/research_dvol_implied_vol_event_1h.csv`（主网格 + 安慰剂）、`output/research_dvol_implied_vol_event_1h_nbhd.csv`（邻域 / 无条件基准 / 剔除 #13）、`output/deribit_dvol_1h.csv`；脚本 `scratch/dvol/`（fetch.py、run.py、chk.py，需在 scratch/capit 下运行）。
