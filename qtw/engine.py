@@ -597,7 +597,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
                  max_weight=rk["max_weight_per_name"] * nvm, atr_mult=st["atr_stop_mult"])
         row.update({"target_notional_usdt": z.notional, "target_qty": z.qty, "target_weight": z.weight,
                     "stop_price": z.stop_price, "stop_pct": z.stop_pct, "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
-        blocked = block_active(bk, sym, row)
+        blocked = block_active(bk, sym, row, bool(st.get("_fast_exit_research")))
         tl = int(st.get("trend_ma", 0) or 0)
         tma = float(last["trend_ma"]) if tl else float("nan")
         tok = trend_ok(sig, float(last["close"]), tma, tl)
@@ -789,14 +789,24 @@ def _trader(cfg):
     return GateTrader(keys, testnet=cfg["live"]["gate_testnet"])
 
 
-def block_active(bk, sym: str, row: dict) -> bool:
+def block_active(bk, sym: str, row: dict, fast_exit_research: bool = False) -> bool:
     """止损锁是否仍然有效，与回测一致：止损之后只要有任一根已收盘 K 线的信号与被锁方向不同，就解锁。
     引擎可能错过中间的检查（停机/暂停），所以除了看最新信号，还看当前信号段之前那一段的
-    最后一根 K 线是否在止损成交之后收盘。"""
+    最后一根 K 线是否在止损成交之后收盘。
+
+    「快速离场」（5m 盘中离场）在模拟盘 / 实盘已停用（只在研究脚本显式打开），旧版代码按它平仓时写下的锁不再有效：
+    否则信号仍是同向时会一直空仓、不再开回（kean 本地 11-14 01:40–02:15 北京时间 8 笔空单被快速离场后不再开仓），
+    与从未启用快速离场的回测基线不一致。"""
     b = bk.blocks.get(sym)
     sig = int(row.get("signal") or 0)
     if not b or sig != b:
         return False
+    if not fast_exit_research:
+        try:
+            if bk.last_close_reason(sym) == "快速离场":
+                return False
+        except Exception:  # noqa: BLE001 —— 查不到成交记录时按原规则
+            pass
     prev_end, stop_t = row.get("prev_run_close") or "", bk.last_stop_time(sym)
     if prev_end and stop_t:
         try:
@@ -924,7 +934,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
             relever(cfg, bk, s)
         # 解除止损锁
         for s in list(bk.blocks):
-            if s in rows and not block_active(bk, s, rows[s]):
+            if s in rows and not block_active(bk, s, rows[s], bool(st.get("_fast_exit_research"))):
                 bk.blocks.pop(s)
         bk.save()
         # 3) 入场（多个新仓按剩余总敞口额度等比缩放，并预留手续费）
@@ -932,7 +942,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         want = {}
         for s in cfg["symbols"]:
             r = rows.get(s)
-            if not r or s in bk.positions or s in bk.halts or r["signal"] == 0 or block_active(bk, s, r) or r.get("trend_ok") is False or r.get("regime_ok") is False or r.get("chop_ok") is False or r.get("elder_ok") is False or r.get("state") == "short_paused":
+            if not r or s in bk.positions or s in bk.halts or r["signal"] == 0 or block_active(bk, s, r, bool(st.get("_fast_exit_research"))) or r.get("trend_ok") is False or r.get("regime_ok") is False or r.get("chop_ok") is False or r.get("elder_ok") is False or r.get("state") == "short_paused":
                 continue
             if r["side"] == "long" and not rk["allow_spot_long"] or r["side"] == "short" and not rk["allow_perp_short"]:
                 continue

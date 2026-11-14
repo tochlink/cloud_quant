@@ -397,6 +397,11 @@ class PaperBook:
             self._save(c)  # 同时持久化最新标记价
             return row
 
+    def last_close_reason(self, symbol: str) -> str:
+        """该标的最近一次整仓平仓（action='close'）的原因；没有则返回空串。"""
+        r = self._q("SELECT reason FROM paper_fills WHERE symbol=? AND action='close' ORDER BY fill_id DESC LIMIT 1", (symbol,))
+        return (r[0]["reason"] or "") if r else ""
+
     def last_stop_time(self, symbol: str) -> str:
         """该标的最近一次会锁定同向再入场的平仓（ATR / 保本止损、止盈、手动平仓 / 一键清仓 / 紧急停止）的成交时间（UTC ISO）；没有则返回空串。"""
         r = self._q("SELECT time FROM paper_fills WHERE symbol=? AND action='close' AND reason IN "
