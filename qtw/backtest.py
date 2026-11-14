@@ -24,7 +24,7 @@ from . import leverage as LV
 from . import rebalance as RB
 from .risk import scale_to_room, size
 from .settings import taker_rate
-from .strategy import btc_regime_blocks_long, combine, es_tail_mult, hedge_pair_mask, ls_parity_scales, name_vol_mult, port_vol_factor, indicators, market_of, side_of, trend_ok, chop_ok, elder_short_ok
+from .strategy import btc_regime_blocks_long, combine, es_tail_mult, hedge_pair_mask, side_crowd_scales, ls_parity_scales, name_vol_mult, port_vol_factor, indicators, market_of, side_of, trend_ok, chop_ok, elder_short_ok
 
 BARS_PER_YEAR = {"15m": 35040, "1h": 8760, "4h": 2190, "1d": 365}
 
@@ -194,6 +194,12 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     if hp_w >= 2 and hp_h != 1.0:
         HPM = hedge_pair_mask(SIG, {s: PX["perp"]["close"][s] for s in syms}, hp_w, hp_c)
         NVS = {k: {s: np.asarray(NVS[k][s], dtype=float) * np.where(HPM[s], hp_h, 1.0) for s in syms} for k in NVS}
+    # 可选同侧拥挤上限（side_crowd_cap，0 = 关闭）：上一根已收盘合成信号中某侧有 n 个币时，该侧单币风险 / 权重乘数 × m·min(1, C/n)（在对冲对之后）
+    sc_c, sc_m = float(st.get("side_crowd_cap", 0) or 0), float(st.get("side_crowd_mult", 1.25) or 1.25)
+    if sc_c > 0:
+        SCL, SCS = side_crowd_scales(SIG, sc_c, sc_m)
+        NVS = {"long": {s: np.asarray(NVS["long"][s], dtype=float) * SCL for s in syms},
+               "short": {s: np.asarray(NVS["short"][s], dtype=float) * SCS for s in syms}}
     FUND = {}
     if funding:
         tns = pd.DatetimeIndex(idx).as_unit("ns").asi8
@@ -667,7 +673,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
         "fee_bps": round(FEE["spot"] * 10_000, 4), "spot_taker_bps": round(FEE["spot"] * 10_000, 4), "perp_taker_bps": round(FEE["perp"] * 10_000, 4), "fast_ma": st["fast_ma"], "slow_ma": st["slow_ma"],
-        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_band_down": float(st.get("rebalance_band_down", 0) or 0), "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l, "name_vol_target": nv_t, "name_vol_lookback": nv_l, "chop_n": int(st.get("chop_n", 0) or 0), "chop_max": float(st.get("chop_max", 50) or 50), "elder_short_gate_n": el_n, "elder_short_gate_x": el_x, "sar_hold_bars": sar_h, "sar_risk_mult": sar_k, "sar_atr_mult": sar_m, "ls_parity_cap": lsp_c, "hedge_pair_w": hp_w, "hedge_pair_c": hp_c, "hedge_pair_h": hp_h, "name_es_w": es_w, "name_es_k": es_k, "name_es_alpha": es_a, "staged_entry_f1": xs_f1,
+        "atr_stop_mult": st["atr_stop_mult"], "confirm_bars": st.get("confirm_bars", 1), "trend_ma": st.get("trend_ma", 0), "short_breaker_bars": st.get("short_breaker_bars", 0), "tp_r": tp_r, "tp_reentry": tp_re, "rebalance_band": rb_band, "rebalance_band_down": float(st.get("rebalance_band_down", 0) or 0), "rebalance_mode": rb_mode, "port_vol_target": pv_t, "port_vol_lookback": pv_l, "name_vol_target": nv_t, "name_vol_lookback": nv_l, "chop_n": int(st.get("chop_n", 0) or 0), "chop_max": float(st.get("chop_max", 50) or 50), "elder_short_gate_n": el_n, "elder_short_gate_x": el_x, "sar_hold_bars": sar_h, "sar_risk_mult": sar_k, "sar_atr_mult": sar_m, "ls_parity_cap": lsp_c, "hedge_pair_w": hp_w, "hedge_pair_c": hp_c, "hedge_pair_h": hp_h, "side_crowd_cap": sc_c, "side_crowd_mult": sc_m, "name_es_w": es_w, "name_es_k": es_k, "name_es_alpha": es_a, "staged_entry_f1": xs_f1,
         "resizes": int(sum(t.resizes for t in closed + open_trades)), "max_risk_per_trade": rk["max_risk_per_trade"],
         "max_weight_per_name": rk["max_weight_per_name"],
         "trade_mode": t_mode, "perp_leverage": L_req, "leverage_scales_exposure": XS != 1.0, "exposure_mult": XS,

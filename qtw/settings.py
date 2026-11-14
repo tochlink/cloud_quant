@@ -77,6 +77,12 @@ DEFAULTS: dict[str, Any] = {
         "hedge_pair_w": 0,
         "hedge_pair_c": 0.5,
         "hedge_pair_h": 1.5,
+        # 2026-11-14：可选同侧拥挤上限 CROWD（默认关闭；回测与模拟盘 / 实盘定仓同口径，engine.apply_side_crowd）。上一根合成信号中某侧有 n 个币时，
+        # 该侧单币风险 / 权重乘数 × side_crowd_mult·min(1, side_crowd_cap/n)（总敞口上限不变）。研究（scratch/deep/run_crowd.py、oou_crowd.py）：
+        # 深历史留出 3 组、未调参 8 币、20 组随机 8 币、压力费、时移安慰剂都更好（C5 m1.25），但默认 8 币全期收益略低、2026-03 后逐月 4/8 → 强观察，非默认。
+        # 0=关闭，建议 C5 m1.25
+        "side_crowd_cap": 0.0,
+        "side_crowd_mult": 1.25,
         # 2026-11-13：可选 ES NORM 尾部厚度单币乘子（默认关闭；回测与模拟盘 / 实盘定仓同口径，engine.apply_es_tail）。每币按其交易市场最近
         # name_es_w 根 4h 对数收益的 ES/σ 相对正态的厚度 F（多看左尾、空看右尾），乘子 clip(F^−k, 0.5, 1.5) 后在有信号的币间归一。
         # 研究（scratch/dsz）：深历史留出 3 组 + 未调参 8 币 + 20 组随机 16 选 8 都更好、安慰剂更差，但 2026-03 后约持平 → 强观察，非默认。0=关闭，建议 W120 k2
@@ -300,6 +306,12 @@ def validate(s: dict) -> dict:
     st["hedge_pair_h"] = float(st.get("hedge_pair_h", 1.5) if st.get("hedge_pair_h") is not None else 1.5)
     if not 0.25 <= st["hedge_pair_h"] <= 3:
         raise ValueError("对冲对乘数需在 0.25–3 之间")
+    st["side_crowd_cap"] = float(st.get("side_crowd_cap", 0) or 0)
+    if st["side_crowd_cap"] and not 1 <= st["side_crowd_cap"] <= 50:
+        raise ValueError("同侧拥挤上限 C 需为 0（关闭）或 1–50 个币")
+    st["side_crowd_mult"] = float(st.get("side_crowd_mult", 1.25) if st.get("side_crowd_mult") is not None else 1.25)
+    if not 0.25 <= st["side_crowd_mult"] <= 3:
+        raise ValueError("同侧拥挤乘数 m 需在 0.25–3 之间")
     st["name_es_w"] = int(st.get("name_es_w", 0) or 0)
     if st["name_es_w"] and not 20 <= st["name_es_w"] <= 1000:
         raise ValueError("ES 尾部厚度窗口需为 0（关闭）或 20–1000 根")

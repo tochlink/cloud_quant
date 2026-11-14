@@ -21,7 +21,7 @@ from .paths import OUTPUT_DIR
 from .backtest import short_breaker
 from .risk import cap_at_entry, scale_to_room, size
 from . import leverage as LV
-from .strategy import bar_close_equity, btc_regime_blocks_long, combine, es_tail_mult, hedge_pair_mask, indicators, last_cross, ls_parity_scales, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
+from .strategy import bar_close_equity, btc_regime_blocks_long, combine, es_tail_mult, hedge_pair_mask, side_crowd_scales, indicators, last_cross, ls_parity_scales, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
 from .timeutil import iso, la, sh, utcnow
 
 log = logging.getLogger(__name__)
@@ -424,6 +424,32 @@ def apply_es_tail(rows: list[dict], closes: dict, window: int, k: float, alpha: 
                           "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
 
 
+def apply_side_crowd(rows: list[dict], cap: float, mult: float, eq: float, rk: dict, atr_mult: float) -> None:
+    """可选同侧拥挤上限（strategy.side_crowd_cap，0 = 关闭），与回测同口径（qtw.strategy.side_crowd_scales）：交易池内有信号的币里，
+    某侧共有 n 个币时，该侧每币 row["name_vol_mult"] × mult·min(1, cap/n)（在 apply_hedge_pair 之后，乘数可叠加）。
+    未持仓行的建议仓位按新乘数重算；关闭时不改任何字段。"""
+    if not cap or cap <= 0:
+        return
+    live = [r for r in rows if r.get("in_universe") and not r.get("error") and r.get("signal") in (1, -1)
+            and r.get("name_vol_mult") is not None]
+    if not live:
+        return
+    ls, ss = side_crowd_scales({r["symbol"]: [int(r["signal"])] for r in live}, cap, mult)
+    k = {1: float(ls[0]), -1: float(ss[0])}
+    for r in live:
+        f = k[int(r["signal"])]
+        r["side_crowd_scale"] = f
+        if f == 1.0:
+            continue
+        r["name_vol_mult_pre_crowd"] = r["name_vol_mult"]
+        r["name_vol_mult"] = r["name_vol_mult"] * f
+        if r.get("stop_source") == "suggested" and r.get("ref_price"):
+            z = size(side=r["side"], equity=eq, price=r["ref_price"], atr=r["atr"], max_risk=rk["max_risk_per_trade"] * r["name_vol_mult"],
+                     max_weight=rk["max_weight_per_name"] * r["name_vol_mult"], atr_mult=atr_mult)
+            r.update({"target_notional_usdt": z.notional, "target_qty": z.qty, "target_weight": z.weight,
+                      "risk_usdt": z.risk_usdt, "capped_by": z.capped_by})
+
+
 def apply_hedge_pair(rows: list[dict], perp_close: dict, window: int, corr_min: float, mult: float, eq: float, rk: dict,
                      atr_mult: float) -> None:
     """可选多空对冲对乘数（strategy.hedge_pair_w，0 = 关闭），与回测同口径（qtw.strategy.hedge_pair_mask）：交易池内有信号的币里，
@@ -663,6 +689,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     if hp_w >= 2:
         pc = {s: df.set_index("open_time")["close"].astype(float) for s, df in (frames.get("perp") or {}).items() if df is not None and len(df)}
         apply_hedge_pair(rows, pc, hp_w, float(st.get("hedge_pair_c", 0.5)), float(st.get("hedge_pair_h", 1.5)), eq, rk, st["atr_stop_mult"])
+    apply_side_crowd(rows, float(st.get("side_crowd_cap", 0) or 0), float(st.get("side_crowd_mult", 1.25) or 1.25), eq, rk, st["atr_stop_mult"])
     # 待入场标的：按剩余总敞口等比缩放后的建议仓位
     pend = {r["symbol"]: r for r in rows if r.get("state") == "entry_pending"}
     alloc = scale_to_room({s: r["target_notional_usdt"] for s, r in pend.items()},

@@ -138,6 +138,25 @@ def ls_parity_scales(sig: dict, nvm_long: dict, nvm_short: dict, cap: float) -> 
     return ls, ss
 
 
+def side_crowd_scales(sig: dict, cap: float, mult: float) -> tuple[np.ndarray, np.ndarray]:
+    """可选同侧拥挤上限（side_crowd_cap，0 = 关闭）。第 t 根收盘合成信号 sig[s]（1 / −1 / 0）下，n_L / n_S = 该侧有信号的币数，
+    该侧单币乘数 g = mult · min(1, cap / n_side)（n_side = 0 时为 1，不影响任何仓位）。调用方第 t+1 根用 t 的乘数
+    （与 name_vol_mult、ls_parity_scales 同口径）乘单笔风险上限与单币权重上限，总敞口上限不变。
+    等价于研究口径 g = m·min(1, C/(N·A_side))，A_side = 该侧信号币数 / N。研究：docs/STRATEGY_FORMULAS.md「同侧拥挤上限 CROWD」
+    （scratch/deep/run_crowd.py、oou_crowd.py）。"""
+    syms = list(sig)
+    n = len(np.asarray(sig[syms[0]])) if syms else 0
+    ls, ss = np.ones(n), np.ones(n)
+    if not syms or not cap or float(cap) <= 0:
+        return ls, ss
+    G = np.vstack([np.sign(np.asarray(sig[s])) for s in syms])
+    c, m = float(cap), float(mult)
+    for out, sgn in ((ls, 1), (ss, -1)):
+        k = (G == sgn).sum(0)
+        out[:] = np.where(k > 0, m * np.minimum(1.0, c / np.maximum(k, 1)), 1.0)
+    return ls, ss
+
+
 def hedge_pair_mask(sig: dict, close: dict, window: int, corr_min: float) -> dict:
     """可选多空对冲对乘数（hedge_pair_w，0 = 关闭）的掩码。第 t 根收盘：若存在另一币 q，合成信号 sig[q][t] = −sig[s][t] ≠ 0，
     且两币最近 window 根永续对数收益的样本相关 ρ_{s,q}[t]（pandas rolling corr，含第 t 根）≥ corr_min，则 s（与 q）为「对冲腿」= True。
