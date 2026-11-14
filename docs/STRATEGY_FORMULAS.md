@@ -7276,3 +7276,22 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 注意：合并后的单笔均值（217 bps）高于两个单独源，部分来自「先到的触发占住 48h 窗口」的取舍，结果对事件顺序有一定敏感；样本仍小（post 仅 12 笔）。
 - 结论：**合并版（CAP ∪ ETH DVOL z168≥3，48h，不重叠）升为强观察，不改默认、未实现**。它是 #13 的升级候选：触发更多（post 12 笔 vs 1 笔），未见币和 Gate 跨所都成立。下一步：在 8788 的 #13 影子子账本中加入 ETH DVOL 实时触发（Deribit 公共接口，每小时取一次），纸面前向记录；同时测与默认 4h 书合成后的组合曲线。
 - CSV（不入库）：`output/research_dvol_capitulation_combined_subbook_1h.csv`（分段 × 场所 × 模式 × 费用 × 安慰剂）、`output/research_dvol_capitulation_combined_subbook_1h_periods.csv`（逐年 / post 逐月）；脚本 `scratch/dvcap/run.py`（在 scratch/capit 下运行）。
+
+## 长线 × 短线组合：默认 4h 主账本（#1 / #10+#12）+ 合并短线覆盖层（#13 投降 ∪ ETH DVOL z168≥3，持有 48h）（2026-11-14 ~15:00 PST，研究，不改默认；强观察，作为 #13 升级规格）
+
+- 查重：11:00 节只测过 #13 原规格（仅投降触发、H24）叠加在主账本上；上一节（合并子账本）只测了独立子账本。合并触发 + H48 叠加到 4h 主账本是首次。
+- 公式：日收益 = 4h 主账本（生产 `run_backtest`，perp_both 10× + 官方资金费）+ w × 覆盖层日收益。
+  - 覆盖层：同所官方 1h 永续，触发后下一根开盘等权做多 8 币，名义 = w × 权益，不重叠，不设止损。
+  - 覆盖层规格：CAP_H24（#13 现规格）、CAP_H48、UNION_H48（CAP 或 ETH DVOL z168 ≥ 3）、UNION_H48 平移 720h 安慰剂；w = 0.25 / 0.5。
+  - 主账本：#1 默认、#10+#12（`side_crowd_cap 5, side_crowd_mult 1.25, name_es_w 120, name_es_k 2, btc_regime_symbol ETHUSDT`）。
+- 数据：OKX 官方 4h 现货 + 永续 2023-02→（deep_unseen 到 2024-10-21），1h 2022→；Gate 4h 2022-07→，Gate 1h 只有 2025-09→（之前覆盖层为 0）。实费与压力费两档。
+- 结果（实费，Sharpe：deep / tune_pre / post；post 收益）：
+  - OKX #1：无覆盖 0.72 / 1.48 / 2.28（+60.9%）；CAP_H24 w0.5 1.03 / 1.85 / 2.27（+60.8%）；**UNION_H48 w0.5 1.47 / 2.15 / 2.66（+79.1%）**；安慰剂 0.92 / 1.26 / 2.09（+58.7%）。
+  - OKX #10+#12：无覆盖 1.34 / 1.43 / 2.66（+69.8%）；**UNION_H48 w0.5 2.06 / 2.14 / 3.01（+88.9%）**，tune 回撤 −17.1 → −14.3%；安慰剂 1.52 / 1.20 / 2.40。
+  - Gate #1：post +61.7 → +80.1%（Sharpe 2.31 → 2.69）；#10+#12：+69.6 → +88.8%（2.66 → 3.01）；安慰剂均低于无覆盖。
+  - 压力费同向：OKX #1 UNION w0.5 0.57 → 1.28 / 1.37 → 1.96 / 2.17 → 2.51；Gate #1 post +58.1 → +74.0%。
+  - 回撤：#1 上 deep 回撤略深（OKX −26.2 → −27.1%，Gate tune −17.9 → −19.9%）；#10+#12 上持平或更浅。
+  - post 逐月（覆盖层相对同一主账本）：4 个月更好、3 个月更差、2 个月相同，未达到改默认的 ≥ 6/9。
+  - w 0.25 介于两者之间，单调。
+- 结论：**UNION_H48 w0.5 覆盖层列为强观察，作为 #13 的升级规格**（触发：投降或 ETH DVOL z168 ≥ 3；持有 24h → 48h）。三段 Sharpe、两所、两档费用都好于现 #13 规格和安慰剂。逐月只有 4/9，不改默认。下一步：在 8788 的 #13 影子子账本中加入 Deribit ETH DVOL 实时触发与 48h 持有选项（默认关闭），前向纸面记录。
+- CSV（不入库）：`output/research_dvol_cap_overlay_on_4h_book.csv`；脚本 `scratch/dvstack/run.py`（在 scratch/stack13 下运行）。
