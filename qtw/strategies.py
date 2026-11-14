@@ -218,6 +218,12 @@ STRATEGIES: list[dict] = [
                 "hedge_pair_h": 1.5}, "signal": None,
      "overrides": {"ls_parity_cap": 3.0, "port_vol_target": 0.5, "hedge_pair_w": 180, "hedge_pair_c": 0.5, "hedge_pair_h": 1.5},
      "risk_overrides": {"max_risk_per_trade": 0.03}},
+    {"id": "ma_trend_crowd_es", "no": 10, "name": "双均线 + 同侧拥挤上限 + 尾部厚度乘子（候选）", "interval": "4h", "kind": "趋势·仓位构建",
+     "desc": "信号、止损、过滤与 #1 完全相同；只改仓位：某侧有 n 个币持信号时该侧单币风险 / 权重乘数 × 1.25·min(1, 5/n)（side_crowd_cap 5 / mult 1.25），"
+             "再乘 ES 尾部厚度乘子（最近 120 根 ES/σ 相对正态越厚越小，name_es_w 120 / k 2，在有信号的币间归一）。总敞口上限不变。"
+             "深历史未见段、未调参 8 币、随机 8 币 20 组 Sharpe 全部更高，尚未改默认（docs/STRATEGY_FORMULAS.md「CROWD × ES 叠加」）。",
+     "params": {"side_crowd_cap": 5.0, "side_crowd_mult": 1.25, "name_es_w": 120, "name_es_k": 2.0}, "signal": None,
+     "overrides": {"side_crowd_cap": 5.0, "side_crowd_mult": 1.25, "name_es_w": 120, "name_es_k": 2.0}},
 ]
 BY_ID = {s["id"]: s for s in STRATEGIES}
 
@@ -249,6 +255,13 @@ VERDICTS.setdefault("ma_trend_lsp_hp", {"status": "观察", "reason": (
     "降为弱观察（2026-11-13 币池外留出）：未调参的 8 个币上 #9 Gate −13.9% / OKX −18.6%（#1 +24.1% / +13.6%），回撤 −34% ~ −38%；"
     "16 选 8 随机子集 40 组对 #8 收益约六七成更高但 Sharpe 只有约一半更高、回撤深约 2.5 点，主要是放大敞口。"
     "CSV：output/research_hedge_pair_out_of_universe.csv")})
+
+VERDICTS.setdefault("ma_trend_crowd_es", {"status": "观察", "reason": ("强观察。"
+    "2026-11-14 研究（多空永续 10× + 官方资金费，scratch/stack）：深历史未见段日 Sharpe OKX 8 币 0.91 / Gate 8 币 0.51 / OKX 7 币 1.10（#1 0.71 / 0.09 / 0.77），"
+    "回撤 −26% / −26% / −25%（#1 −29% / −37% / −27%）；调参窗 Sharpe 2.0 左右（#1 1.74）；2026-03 后收益三组都更高（+66.5% / +64.4% / +67.1% 对 +61.5% / +62.0% / +52.1%），"
+    "压力费同向。未调参 8 币 Gate 0.80 / OKX 0.63（#1 0.58 / 0.42），随机 8 币 20 组 Sharpe 与收益 Gate 20/20、OKX 20/20 更高。"
+    "邻域 C4–6 × m1.0–1.5 × ES W90–150 k1.5–2.5 全部优于 #1。未改默认：默认 8 币 2026-03 后逐月只 3–4/9 个月更好（门槛 6/9）。"
+    "信号与 #1 相同，只改仓位，不进影子子账本。CSV：output/research_sizing_stack_crowd_es_pv.csv、output/research_sizing_stack_crowd_es_neighborhood.csv")})
 
 
 def strategy_cfg(cfg: dict, sid: str) -> dict:

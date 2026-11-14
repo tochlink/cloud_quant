@@ -89,3 +89,19 @@ def test_engine_off_noop_and_resize():
     z = size(side="short", equity=1000.0, price=100.0, atr=2.0, max_risk=0.05 * 0.75, max_weight=0.2 * 0.75, atr_mult=2.0)
     assert abs(by["D"]["target_notional_usdt"] - z.notional) < 1e-9
     assert by["C"]["target_notional_usdt"] == -1.0
+
+
+def test_strategy10_overrides_only_sizing():
+    from qtw import shadow
+    from qtw import strategies as R
+    cfg = S.load()
+    c = R.strategy_cfg(cfg, "ma_trend_crowd_es")
+    assert R.BY_ID["ma_trend_crowd_es"]["signal"] is None and R.BY_ID["ma_trend_crowd_es"]["no"] == 10
+    st = c["strategy"]
+    assert (st["side_crowd_cap"], st["side_crowd_mult"], st["name_es_w"], st["name_es_k"]) == (5.0, 1.25, 120, 2.0)
+    for k in ("fast_ma", "slow_ma", "trend_ma", "btc_regime_ma", "confirm_bars", "atr_stop_mult", "port_vol_target"):
+        assert st[k] == cfg["strategy"][k]
+    assert c["risk"] == cfg["risk"]
+    S.validate(c)
+    assert "ma_trend_crowd_es" not in shadow.active_ids()
+    assert R.VERDICTS["ma_trend_crowd_es"]["status"] == "观察"
