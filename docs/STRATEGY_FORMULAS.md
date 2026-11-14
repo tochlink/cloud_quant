@@ -7073,3 +7073,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 目标离场：f ≤ 0.5 截掉反弹主段（OKX 测试 f0.5·max24 +146 vs 固定 H24 +191）；f ≥ 0.75 基本退化为固定持有，无增量。
 - 结论：权重「最跌重仓」列弱观察（本质是加大高 beta 敞口，收益增量小、尾部更深、post 更差），不实现；#13 维持等权 24h。目标离场否决，不再重测 #13 提前止盈 / 收复离场族。
 - CSV（不入库）：`output/research_capitulation_weighting_target_exit_1h.csv`；脚本 `scratch/capw/run.py`。
+
+## 长线新族：分数差分（FFD）记忆保留序列 z 分数作为入场闸门 / 持仓过滤 / 信号替换（4h 默认书，2026-11-14 ~13:35 PST，研究，不改默认；否决，不实现）
+
+- 查重：文档与 `output/research_*.csv` 无 fractional / 分数差分；此前测过的 MA 类型、Kalman、小波、Laguerre、Renko、信息驱动 K 线等都是平滑或重采样，不是幂律权重的分数差分核。
+- 公式：`x = ln C(perp)`，FFD 权重 `w_0 = 1, w_k = −w_{k−1}(d−k+1)/k`，|w| < 1e−4 截断（最多 600 根），`f_t = Σ w_k x_{t−k}`；`z = (f − mean_M f) / std_M f`；`fs = sign(z)`（替换版带死区 |z| > 0.5）。ENTRY：默认合成信号 g 只在 fs = g 时新开，已持仓同向保留；HOLD：fs ≠ g 时 g 置 0；REPL：信号 = fs。d 0.2 / 0.4 / 0.6 × M 90 / 180 / 360；安慰剂 = z 平移 540 根（90 天）。生产 `run_backtest(signals=...)`，perp_both 10× + 官方资金费 + BTC 体制，实费。
+- 数据：官方 4h OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-01→）；深历史未见段 → 2024-10-21，调参前段 → 2026-03-05，post 之后。
+- 结果：HOLD / REPL 全面崩溃（换手 4–20 倍，post −26% ~ +25% vs 基线 +51% ~ +60%）。ENTRY 最好 d0.2·M90：深历史 OKX +57.4% vs +35.1%、Gate +6.1% vs −3.6%、d7 +69.0% vs +65.3%，post +60.0% / +60.8% / +51.0% vs +59.9% / +60.3% / +50.8%（持平），但 post 逐月只赢 3/8、4/8、2/7；邻域 M180 / M360 深历史在 OKX d8 / d7 变差（+33.6% / +30.4%），post 逐月 2–4/9；平移安慰剂 ENTRY 调参前段反而 +100%（vs 基线 +85%），说明调参窗增益与随机拦截同级。
+- 结论：否决，不实现、不改默认；不再重测分数差分核（闸门 / 过滤 / 替换）。
+- CSV（不入库）：`output/research_fractional_diff_trend_gate_4h.csv`；脚本 `scratch/ffd/run.py`。
