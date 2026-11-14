@@ -7121,3 +7121,18 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 主格 up_follow N480 lo0.25 hi0.75 K48 H24：±168h 平移安慰剂与真实同量级；剔除 #13 相邻事件后 d8 post −79、Gate post −75 bps，new8 训练 / 测试 −26 / −53。
 - 结论：**否决，不实现、不进观察名单**。广度快速转变没有独立于 #13 的短线优势；广度冲刺 / 崩塌族视为已覆盖，不再重测。
 - CSV（不入库）：`output/research_breadth_thrust_event_1h.csv`；脚本 `scratch/bthrust/run.py`。
+
+## 长线：更快主周期的时间等效缩放——默认规则放到 2h K 线，参数按日历时间 ×2，另测 4h + 2h 各半分散账户（2026-11-14 ~14:05 PST，研究，不改默认；否决）
+
+- 查重：2026-11-14 05:25 节只测了更慢的 8h / 12h / 1d，当时写明「1h / 2h 更快方向没有深历史官方 1h，未测」；2026-11-10 的 `research_timeframe_compare.csv` 只用旧默认、40 天窗口。现在有 OKX 官方 1h 现货 + 永续深历史（2022-01-29 起），本节补测 2h。
+- 数据：OKX 官方 1h 现货 + USDT 永续（`scratch/deep1h`），默认 8 币（BNB 永续 2022-12 起）与 7 币（去 BNB）；Gate 官方 1h（只开放最近 10000 根，2025-09 起）。按 UTC 精确聚合成 2h（只留完整组；相位 1 = 起点挪 1h），同脚本基线 = 同一份 1h 聚合成 4h（OKX d8 tune +197.79% / post +59.90%，与官方 4h 深历史版逐位一致）。new8 没有官方 1h 现货，未测。
+- 公式：k = 0.5，`fast_ma / slow_ma / trend_ma / btc_regime_ma / port_vol_lookback / name_vol_lookback` × 2（100 / 300、趋势线 200、体制 2400、回看 ×2），年化因子 4380；确认按时间（4 根）或按根数（2 根），ATR 按时间（28 根）或按根数（14 根）。其余默认原样（perp_both 10×、2×ATR、调仓带 0.1、官方资金费、taker）。分散账户 = 4h 与 2h 各 1/2 资金。分段：deep_unseen（OKX d8 2023-06 / d7 2022-09 → 2024-10-21）、tune（→ 2026-11-14）、post（2026-03-05 →）；实费 + 压力费；2026-03 后逐月对比。
+- 结果（实费，收益 / Sharpe；4h 基线 vs 2h 确认按时间 + ATR 按时间）：
+  - OKX d8：deep +55.7% / 1.17 vs +19.9% / 0.64；tune +197.8% / 1.72 vs +74.5% / 1.18；post +59.9% vs +37.4%。四种口径 2h 全部更差（tune +72 ~ +91%）。2h 相位 1：deep 0.85、post +40.3%，仍差。
+  - OKX d7：deep +22.9% / 0.47 vs −1.3% / 0.09；tune +192.7% vs +90.1%；post +50.8% vs +40.1%。
+  - Gate d8（2025-09 →，体制线在样本内未预热完，只作参考）：tune +71.5% vs +40.4%，post +50.2% vs +30.6%。
+  - 4h + 2h 分散：OKX d8 tune +143% / 1.59、post +52.0%，d7 post +46.8%，Gate post +40.7%，全部低于 4h 单独。
+  - 2026-03 后逐月 2h 好于 4h：OKX d8 3/9、d7 5/9、Gate 3/9；压力费同向。
+  - 附带：4h 相位 2（起点挪 2h）OKX d8 tune +119.8%、post +38.5%，再次说明官方 UTC 相位之外 ±25 点的相位离散度。
+- 结论：**否决，不改默认、不加参数**。2h 主周期（任何确认 / ATR 口径、相位）和 4h + 2h 分散都明显变差；连同 8h / 12h / 1d 的结论，主周期时间等效缩放族（更快、更慢）全部覆盖，不再重测。
+- CSV（不入库）：`output/research_timeframe_2h_time_equivalent.csv`；脚本 `scratch/d2h/run.py`。
