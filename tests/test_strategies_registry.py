@@ -14,7 +14,7 @@ from tests.test_backtest import book, synth
 def test_registry_shape():
     ids = [s["id"] for s in R.STRATEGIES]
     assert len(ids) == len(set(ids)) and ids[0] == "ma_trend"
-    assert 5 <= len(ids) - 1 <= 7
+    assert 5 <= len(ids) - 1 <= 10
     for s in R.STRATEGIES:
         assert s["name"] and s["desc"] and isinstance(s["params"], dict)
         assert any("\u4e00" <= ch <= "\u9fff" for ch in s["name"])  # 中文名

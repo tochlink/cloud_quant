@@ -5434,3 +5434,15 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 对照默认：C3+RB30+HP 四相位平均真实费率两所都赢（收益 +7 ~ +9 点、Sharpe +0.02 ~ +0.03），压力费率收益持平、Sharpe 低约 0.06 ~ 0.07、回撤深约 1.7 点——仍然不够改默认。
 - 结论：对冲对乘数作为候选 #8（C3+RB30）的增强项，通过相位检验（4/4 相位收益与后段都赢、Sharpe 不输、回撤几乎不变），优于叠在 C3 单独上（回撤代价更大）。不改默认；下一步按计划实现为可选参数（`hedge_pair_w` / `hedge_pair_c` / `hedge_pair_h`，默认关闭，回测与引擎共用同一计算函数并逐位对拍），再在策略页 #8 之外新增「#8 + 对冲对」可选候选。
 - CSV：`output/research_hedged_pair_phase_offset_perp_both_10x.csv`、`output/research_hedged_pair_phase_offset_perp_both_10x_summary.csv`（脚本 scratch/hpph/hpph.py）。
+
+### 2026-11-13 17:55 PST — 对冲对乘数实现为可选参数 `hedge_pair_w` / `hedge_pair_c` / `hedge_pair_h`（工程，默认关闭）+ 策略页 #9
+
+- 公式（与研究脚本 scratch/hpn/hpn.py 相同）：第 t 根收盘，若另一币 q 的合成信号 = −本币信号 ≠ 0，且两币最近 W 根永续对数收益样本相关 ρ（含第 t 根）≥ c，则本币为对冲腿，第 t+1 根的单笔风险 / 单币权重乘数（NVS，已含 `ls_parity_cap`）× h；总敞口上限不变。纯函数 `qtw.strategy.hedge_pair_mask`，回测（`run_backtest`）与引擎（`engine.apply_hedge_pair`，在 `apply_ls_parity` 之后，永续收盘按开盘时间内连接对齐，取最近 W+1 根）共用。
+- 默认：`hedge_pair_w` 0（关闭）、`hedge_pair_c` 0.5、`hedge_pair_h` 1.5；校验 W 0 或 20–1000、c ∈ [−1, 1]、h ∈ [0.25, 3]。默认参数下回测结果不变。
+- 对拍（官方 4h、8 币、多空永续 10× + 官方资金费，窗口 2025-01-17 → 2026-11-13 PT，真实 + 压力费率）：生产实现与研究脚本在 default / C3 / HP / C3+HP 四种变体、两所、两种费率下权益逐根完全一致（16/16）。
+- 策略页新增 #9「#8 + 多空对冲对乘数（候选）」= #8（ls_parity_cap 3、单笔风险 3%、组合波动 50%）+ W180 c0.5 h1.5，状态「观察」，不进影子子账本、不改默认。同口径整段（真实费率）：
+  - Gate：#9 +245.38% / Sharpe 2.09 / DD −15.86% / 后段 +82.45%，#8 +216.70% / 2.03 / −15.05% / +74.72%；
+  - OKX：#9 +274.26% / 2.17 / −15.78% / +84.38%，#8 +220.61% / 2.06 / −15.16% / +73.84%；
+  - 压力费率 #9 Gate +206.39% / 1.89、OKX +227.13% / 1.96，#8 +182.72% / 1.85、+185.29% / 1.87。回撤约深 0.7–1.1 点。
+- 测试：tests/test_hedge_pair.py（掩码公式、关闭逐位一致、引擎与回测逐根一致、#9 只改仓位）；注册表测试允许最多 10 个非默认策略。
+- CSV：`output/research_hedge_pair_param_parity.csv`（脚本 scratch/hpimpl/parity.py）。

@@ -210,6 +210,14 @@ STRATEGIES: list[dict] = [
              "2026-03-05 后 5/8 个月更好，尚未改默认（docs/STRATEGY_FORMULAS.md「C3+RB30」）。",
      "params": {"ls_parity_cap": 3.0, "max_risk_per_trade": 0.03, "port_vol_target": 0.5}, "signal": None,
      "overrides": {"ls_parity_cap": 3.0, "port_vol_target": 0.5}, "risk_overrides": {"max_risk_per_trade": 0.03}},
+    {"id": "ma_trend_lsp_hp", "no": 9, "name": "#8 + 多空对冲对乘数（候选）", "interval": "4h", "kind": "趋势·仓位构建",
+     "desc": "在 #8 之上再改仓位：某币持仓方向与另一币相反、且两币最近 180 根永续收益相关 ≥ 0.5 时（多空对冲对），"
+             "该币单币风险 / 权重乘数 × 1.5（hedge_pair_w 180 / c 0.5 / h 1.5）；信号、止损、过滤与 #1 相同，总敞口上限不变。"
+             "4 个 4h 相位收益与 2026-03 后都优于 #8，尚未改默认（docs/STRATEGY_FORMULAS.md「对冲对乘数」）。",
+     "params": {"ls_parity_cap": 3.0, "max_risk_per_trade": 0.03, "port_vol_target": 0.5, "hedge_pair_w": 180, "hedge_pair_c": 0.5,
+                "hedge_pair_h": 1.5}, "signal": None,
+     "overrides": {"ls_parity_cap": 3.0, "port_vol_target": 0.5, "hedge_pair_w": 180, "hedge_pair_c": 0.5, "hedge_pair_h": 1.5},
+     "risk_overrides": {"max_risk_per_trade": 0.03}},
 ]
 BY_ID = {s["id"]: s for s in STRATEGIES}
 
@@ -231,6 +239,11 @@ VERDICTS.setdefault("ma_trend_lsp", {"status": "观察", "reason": (
     "2026-11-13 研究（多空永续 10× + 官方资金费）：整段 Gate +214.9% / OKX +218.8%（#1 同口径 +163.3% / +165.4%），夏普 2.02 / 2.05，"
     "回撤 −15.1% / −15.2%，2026-03-05 后 +73.4% / +72.5%；按训练期 Sharpe 二选一的 walk-forward 12 格全胜 #1；2026-03 后逐月 5/8 更好，"
     "未达改默认余量。信号与 #1 相同，只改仓位，不进影子子账本。CSV：output/research_c3_rb30_walkforward_rolling_perp_both_10x.csv")})
+
+VERDICTS.setdefault("ma_trend_lsp_hp", {"status": "观察", "reason": (
+    "2026-11-13 研究（多空永续 10× + 官方资金费）：叠加在 ls_parity_cap 3 上整段 Gate +296.1% / OKX +323.4%（仅 C3 +230.6% / +237.7%），"
+    "Sharpe 2.21 / 2.28，回撤约 −15%，12/12 安慰剂胜出，3 / 6 / 12 个月 walk-forward 真实费率全赢；4h 相位检验叠加 C3+RB30 后 4/4 相位收益与 "
+    "2026-03 后都更高、Sharpe 不输。2026-03 后逐月 5/8 更好，未达改默认门槛。CSV：output/research_hedged_pair_phase_offset_perp_both_10x.csv")})
 
 
 def strategy_cfg(cfg: dict, sid: str) -> dict:
