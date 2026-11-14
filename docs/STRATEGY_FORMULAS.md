@@ -5899,3 +5899,14 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 默认 8 币 4500 根：C5 m1.25 Gate +156.7% / −13.6% / 1.80、OKX +165.9% / −13.8% / 1.85，对 +168.8% / −18.9% / 1.73、+170.9% / −19.0% / 1.74；后段逐月只 4/8 优于默认。
 - 结论：仓位构建层第一个同时通过调参窗口、深历史未见段（三组）、未调参币、随机子集、压力费、安慰剂的候选。C5 m1.25 升为强观察 / 候选（邻域 C4–C5 × m1.25–1.5 都过深历史，C4 m1.5 在 OKX 未调参币上失败，故取 C5 m1.25）。暂不改默认：默认 8 币上全期收益略低（−12 / −5 点）、后段逐月仅 4/8。下一步把它做成回测 + 引擎共用的可选参数（如 `side_crowd_cap` C / `side_crowd_mult` m，默认关），并做 4h 相位与月度 walk-forward 复核，再决定是否作为默认。
 - CSV（本地，不入库）：`output/research_deep_history_side_crowding_cap.csv`、`output/research_side_crowding_cap_out_of_universe.csv`；脚本 `scratch/deep/run_crowd.py`、`scratch/deep/oou_crowd.py`。
+
+### 2026-11-14 同侧拥挤上限 CROWD 落地为可选参数 + 月度复核（side_crowd_cap / side_crowd_mult，默认关闭）
+
+- 公式（回测与模拟盘 / 实盘定仓同口径）：上一根已收盘合成信号中多头 / 空头各有 n_L / n_S 个币，该侧单币风险上限与单币权重上限乘数 × g = m·min(1, C/n_side)（n_side = 0 时 g = 1），在对冲对乘数之后叠加，总敞口上限不变。纯函数 `qtw.strategy.side_crowd_scales`，回测钩子在 `qtw/backtest.py`（NVS），引擎 `qtw.engine.apply_side_crowd`（在 apply_hedge_pair 之后）。设置 `side_crowd_cap` 0 = 关闭（1–50），`side_crowd_mult` 1.25（0.25–3）。测试 `tests/test_side_crowd.py`（公式、关闭时逐位一致、引擎逐根与回测一致、未持仓行重算建议仓位）。
+- 与研究钩子（scratch/deep/run_crowd.py）逐位一致：OKX 8 币深历史 C5 m1.25 权益序列完全相同。
+- 月度对比（`output/research_side_crowding_cap_monthly_walkforward.csv`、`output/research_side_crowding_cap_monthly.csv`，脚本 `scratch/deep/wf_crowd.py`；三组深历史数据，2026-11-14 止，真实费率）：
+  - C5 m1.25 全期月度优于默认：OKX 8 币 26/47（累计 +342.3% 对 +294.1%）、Gate 8 币 30/55（+287.1% 对 +256.9%）、OKX 7 币 40/69（+684.2% 对 +540.9%）；深历史未见段 14/22、16/30、25/44。压力费同向（+261.7% 对 +235.2%、+205.9% 对 +194.0%、+522.8% 对 +431.0%）。
+  - 2026-03-05 后：OKX 8 币 4/9 月更好（+56.7% 对 +59.2%）、Gate 4/9（+57.1% 对 +58.7%）、OKX 7 币 7/9（+54.7% 对 +50.0%）。
+  - C5 m1.0（纯降拥挤、不加杠杆）全期三组都低于默认 → 增益需要 m > 1 的未拥挤侧加码与拥挤侧削减配合。
+  - 每月按此前 6 个月 Sharpe 在 默认 / C5 m1.25 / C4 m1.5 间滚动选择：全期收益介于两者之间、2026-03 后低于默认（OKX 8 币 +54.7%、Gate +55.7%）→ 滚动切换无益，固定参数即可。
+- 结论：作为可选参数上线（默认关闭，强观察）。不改默认：默认 8 币 2026-03 后逐月 4/9、收益低 1.5–2.5 点。想要更低回撤（深历史回撤约 −14% 对 −19%）可在 风控→策略参数 设 side_crowd_cap 5 / side_crowd_mult 1.25。下一步：等更多 2026-03 后数据再复核是否转默认。
