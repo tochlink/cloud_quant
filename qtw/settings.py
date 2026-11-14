@@ -14,6 +14,7 @@ from .paths import DATA_DIR, ensure_dirs
 from .timeutil import iso, utcnow
 
 LIVE_CONFIRM_PHRASE = "我已了解实盘交易可能亏损全部资金"
+REGIME_SYMBOLS = ("BTCUSDT", "ETHUSDT")  # 体制过滤（btc_regime_ma）可选的来源现货币种
 
 DEFAULTS: dict[str, Any] = {
     "venue": "okx",  # okx | gate —— 行情与（未来的）实盘交易所
@@ -50,6 +51,10 @@ DEFAULTS: dict[str, Any] = {
         # 0.81 / 0.31 / 0.80（单线 0.71 / 0.09 / 0.77），压力费同向、回撤更浅，2026-03 后与单线逐位相同；但差异只来自少数几次体制切换，
         # 强观察、未改默认（scratch/drgv/run.py、output/research_deep_history_btc_regime_vote.csv）。k = 1 或 ≥ 4 均已否决。
         "btc_regime_vote_k": 0,
+        # 2026-11-14：可选体制线来源币种（默认 BTCUSDT）。ETHUSDT = 用同所官方 ETH 现货收盘 < SMA_N 拦新开多（其余逻辑与 BTC 完全相同）。
+        # 双重留出 5 组深历史未见段日 Sharpe 1.09 / 1.00 / 0.38 / 0.40 / −0.01（BTC 0.71 / 0.77 / 0.09 / 0.24 / −0.32），2026-03 后收益 5/5 更高，
+        # N 1050–1350 平台平滑；但调参窗口 2026-03 前少 23–37 点，强观察、未改默认（scratch/drsrc/run.py、output/research_regime_source_swap_deep.csv）。
+        "btc_regime_symbol": "BTCUSDT",
         # 2026-11-11：可选震荡指数入场闸门（默认关闭）。上一根 CHOP_n > chop_max 时不新开 / 反手开仓，离场、止损、调仓不变。
         # 严格月度 walk-forward（候选 off + n{42,56,70}×T{48,50,52}，回看 3/6/12 个月按 Calmar/Sharpe 选）：Gate/OKX、真实与压力费率
         # 24 组全部 ≥ 固定关闭、回撤低 0.5–5 个百分点，但收益主要来自 2026-03 之前，n42 固定参数整段明显差于关闭（参数敏感），
@@ -283,6 +288,9 @@ def validate(s: dict) -> dict:
         raise ValueError("BTC 体制线投票门槛需为 0（单线）或 1–5")
     if st["btc_regime_vote_k"] and st["btc_regime_ma"] and round(st["btc_regime_ma"] * 1.5) > 2000:
         raise ValueError("BTC 体制线投票最长一条为 1.5×N，需 ≤ 2000 根（N ≤ 1333）")
+    st["btc_regime_symbol"] = str(st.get("btc_regime_symbol") or "BTCUSDT").upper()
+    if st["btc_regime_symbol"] not in REGIME_SYMBOLS:
+        raise ValueError("体制线来源币种需为 " + " / ".join(REGIME_SYMBOLS))
     st["chop_n"] = int(st.get("chop_n", 0) or 0)
     if st["chop_n"] and not 5 <= st["chop_n"] <= 300:
         raise ValueError("震荡指数周期需为 0（关闭）或 5–300")

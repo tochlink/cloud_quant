@@ -183,8 +183,9 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     # 标的里没有 BTCUSDT 时取 btc_spot（与引擎 _btc_regime_state 单独读取 BTC 同口径）；两者都没有则不生效（summary 注明）
     rg_n = int(st.get("btc_regime_ma", 0) or 0)
     RGL = np.zeros(len(idx), dtype=bool)
-    rg_src_df = spot_d["BTCUSDT"] if "BTCUSDT" in spot_d else (btc_spot if btc_spot is not None and len(btc_spot) else None)
-    rg_source = ("symbols" if "BTCUSDT" in spot_d else "btc_spot") if (rg_n and rg_src_df is not None) else ("missing" if rg_n else "off")
+    rg_sym = str(st.get("btc_regime_symbol") or "BTCUSDT").upper()  # 可选体制线来源币种（默认 BTCUSDT；ETHUSDT 时 btc_spot 传 ETH 现货）
+    rg_src_df = spot_d[rg_sym] if rg_sym in spot_d else (btc_spot if btc_spot is not None and len(btc_spot) else None)
+    rg_source = ("symbols" if rg_sym in spot_d else "btc_spot") if (rg_n and rg_src_df is not None) else ("missing" if rg_n else "off")
     if rg_n and rg_src_df is not None:
         b = rg_src_df.sort_values("open_time").set_index("open_time")
         RGL = btc_regime_blocks_long(b["close"], rg_n, int(st.get("btc_regime_vote_k", 0) or 0)).reindex(idx).fillna(False).to_numpy(dtype=bool)
@@ -676,6 +677,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "long_prices": "spot OHLC", "short_prices": "perp (USDT 永续) OHLC",
         "excluded_symbols": " ".join(excluded),
         "btc_regime_source": rg_source,
+        "btc_regime_symbol": rg_sym,
         "spot_signal_long_bars": int(sum((PX["spot"]["signal"][s][warm:] == 1).sum() for s in syms)),
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
         "conflict_flat_bars": int(sum(((PX["spot"]["signal"][s][warm:] == 1) & (PX["perp"]["signal"][s][warm:] == -1)).sum() for s in syms)),
@@ -700,12 +702,13 @@ def btc_spot_for_regime(cfg: dict, data: dict, bars: int):
     返回 (df 或 None, 错误文本)。取不到时不拦并报错，与引擎 _btc_regime_state 一致；不使用任何替代数据。"""
     st = cfg["strategy"]
     n = int(st.get("btc_regime_ma", 0) or 0)
-    if not n or "BTCUSDT" in (data.get("spot") or {}):
+    sym = str(st.get("btc_regime_symbol") or "BTCUSDT").upper()
+    if not n or sym in (data.get("spot") or {}):
         return None, ""
     from .strategy import regime_vote_lengths
     need = max(regime_vote_lengths(n)) if int(st.get("btc_regime_vote_k", 0) or 0) > 0 else n
     try:
         from .market import cache as mcache
-        return mcache.candles(cfg["venue"], "BTCUSDT", st["interval"], max(int(bars), need + 5), "spot"), ""
+        return mcache.candles(cfg["venue"], sym, st["interval"], max(int(bars), need + 5), "spot"), ""
     except Exception as e:  # noqa: BLE001 —— 真实错误原样上报
-        return None, f"BTCUSDT 体制过滤 K 线获取失败：{e}"[:300]
+        return None, f"{sym} 体制过滤 K 线获取失败：{e}"[:300]

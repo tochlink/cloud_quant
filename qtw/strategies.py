@@ -229,6 +229,11 @@ STRATEGIES: list[dict] = [
              "（btc_regime_vote_k 3），代替单一 SMA1200，降低体制线周期的选参运气。深历史未见段 Sharpe 三组都更高、2026-03 后与 #1 相同，"
              "但差异只来自少数几次体制切换，尚未改默认（docs/STRATEGY_FORMULAS.md「多周期投票」）。",
      "params": {"btc_regime_ma": 1200, "btc_regime_vote_k": 3}, "signal": None, "overrides": {"btc_regime_vote_k": 3}},
+    {"id": "ma_trend_regime_eth", "no": 12, "name": "双均线 + ETH 体制线（候选）", "interval": "4h", "kind": "趋势·体制过滤",
+     "desc": "信号、止损、仓位与 #1 完全相同；只把体制过滤的来源从 BTC 换成 ETH：同所官方 ETH 现货收盘 < SMA1200 时不新开多"
+             "（btc_regime_symbol ETHUSDT），空单与已有仓不受影响。双重留出 5 组深历史 Sharpe 全部更高、2026-03 后收益 5/5 更高，"
+             "但调参窗口 2026-03 前少 23–37 点，尚未改默认（docs/STRATEGY_FORMULAS.md「体制过滤的数据来源替换」）。",
+     "params": {"btc_regime_ma": 1200, "btc_regime_symbol": "ETHUSDT"}, "signal": None, "overrides": {"btc_regime_symbol": "ETHUSDT"}},
 ]
 BY_ID = {s["id"]: s for s in STRATEGIES}
 
@@ -266,6 +271,11 @@ VERDICTS.setdefault("ma_trend_regime_vote", {"status": "观察", "reason": ("强
     "（#1 0.71 / 0.09 / 0.77），回撤 −24.6% / −29.9% / −26.6%（#1 −28.7% / −36.5% / −26.9%），压力费同向；调参窗口与 2026-03 后与 #1 逐位相同。"
     "逐月差异只出现在少数体制切换月份（未见段更好 / 更差 2/2、5/6、6/3），未达改默认门槛。不进影子子账本。"
     "CSV：output/research_deep_history_btc_regime_vote.csv。")})
+VERDICTS.setdefault("ma_trend_regime_eth", {"status": "观察", "reason": ("强观察。"
+    "2026-11-14 研究（多空永续 10× + 官方资金费，scratch/drsrc）：双重留出 5 组（OKX8 / OKX7 / Gate8 深历史、OKX / Gate 未调参 new8）"
+    "未见段日 Sharpe 1.09 / 1.00 / 0.38 / 0.40 / −0.01（#1 0.71 / 0.77 / 0.09 / 0.24 / −0.32），2026-03 后收益 5/5 高 1–4 点，"
+    "N 1050 / 1350 邻域平滑，ETH 时移安慰剂在默认币池更差；但调参窗口 2026-03 前少 23–37 点，未达改默认门槛，按月复查。不进影子子账本。"
+    "CSV：output/research_regime_source_swap_deep.csv、output/research_regime_source_swap_eth_combo.csv。")})
 VERDICTS.setdefault("ma_trend_crowd_es", {"status": "观察", "reason": ("强观察。"
     "2026-11-14 研究（多空永续 10× + 官方资金费，scratch/stack）：深历史未见段日 Sharpe OKX 8 币 0.91 / Gate 8 币 0.51 / OKX 7 币 1.10（#1 0.71 / 0.09 / 0.77），"
     "回撤 −26% / −26% / −25%（#1 −29% / −37% / −27%）；调参窗 Sharpe 2.0 左右（#1 1.74）；2026-03 后收益三组都更高（+66.5% / +64.4% / +67.1% 对 +61.5% / +62.0% / +52.1%），"

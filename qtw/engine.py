@@ -317,15 +317,16 @@ def _btc_regime_state(cfg: dict) -> dict:
     st = cfg["strategy"]
     n = int(st.get("btc_regime_ma", 0) or 0)
     vk = int(st.get("btc_regime_vote_k", 0) or 0)
+    sym = str(st.get("btc_regime_symbol") or "BTCUSDT").upper()  # 可选体制线来源币种（默认 BTCUSDT）
     if not n:
         return {"n": 0, "vote_k": 0, "blocked": False, "error": ""}
     need = max(regime_vote_lengths(n)) if vk > 0 else n
     try:
-        df = mcache.candles(cfg["venue"], "BTCUSDT", st["interval"], need + 5, "spot")
+        df = mcache.candles(cfg["venue"], sym, st["interval"], need + 5, "spot")
         b = btc_regime_blocks_long(df["close"], n, vk)
-        return {"n": n, "vote_k": vk, "blocked": bool(b.iloc[-1]) if len(b) else False, "error": ""}
+        return {"n": n, "vote_k": vk, "symbol": sym, "blocked": bool(b.iloc[-1]) if len(b) else False, "error": ""}
     except Exception as e:  # noqa: BLE001 —— 真实错误原样上报
-        return {"n": n, "vote_k": vk, "blocked": False, "error": str(e)}
+        return {"n": n, "vote_k": vk, "symbol": sym, "blocked": False, "error": str(e)}
 
 
 BARS_PER_YEAR_MS = 365 * 24 * 3600 * 1000
