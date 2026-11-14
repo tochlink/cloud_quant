@@ -5622,3 +5622,17 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - Ulcer dd W60 lo0.25：夏普随机组 18 / 17 更好、回撤浅 ~1.9 个点，但收益只有 10 / 6 组更好（平均乘子 < 1，降敞口），新币持平略差；属于风险档，与 port_vol_target 0.2 同类。
 - 结论：ES NORM 是目前唯一同时通过深历史未见段、未调参新币、随机子集、压力费用与安慰剂的仓位层候选（真实增益，等平均敞口，不靠杠杆），但 2026-03 后不比基线好（4 / 8 个月），按规则不改默认。下一步做成可选参数（strategy `name_es_w` 0=关 / `name_es_k` / `name_es_alpha`，回测与引擎同一函数，默认关），推荐档 W120 k2；之后随新月份累积复核 2026-03 后表现。Ulcer dd W60 lo0.25 归为风险档观察（降回撤换收益）。
 - 研究表（本地，不入库）：`output/research_es_norm_sizing_out_of_universe.csv`（含 post_months_better_vs_base）；脚本 `scratch/dsz/esoou.py`、`esmod.py`。
+
+## 工程：ES NORM 尾部厚度单币乘子做成可选参数（2026-11-13 19:30–19:45，默认关）
+- 背景：上两轮 ES NORM 通过深历史未见段 + 币外检验（强观察），2026-03 后持平，不改默认；本轮按计划做成回测与引擎同口径的可选参数。
+- 参数（strategy）：`name_es_w`（0 = 关闭，20–1000 根）、`name_es_k`（默认 2.0，0.25–5）、`name_es_alpha`（默认 0.05，0.01–0.25）。推荐试用档 W120 k2。
+- 公式（`qtw.strategy.es_tail_fatness` / `es_tail_mult`）：r_t = Δln(close)，第 t 根用最近 W 根 r（含 t，有限值 ≥ W//2）；σ = 样本标准差（ddof 0），e = φ(Φ⁻¹(α))/α；
+  F_L = −mean(r ≤ q_α)/(σe)，F_S = mean(r ≥ q_{1−α})/(σe)。合成信号 g_t：多取 F_L、空取 F_S，m = clip(F^−k, 0.5, 1.5)（F 非有限或 ≤ 0 → 1；g = 0 → 1），
+  再在 g ≠ 0 的币间归一 M_s = m_s / mean(m)。回测：现货、永续各用自己的收盘算 M，乘到 NVM（第 i 根用 i−1，位于多空平价 / 对冲对之前）。
+  引擎：`engine.apply_es_tail` 按每行交易市场（row["market"]）在该市场所有有信号币之间归一，`name_vol_mult` × M（在 `apply_ls_parity` 之前），未持仓行的建议仓位重算；历史不足 W+1 根时不改。
+- 一致性：生产实现与研究包装 `scratch/dsz/esmod.py` 在官方 4h 默认 8 币、两所、W120/150 × k2/3 下权益曲线逐位一致（max |Δequity| = 0）；关闭时与基线逐位一致。
+  发现研究包装的缓存键 (长度, 末根收盘, 市场, 币, W) 不含交易所：同一进程先跑 Gate 再跑 OKX 时，若某币两所长度与末根收盘恰好相同，OKX 会复用 Gate 的尾部厚度。
+  新进程单独重跑 OKX 后与生产逐位一致；受影响的是此前 `esoou.py` / `run.py` 中 OKX 的 ES 数字，偏差很小（例：全 4500 根窗口 W120 k2 OKX +186.79% → 真值 +186.29%，夏普 1.812 → 1.809；W150 k2 +182.36% → +181.43%），结论不变。
+- 测试：`tests/test_es_tail_sizing.py`（默认关闭与参数校验、厚度公式、归一化、回测关闭逐位一致 / 开启改变定仓、引擎与回测逐根同口径、引擎关闭 / 历史不足不改与建议仓位重算）；全套 394 个测试通过。
+- 研究表（本地，不入库）：`output/research_es_tail_sizing_prod_parity.csv`、`output/research_es_tail_sizing_prod_parity_okx_fresh.csv`；脚本 `scratch/esimpl/parity.py`、`parity_okx.py`。
+- 状态：可选参数，默认关（强观察）。风控→策略参数里已保存的设置会覆盖默认；要试用需在设置里填 `name_es_w = 120`。下一步：随新月份累积复核 2026-03 后表现；下一族回到结构性方向（按趋势强度的条件加仓等）。
