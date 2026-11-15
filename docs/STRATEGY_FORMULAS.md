@@ -7720,3 +7720,9 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 今天 ETH 案例（2026-11-14 12:00–19:30 PST，rubik 5m 接续历史）：12:30 PST 一小时窗口 z = −2.36（卖压，与空单同向，不会触发平空）；17:00 PST 低点 1709 到 18:00 PST 冲到 1822 的反弹期间，15m / 30m / 1h 买方失衡 z 最大只有约 1.1–1.4，任何 k ≥ 2 的规则都不会触发。主动成交失衡救不了这一笔。
 - 结论：**否决**（独立短线和反手管理器都否决），不实现、不接页面、不进观察名单；“近 15m / 30m / 1h 主动买卖失衡”族不再重测。逐笔 5m 数据保留，可供以后做其它微观结构研究。
 - CSV（不入库）：`output/okx_taker_flow_5m.csv`、`output/research_okx_taker_flow_imbalance_event.csv`、`output/research_okx_taker_flow_reversal_manager_4h.csv`；脚本 `scratch/oflow/`（dl.py 下载聚合、build.py 合并、ev.py 短线、base4h_nores.py + ov.py 反手管理器）。
+
+### 2026-11-14 ~20:05 PST 短线：BTC/ETH 整数关口首次穿越 → 8 币永续篮子 1h 事件（否决）
+- 公式：BTC 档距 step ∈ {5000, 10000}、ETH ∈ {250, 500}；第 i 根 1h 收盘跨入新档（关口 lvl = 档 × step + offset），且过去 L ∈ {168, 720} 小时收盘从未到过 lvl 另一侧（L 内首次）→ 第 i+1 根开盘对 8 币等权篮子顺势 / 反向开仓，持有 H ∈ {12, 24, 48} 小时；持仓期间不叠加；费用 taker 0.051% × 2 + 实际资金费。安慰剂：关口网格平移 0.25 / 0.5 / 0.75 档（非整数位）。
+- 数据：OKX 官方 1h 永续（2022-01-29→，d8 + 未调参 new8）、Gate 官方 1h（2025-09-24→）；分段 pre 2024-10-21 / tune → 2026-03-05 / post。
+- 结果：真实 96 格中 9 个切片 ≥8/9 正的 4 格、9/9 为 0；安慰剂 0.25 / 0.5 / 0.75 档分别 1 / 7 / 5 格，≥7/9 真实 16 格 vs 安慰剂 13 / 12 / 19。靠前格子几乎全是“做多”，即加密市场的整体上涨漂移，整数位本身没有额外信息。
+- 结论：**否决**，整数关口 / 心理价位族不再重测。CSV（不入库）`output/research_round_number_level_cross_event_1h.csv`，脚本 `scratch/roundlvl/ev.py`。
