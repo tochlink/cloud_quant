@@ -8210,3 +8210,16 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - CSV（不入库）：`output/research_eth_missed_slot_burst_event_1h.csv`（4608 行）；小时序列 `output/eth_missed_slot_1h.csv`；脚本 `scratch/ethslot1h/{fetch,run,analyze}.py`。
 - 下一轮（长线）：美国 ISM 制造业 PMI，或 30 年按揭利率 / 营建开工，作为 4h 默认书入场闸门。这不是已测过的 FRED 利率 / 就业 / 通胀 / 实体零售与工业产出 / 情绪、金融条件或信用利差，也不是本轮的信标漏槽 1h 事件。文档和 `output/research_*.csv` 里还没有 ISM / PMI 或按揭 / 营建闸门。勿重测已否决的长线族（L2Beat TVS / 活跃度、UTXO / 确认时间、CM 交易所库存、闪电容量、信标质押 / 排队、stETH 基差、MVRV、算力带、Puell）。
 
+## 长线新族：美国 30 年按揭利率 / 营建开工体制 → 4h 默认书入场闸门（2026-11-15 ~04:32 PST，研究，不改默认；否决）
+
+- 查重：文档 / `output/research_*.csv` / 记忆中无按揭利率、营建开工、MORTGAGE30US、HOUST 作为 4h 入场闸门。这不是已否决的 FRED 利率 / 就业 / 通胀 / 实体零售与工业产出 / 情绪、金融条件或信用利差，也不是初请失业金或政策利率周期。上一轮指定本族为下一长线。ISM 制造业 PMI（FRED `NAPM`）因圣路易斯联储 2016 年 6 月下架 ISM 数据（官方说明 `fred.stlouisfed.org/news/2016/06/institute-for-supply-management-data-to-be-removed-from-fred`）无法从 FRED 取得，本轮不用、不回补、不从非官方源拼历史。
+- 数据：FRED 官方 `MORTGAGE30US`（Freddie Mac 30 年固定按揭利率，周度，1971-04-02 → 2026-11-12；周四约 10:00 ET 公布，按观测日 +2 天才可用）与 `HOUST`（Census 营建开工，月度季调年率，1959-01-01 → 2026-09-01；通常次月中旬 08:30 ET 公布，按观测日 +50 天才可用，避开最晚约 20 日的公布）。日度前向填充，不编造。交易为同脚本 `qtw.backtest.run_backtest` 默认 4h 书，OKX d8（deep 2023-02-01→2024-10-21）、Gate d8（deep 2022-07-01→）、OKX d7（去 BNB，deep 2022-04-01→），tune → 2026-03-05 → post → 2026-11-14；官方资金费，真实费率。K 线官方 4h 永续止于 2026-11-13 20:00 UTC。
+- 公式：经济先验 = 按揭偏紧或营建走弱时 cap（风险偏好下降）。按揭 cap：利率高于 n 日均（n=90/180）或 n 日变动 > 0（n=30/90）。营建 cap：同比 < 0、低于 n 日均（n=182/364）、或 n 日变动 < 0（n=90/180）。side 为 long_off / short_off / both / contra_both（both = cap 时不开新多、非 cap 时不开新空；已有仓位同向保留）。36 个真实格；预注册 both 对齐的日期平移安慰剂 +180 / −120 天。
+- 结果：36 个真实格里 1 个 8/9、没有 7/9、6 个 6/9。
+  - 唯一 8/9 是 `HOUST_chg_n90_lt0_contra_both`（营建 90 日下行时做多、上行时做空，与经济先验相反）。OKX d8 deep +38.72% / Sharpe 0.84（基线 +35.14 / 0.71），tune +90.11 / 1.61（基线 +85.08 / 1.47），post +62.74 / 2.43（基线 +59.90 / 2.23），逐月 4/2；Gate d8 post +63.17 / 2.44（基线 +60.32 / 2.25），逐月 4/2；OKX d7 tune Sharpe 1.5579 对 1.5583，是唯一没赢的切片，post +51.91 / 2.25（基线 +50.76 / 2.10），逐月 3/3。post 边只有约 +3 个百分点，逐月远达不到两边都 ≥6/9 个月更好。同一规则的先验侧 both / short_off 在 post 段接近走平（约 +2% 对基线 +60%）。
+  - 邻域极不稳：只有 n=90 是 8/9；n=75 为 2/9 且 post Sharpe 差约 −1.0；n=60 / 120 / 150 / 180 全是 0/9，post 明显弱于基线；n=105 为 4/9。
+  - 日期平移安慰剂：+365 天到 6/9，post Sharpe 提升 +0.12（真实格 +0.19），tune 提升更大；−120 天 5/9，tune 也强过真实格。安慰剂能打出接近真实格的切片胜场，不是可区分的边。
+  - 6 个 6/9 格（按揭 short_off、营建 long_off / below）全部打烂 tune 段（Sharpe 差约 −0.05 到 −0.92），不能当作证据。
+- 结论：**否决**，不实现、不进观察名单、不改默认。美国 30 年按揭利率 / 营建开工作为 4h 默认书入场闸门，勿以同一机制换 n、方向、按揭 vs 开工、均线 vs 变动 vs 同比重测。ISM 制造业 PMI 在 FRED 重新上架或有其他可核对的官方免费长历史之前，不要编造或从非官方源回补。
+- CSV（不入库）：`output/research_us_mortgage_housing_gate_4h.csv`（135 行）；邻域与安慰剂 `output/research_us_mortgage_housing_gate_4h_nbhd_placebo.csv`；官方序列 `output/fred_mortgage_housing_starts_daily.csv`；脚本 `scratch/ismhous/{fetch,run,nb,analyze}.py`。
+- 下一轮（短线）：纽约联储 Empire State 或费城联储制造业调查公布日，作为 1h 事件 → 8 币永续篮子顺势 / 逆势。这不是已测的 FOMC / CPI / 非农 / PPI 公布窗口，也不是本轮的按揭 / 营建 4h 闸门。文档和 `output/research_*.csv` 里还没有联储地区制造业调查事件。勿重测已否决的短线族（信标漏槽、验证者提款、存款合约、blob / 基础费、mempool 拥堵）。
