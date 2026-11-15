@@ -8381,3 +8381,32 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - CSV（不入库）：`output/research_cbeci_miner_margin_gate_4h.csv`（390 行，含邻域、安慰剂与压力费）；官方日序列 `output/cbeci_power_daily_cambridge.csv`（5,964 天，不入库）；脚本 `scratch/cbecigate/{fetch,run,analyze}.py`（研究脚本未推送）。
 - 下一轮（短线）：Solana 官方优先费 / Jito 小费地板（Solana RPC `getRecentPrioritizationFees`，或 Jito 公开 tip-floor / bundle 接口）1h 突发 → 8 币永续篮子顺势 / 逆势。这不是已否决的以太坊 MEV-Boost / PBS 中继块交付价值（ETH 中继，不是 SOL 优先费），也不是已否决的 ETH blob / 基础费、链上手续费冲击或 mempool 拥堵。文档与 `output/research_*.csv` 检索 Jito / Solana 优先费 / tip floor / compute unit 无短线条目。勿重测已否决的短线族（CME / IBIT 到期、Deribit 到期、出块间隔 / 空块、难度调整、Empire / Philly 调查、漏槽、提款、存款合约、blob / 基础费、mempool 拥堵、链上手续费冲击、Coinbase 溢价、稳定币供给 / 脱锚、美股 / 美国宏观发布、XAUT、维基关注、日历高低突破、日线反转 K、价格-资金费背离、篮子资金费极值、Gate / OKX 官方爆仓 / 持仓量 / 多空比微观结构）。
 
+
+## 短线新族：Solana 官方优先费 / Jito 小费地板 1h 突发 → 8 币永续篮子（2026-11-15 ~08:05 PST，研究；官方历史不够，推迟前向记录，不改默认）
+
+- 查重：文档 / `output/research_*.csv` / 记忆中无 Jito / Solana 优先费 / tip floor / compute unit 短线条目。这不是已否决的以太坊 MEV-Boost / PBS 中继块交付价值（ETH 中继，不是 SOL 优先费），也不是已否决的 ETH blob / 基础费、链上手续费冲击或 mempool 拥堵。上一轮（CBECI 4h 闸门，否决）指定本族为下一短线。
+- 数据（只核验官方接口，不编造、不回补、不用 Dune / Bitquery / 第三方仪表盘）：
+  - Jito 官方 `GET https://bundles.jito.wtf/api/v1/bundles/tip_floor`：文档写明返回**最近一次**落地小费分位（`time`，`landed_tips_{25,50,75,95,99}th_percentile`，`ema_landed_tips_50th_percentile`，单位 SOL）。现场 200，数组长度恒为 1（本轮样例 `time=2026-11-15T16:00:40+00:00`）。加 `limit` / `hours` / `start` 等查询参数仍只返回当前一条。官方文档另给 WebSocket `wss://bundles.jito.wtf/api/v1/bundles/tip_stream` 做实时推送，没有历史时间序列接口。
+  - Solana 官方 RPC `POST https://api.mainnet-beta.solana.com` 方法 `getRecentPrioritizationFees`：文档写明节点缓存最多约 150 个块。现场返回 150 条 `{slot, prioritizationFee}`（micro-lamports / CU），覆盖约 60 秒，不是可做 2026-03-05 分段的历史档案。
+  - 未发现 Jito / Solana 基金会发布的官方优先费或 tip-floor 历史档案。不把第三方库或账本回放自制成分位序列。
+- 因此官方历史过短，无法按预注册 1h 事件协议做训练 / 测试 / 2026-03-05 后分段、邻域与安慰剂。本族**推迟**，不是否决经济假设，也不是把没有历史的格子跑成结果。
+- 已在本机启动只读官方实时记录器（不杀死已有 `mempool1h/record.py` 与 `scratch/micro/recorder.py`，不碰撞既有表）：脚本 `scratch/soljito1h/record.py`（幂等 `INSERT OR IGNORE`，官方端点 only）。写入 `data/jito_tip_floor_live.csv`、`data/solana_prio_fee_slots.csv`，以及 `data/micro.sqlite` 新表 `jito_tip_floor`（主键 `official_time`）、`solana_prio_fee`（主键 `slot`）、`solana_prio_snap`。Jito 约 30 秒一轮、Solana 约 60 秒一轮。启动后已在记录。等官方历史攒够再按同一 1h 篮子事件协议做前向 / 纸面检验；在此之前不要用自制回放或换非官方源重测本族。
+- 本轮改跑下一长线：blockchain.com 官方 BTC 平均块大小（`avg-block-size`）作为 4h 默认书入场闸门（见下一节）。这不是已否决的链上活跃地址 / 交易笔数 / NVT、手续费冲击、mempool 拥堵、UTXO / 确认时间、交易所成交额、算力带或难度调整。
+
+## 长线新族：blockchain.com 官方 BTC 平均块大小（avg-block-size，MB）趋势 → 4h 默认书入场闸门（2026-11-15 ~08:05 PST，研究，不改默认；否决）
+
+- 查重：文档 / `output/research_*.csv` / 记忆中无平均块大小、`avg-block-size`、区块空间占用作为 4h 入场闸门。这不是已否决的链上活跃地址 / 交易笔数 / NVT（计次流量，`n-unique-addresses` / `n-transactions` / `estimated-transaction-volume-usd`），也不是已否决的链上手续费冲击、mempool 拥堵 1h、UTXO / 确认时间、交易所成交额、算力带或难度调整 1h 事件。本轮原定短线（Solana / Jito 优先费）因官方历史不够已推迟，改测本族。
+- 数据：blockchain.com 官方 charts API `GET /charts/avg-block-size?timespan=all&format=json&sampled=false`，状态 ok，周期 day，定义是「The average block size in MB」。官方点 6,508 个，全部 > 0。可用日终值 2009-01-17 → 2026-11-14。官方缺口 3 天（2025-11-13、2025-11-14、2025-11-15，相邻间隔 4 天），原样保留为缺失，不插值、不回补、不把缺口两端当成相邻观测；滚动窗按日历对齐（因此 n=180 在缺口后约 180 日内 flag 为 NaN，post 段有效占用 183 天，对 n=90 / n=30 的 post 段已恢复满样本 254 天）。当日 D 的日终值于 D+1 01:00 UTC 才使用。交易为官方 4h 永续默认参数：OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）；同脚本基线；分段 deep_unseen（< 2024-10-21）、tune_pre、post（≥ 2026-03-05 → 2026-11-14）。真实费率；压力费 20 / 15.1 bps。不用现货代替永续成交。
+- 公式：信号用 `ln(avg_block_size_mb)`（官方值全部为正）。`trend`：高于过去 n 日均线，n ∈ {30, 90, 180}；`chg`：n 日对数变化 > 0，n ∈ {30, 90}；`z`：相对过去 365 日均值 / 标准差，z > k，k ∈ {1.0, 1.5, 2.0}。闸门只拦新开仓、已有同向仓保留。方向：long_off / short_off / both / contra_both / cap_short_off。经济先验 = 平均块大小偏高 / 上升 = 区块空间需求与网络使用偏强 → risk-on，对应 cap_short_off / contra_both。预注册 40 个真实格。安慰剂：先验最好格子的 z 序列平移 +180 / −120 / +365 / −119 天。邻域：先验锚点附近的 n。8/9 = 三套数据 × 三段 Sharpe 都高于同脚本基线。
+- 结果（真实费率；基线 OKX d8 deep/tune/post +35.14%/0.71、+85.08%/1.47、+59.90%/2.23；Gate d8 −3.63%/0.09、+84.25%/1.46、+60.32%/2.25；OKX d7 +54.92%/0.75、+92.93%/1.56、+50.76%/2.10）：
+  - 40 个真实格，没有预注册的 7/9 或 8/9。最好是 6/9 五格（其中两格是 post 段一次都没触发的 z 值假象）。
+  - 经济先验最好是 `logsize_trend_n180_cap_short_off` 6/9：post 边很薄（OKX +61.20%/2.31 月 4/4，Gate +61.91%/2.33 月 5/3，d7 +53.16%/2.21 月 3/5），但深历史被打穿（OKX +6.70%/0.27 vs +35.14%/0.71，Gate −21.58%/−0.25 vs −3.63%/0.09，d7 +6.68%/0.23 vs +54.92%/0.75）。同格 +180 天安慰剂也是 6/9（post 边几乎贴着基线）；−120 / −119 / +365 天安慰剂为 3/9、2/9、1/9。
+  - 同向预注册 `logsize_trend_n90_cap_short_off` 也是 6/9，post 收益更高（OKX +62.76%/2.29 月 5/3，Gate +63.76%/2.32 月 5/3，d7 +55.43%/2.21 月 5/3），深历史仍明显差于基线（OKX +18.35%/0.48，Gate −12.23%/−0.06，d7 +16.47%/0.36）。月份两边都到不了 ≥6/9。
+  - `logsize_z365gt1_cap_short_off` 与 `logsize_z365gt2_cap_short_off` 的 6/9 是假象：post 段 flag 占用为 0（z 在 2026-03 之后从未触发），月 0/0，收益与基线完全重合；只在 deep / tune 偶尔触发所以多赢了 Sharpe。
+  - 非先验 `logsize_trend_n90_long_off` 6/9，但 post 收益与 Sharpe 都低于基线（OKX +54.93%/2.06 月 2/2，Gate +55.43%/2.08 月 2/2）。
+  - 邻域：锚点 `n180 cap_short_off` 附近 n=60/75/105/120 也是 6/9，深历史同样差；非预注册的 n=150 打出 8/9（OKX d8 deep +37.47%/0.77、tune +127.49%/1.89、post +60.57%/2.29 月 4/4；Gate deep −1.34%/0.12、tune +123.35%/1.85、post +61.64%/2.32 月 5/3；d7 deep +41.19%/0.65 仍低于基线 +54.92%/0.75，故不是 9/9），post 月份仍是 4/4 与 5/3，不是改默认所需的两所 ≥6/9 个月更好。不能因为邻域扫到 n=150 就把未预注册的格子当成新族再测。
+  - 压力费（20 / 15.1 bps）下，n180 / n90 cap_short_off 的深历史仍然明显差于同档基线（例如 OKX d8 n180 deep −0.76%/0.12 vs +24.67%/0.56），post 边仍然只有约 1.5–3 个点。
+- 结论：**否决**，不实现、不进观察名单、不改默认。blockchain.com 官方 BTC 平均块大小作为 4h 默认书入场闸门，没有可重复的未见历史 + 样本后优势：预注册网格没有 7/9 或 8/9；看起来最好的 6/9 要么深历史被打穿、被 +180 天安慰剂打出同样的 6/9，要么是 post 段根本不触发的 z 值假象；邻域里未预注册的 n=150 虽到 8/9，但 post 月份不够、d7 深历史仍差。本族勿以同一机制换 n、z、方向、均线 vs 变动 vs z，或改用每块交易笔数 / 链体积 / 区块权重等同一「区块空间占用」代理再测。
+- CSV（不入库）：`output/research_btc_avg_block_size_gate_4h.csv`（177 行，含邻域、安慰剂与压力费）；官方日序列 `output/btc_avg_block_size_daily_blockchain_com.csv`（6,508 天，不入库）；脚本 `scratch/blksize4h/{fetch,run}.py`（研究脚本未推送）。Solana / Jito 记录器见上一节，研究脚本 `scratch/soljito1h/record.py` 同样不推送。
+- 下一轮（短线）：CME CF 官方比特币参考汇率（CF Benchmarks Bitcoin Reference Rate, BRR）伦敦 16:00 定盘 / 日度官方结算窗口，作为 1h 事件 → 8 币永续篮子顺势 / 逆势。这不是已否决的 CME / IBIT 月度到期（到期日事件，不是每个交易日的定盘），也不是已否决的 CME 周末缺口或月末 / 到期日历 4h 闸门。文档与 `output/research_*.csv` 检索 BRR / Bitcoin Reference Rate / CF Benchmarks 定盘无短线条目。勿重测已否决的短线族（CME / IBIT 到期、Deribit 到期、出块间隔 / 空块、难度调整、Empire / Philly 调查、漏槽、提款、存款合约、blob / 基础费、mempool 拥堵、链上手续费冲击、Coinbase 溢价、稳定币供给 / 脱锚、美股 / 美国宏观发布、XAUT、维基关注、日历高低突破、日线反转 K、价格-资金费背离、篮子资金费极值、Gate / OKX 官方爆仓 / 持仓量 / 多空比微观结构）。Solana / Jito 优先费在官方历史攒够之前不要重测、也不要用非官方源补历史。
+
