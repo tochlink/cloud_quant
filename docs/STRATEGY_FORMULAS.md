@@ -8051,3 +8051,16 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：**否决**，不实现、不进观察名单、不改默认。10bp「折价时不开新空」是阈值孤岛，深历史未见段亏损，安慰剂也能到 6/9。流动性质押基差 / stETH-ETH 折价作为 4h 入场闸门不再重测。
 - CSV（不入库）：`output/research_steth_eth_basis_gate_4h.csv`；官方基差 `output/okx_steth_eth_basis_daily.csv`；脚本 `scratch/steth/run.py`。
 - 下一轮：短线新族（与平台币冲击、已否决的微结构 1h 事件、#14 对冲/挂单执行都不同），例如官方 XAUT 黄金代币 1h 价格冲击后的 8 币永续篮子。
+
+## 短线新族：官方 XAUT 黄金代币 1h 价格冲击 → 8 币永续篮子顺势 / 逆势（1h，2026-11-15 ~00:25 PST，研究，不改默认；否决）
+- 查重：文档 / `output/research_*.csv` / 记忆中无 XAUT / XAU 黄金 1h 价格冲击事件。已测过黄金/BTC 相对强弱 4h 闸门（否决）、黄金永续作第 9 品种（弱观察，相位未过）、TradFi 永续独立袖（否决）、美国宏观日度冲击（含 WTI，不含黄金 1h）。本族是黄金美元价格本身的 1h 冲击，不是对 BTC 的相对强弱，也不是把黄金当交易品种。
+- 数据：OKX 官方现货 `XAUT-USDT` 1h（`history-candles`，仅已确认根，2022-07-19 08:00 → 2026-11-15 07:00 UTC，37920 根，无缺口）；Gate 官方现货 `XAUT_USDT` 1h（公开接口只能回溯到 2025-09-28 11:00，9909 根，无缺口）；邻域再用 OKX 官方 `XAU-USDT-SWAP` 1h（2025-04-09 10:00 上市，14038 根）。交易腿为官方 1h 永续：OKX d8（2022-01→2026-11-14）、OKX 未调参 new8、Gate d8（2025-09→）。不用现货代替永续成交。
+- 公式：对已收盘黄金价 $P$，$r_t=\ln P_t$，$z_t=(r_t-r_{t-L})/(\sigma_{168}(r\text{ 的 1h 差分})\times\sqrt{L})$，波动窗口只用到上一根。触发 $|z|\ge k$，$k\in\{3,4,5\}$，$L\in\{1,4,8\}$。下一根 1h 永续开盘等权交易默认 8 币（或 new8），顺势（黄金涨做多加密）或逆势（黄金涨做空加密，避险假设），持有 24 / 48h，不重叠。费率：真实永续吃单 5.1bps 往返 2 腿，压力 15.1bps。分段：train→2024-10-21、test→2026-03-05、post→2026-11-14。安慰剂：把 $z$ 平移 ±720h。
+- 结果（真实费率，单笔组合均值）：
+  - 唯一「OKX d8 三段都为正」的格是 `XAUT_okx` L1 k5 顺势 48h：train +19.3bps（69 笔，t=0.30）、test +25.7（30，t=0.27）、post +71.4（19，t=0.50），胜率都约 50%。但未见币 new8 在 post 为 −63.1bps；压力费下 train 已是 −0.7bps。安慰剂 −720h 的 post 为 +62bps，与真实差不多；t 统计全程 < 1。
+  - 看起来最好的 `L4 k5 顺势 48h`（train +177.5 / post +303.7）在 test 为 −29.7bps（14 笔），而且 +720h 安慰剂在 train/test/post 为 +180 / +141 / +160，不差于真实。邻域 `L4 k4` test 同样为负（−26bps），new8 post 也为负。
+  - Gate 自有 XAUT 与 OKX XAU 永续没有 2024-10 前的训练段；少数 5/5 格样本很小（post 仅 2–10 笔），与 OKX XAUT 是同一类金价，不构成独立验证。
+  - 逆势（避险：金涨则空加密）在 post 段普遍为负，且没有 train/test/post 同时为正的稳定格。
+- 结论：**否决**，不实现、不进观察名单、不改默认。黄金 1h 价格冲击后做多 / 做空加密篮子没有可重复的单笔优势，最佳格要么被安慰剂追上，要么在 test / 未见币上翻负，t 统计接近零。XAUT / XAU 1h 价格冲击 → 加密永续篮子这一族勿重测。
+- CSV（不入库）：`output/research_xaut_gold_shock_event_1h.csv`；官方黄金 1h 在 `scratch/xaut1h/{XAUT_okx,XAUT_gate,XAU_okx_perp}_1h.csv`；脚本 `scratch/xaut1h/{fetch,run}.py`。
+- 下一轮：长线新族（与已覆盖的 FRED 宏观利率 / 就业 / 通胀 / 实体 / 情绪、链上估值、平台币相对强弱都不同），例如美国 ISM 制造业 PMI 或 30 年按揭利率 / 营建作为 4h 默认书入场闸门。
