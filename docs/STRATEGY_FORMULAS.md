@@ -7741,3 +7741,10 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 公式：cap = VRP < 0（n0，隐含低于已实现＝压力期）或 VRP < 自身 n 日均线（n ∈ {30, 90, 180}，溢价收缩）；动作 long_off / short_off / both / contra_both（同 CFTC 节）；只拦新开仓，已有仓不动。默认书其余不变，OKX d8 / Gate d8 / OKX d7（无 BNB）三套，分段 deep_unseen（→2024-10-21）/ tune_pre（→2026-03-05）/ post；安慰剂 ETHVRP n90 平移 +182 / −119 天。
 - 结果（9 个 Sharpe 切片胜基线数）：真实最好 6/9（BTCVRP n0 / n90 long_off），安慰剂最高 5/9。所有 long_off 的 post 收益（顺序 Gate d8 / OKX d8 / OKX d7）+48.9 / +48.4 / +38.9%，低于基线 +60.3 / +59.9 / +50.8%，post 月份 0 胜（2026-03 后的多单全被拦掉）。最显眼 ETHVRP_n30_contra_both post +69.5 / +68.9 / +59.6%（月份 5 / 4 / 6 胜），但 deep 未见段 Sharpe 全部低于基线（0.03 / 0.37 / 0.71 vs 0.09 / 0.71 / 0.75），邻域 n90 / n180 不成立。
 - 结论：**否决**，VRP 体制闸门不实现、不列观察，不再重测。CSV（不入库）`output/research_options_vrp_regime_gate_4h.csv`，脚本 `scratch/vrpgate/run.py`。
+
+## 短线新族：维基百科加密词条日浏览量冲击（散户关注度突增）→ 8 币永续篮子 1h 事件（2026-11-14 ~20:45 PST，研究，不改默认；否决）
+- 查重：维基百科浏览量只在 19:40 节做过 4h 长线体制闸门（否决）；从未作为短线事件。其他散户情绪短线事件（恐惧贪婪、韩国溢价、Coinbase 溢价、ETF 流）都是不同数据源。
+- 数据：Wikimedia 官方 pageviews（en.wikipedia，user，日度）Bitcoin 与三条合计 ALL（Bitcoin + Ethereum + Cryptocurrency），`output/wikipedia_pageviews_crypto_daily.csv`；可用时刻 = 该日结束后 +25h（D+2 01:00 UTC），之后第一根 1h 开盘吃单入场。交易：OKX 官方 1h 永续 8 币（2022-01→）、未调参 new8（OKX）、Gate 官方 1h 8 币（2025-09→），含官方资金费，实费 5.1 bps × 2。
+- 公式：x = ln(日浏览量)；r28 = x − 前 28 天均值（k = ln1.5 / ln2 / ln3），或 z90 = (x − 前 90 天均值) / 前 90 天标准差（k = 2 / 3 / 4）；事件 = 冲击 ≥ k 且前 7 天无事件。方向：uncond 篮子做多 / 做空；follow / fade = 跟随 / 反向当日（UTC）8 币篮子收益方向。持有 12 / 24 / 48h，持仓期内不重复。安慰剂 = 事件日期整体平移 +30 / −30 / +90 天。分段 train（→2024-10-21）/ test（→2026-03-05）/ post。
+- 结果（144 格 × 9 切片，Gate 无 train 段最多 8 个可用切片）：真实「所有可用切片为正」9 格，安慰剂 1 / 2 / 4 格；≥ 6 切片 28 格 vs 安慰剂 21 / 16 / 33 —— 与安慰剂无明显差别。事件很少（Bitcoin r28 k=ln1.5：train 13 / test 9 / post 7 次），t 值几乎都 < 1.5；同一阈值下做多 12h 和做空 48h 同时为正、换 k 或持有期符号来回翻转（如 r28 ln2 做空 12h post −88 bps、t −2.3），没有稳定方向。
+- 结论：**否决**，不实现、不进观察名单；维基百科关注度短线事件族不再重测（长线闸门也已否决）。CSV（不入库）`output/research_wikipedia_attention_spike_event_1h.csv`，脚本 `scratch/wikiev/ev.py`。
