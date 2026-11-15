@@ -7673,3 +7673,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 邻域不稳：n28 long_off 的 deep Sharpe 降到 0.28 / −0.06 / 0.49，n112 的 tune 降到 1.02 / 0.86 / 0.99。WALCL 单独、short_off、both 都使 post 大幅变差（both 只剩 +3–5%）。
 - 结论：**否决**，不实现、不进观察名单；美联储净流动性 / 资产负债表闸门族不再重测。
 - CSV（不入库）：`output/research_fed_net_liquidity_gate_4h.csv`；脚本 `scratch/netliq/run.py`（在 `scratch/hashribbon` 目录下运行）。
+
+## 短线新族：Gate / OKX 同币永续 1h 跨所价差冲击 → 8 币永续篮子 1h 事件（2026-11-14 ~19:45 PST，研究，不改默认；否决）
+
+- 查重：跨所价差此前只做过 4h 入场闸门（2026-11-10 22:10 节）和执行择优，从未做 1h 短线篮子事件。
+- 数据：两所官方 1h 永续 K 线（d8），dev_t = 8 币平均 ln(Gate 收盘 / OKX 收盘)×1e4（bps，逐币 0.1% / 99.9% 截尾，至少 6 币有值）。Gate 1h 本地只有 2025-09-24 → 2026-11-14（9,983 小时，均值 +0.2 bps，标准差 1.0 bps），所以没有 train 段，最多 6/9。
+- 公式：特征 dev_z168 / dev_z720、dchg1_z720 / dchg6_z720（dev 的 1h / 6h 变化的 720h z，shift 1）；|z| 首次 ≥ k（2/3/4，hi / lo）→ 两所该小时收盘后下一根 1h 开盘等权 8 币永续篮子做多 / 做空，持 12/24/48h，不重叠，扣 taker 0.051%×2 和资金费。样本 OKX d8 / new8 / Gate d8；安慰剂 ±168h、+336h。
+- 结果：真实 144 格中 14 格达到 6/6 可用段（test、post 都 ≥5 笔的 8 格）；安慰剂 14 / 22 / 13 格（≥5 笔：10 / 16 / 7）。真实与安慰剂无差别，价差只有 1 bps 量级，属于噪声。
+- 结论：**否决**，不实现、不进观察名单；跨所价差短线事件族不再重测。
+- CSV（不入库）：`output/research_cross_venue_dislocation_shock_event_1h.csv`；脚本 `scratch/xvdis/ev.py`（在 `scratch/stablemint` 目录下运行）。
