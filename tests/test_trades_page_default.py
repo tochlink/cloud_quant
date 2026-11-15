@@ -15,7 +15,9 @@ def test_page_trades_defaults_to_all_tab_and_parallel_fetch():
     body = _fn("pageTrades")
     assert 'S.tradeTab = "all"' in body
     load = _fn("loadTrades")
-    assert 'Promise.all([api("/api/trades"), api("/api/orders")])' in load
+    assert 'Promise.all([api("/api/trades"), api("/api/orders"),' in load
+    # 影子子账本成交和对账条单独拉取，失败不影响主账本成交
+    assert 'api("/api/shadow/trades").catch(' in load and 'api("/api/trades/summary").catch(' in load
 
 
 def test_refresh_all_reloads_trades_on_trades_page():

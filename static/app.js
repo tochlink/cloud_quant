@@ -1200,7 +1200,7 @@ function renderBt() {
   bindBtView(S.btView || "chart");
 }
 
-function bookTag(x) { const sh = x && x.book === "短线"; return `<span class="book-tag ${sh ? "bk-short" : "bk-long"}" title="${sh ? "短线：1m/5m/10m/1h 顺 4h/1D 方向的独立系统" : "长线：4h SMA50/150 核心（日线为上下文）"}">${sh ? "短线" : "长线"}</span>`; }
+function bookTag(x) { if (x && String(x.book || "").startsWith("影子")) return `<span class="book-tag bk-shadow" title="影子子账本：候选策略独立 1000U 纸面记录，不计入主账本">${esc(x.book)}</span>`; const sh = x && x.book === "短线"; return `<span class="book-tag ${sh ? "bk-short" : "bk-long"}" title="${sh ? "短线：1m/5m/10m/1h 顺 4h/1D 方向的独立系统" : "长线：4h SMA50/150 核心（日线为上下文）"}">${sh ? "短线" : "长线"}</span>`; }
 async function renderShortLayer() {
   const host = $("#btShortWrap"); if (!host) return;
   try { if (!S.shortLayer) S.shortLayer = await api("/api/short_layer"); } catch (e) { host.innerHTML = `<div class="empty">短线层研究读取失败：${esc(e.message)}</div>`; return; }
@@ -1224,6 +1224,7 @@ function pagePositions() {
   <div class="panel pos-panel featured"><div class="sec-title"><h3>当前纸面持仓（${d.positions.length}）</h3>${d.positions.length ? `<button type="button" class="btn danger" id="flattenAll">${ic("alert")}一键清仓</button>` : ""}</div>
   <div id="posTable"></div>
   <div id="posPager"></div>
+  ${(d.shadow_books || []).some((b) => b.open) ? `<div class="note recon-line">另有影子子账本持仓：${d.shadow_books.filter((b) => b.open).map((b) => `<span class="book-tag bk-shadow">${esc(b.book)}</span> ${b.open} 个`).join("，")}。它们是候选策略的独立纸面记录，不在本页、不计入上面的权益；明细见「成交 → 影子子账本」。</div>` : ""}
   <div class="note">纸面账本持久化保存在 data/qtw.sqlite（重启不丢失；CSV 仅为导出）。永续多空都按逐仓保证金计（名义 ÷ 杠杆），资金费计入已实现。手动平仓为市价，按该市场吃单（taker）费率记账；「停止」后不再按信号自动开平，ATR 止损与止盈仍生效。</div></div></div>`;
   renderPosTable();
   const fl = $("#flattenAll"); if (fl) fl.onclick = flattenAll;
@@ -1265,8 +1266,9 @@ async function pageTrades() {
 /* 成交与路由日志并行拉取；失败时保留已有数据 */
 async function loadTrades() {
   try {
-    const [tr, od] = await Promise.all([api("/api/trades"), api("/api/orders")]);
-    S.trades = tr; S.orders = od; return true;
+    const [tr, od, sh, sm] = await Promise.all([api("/api/trades"), api("/api/orders"),
+      api("/api/shadow/trades").catch(() => []), api("/api/trades/summary").catch(() => null)]);
+    S.trades = tr; S.orders = od; S.shadowTrades = sh || []; S.tradeSummary = sm; return true;
   } catch (e) {
     if (!S.trades && S.page === "trades") $("#page").innerHTML = `<div class="empty neg">${esc(e.message)}</div>`;
     return false;
@@ -1274,7 +1276,9 @@ async function loadTrades() {
 }
 function renderTradesPage(rebuild) {
   const all = S.trades || [];
+  const shadowAll = S.shadowTrades || [];
   const TT = [["all", "全部", all], ["open", "持仓中", all.filter((x) => x.status === "open")], ["closed", "已平仓", all.filter((x) => x.status !== "open")]];
+  if (shadowAll.length) TT.push(["shadow", "影子子账本", shadowAll]);
   const tab = S.tradeTab || "all";
   const rows = (TT.find((x) => x[0] === tab) || TT[0])[2];
   const orders = S.orders || [];
@@ -1282,8 +1286,9 @@ function renderTradesPage(rebuild) {
   if (rebuild !== false || !$("#tradeTable")) {
     $("#page").innerHTML = `<div class="fit trades-page">
       <div class="panel trades-panel featured">
-        <div class="sec-title"><h3>纸面成交（${all.length}）</h3>
+        <div class="sec-title"><h3>${tab === "shadow" ? `影子子账本成交（${shadowAll.length}）` : `主账本纸面成交（${all.length}）`}</h3>
           <div class="tabs5" role="tablist" aria-label="成交筛选">${TT.map(([k, l, r]) => `<button type="button" role="tab" data-tt="${k}" class="${k === tab ? "on" : ""}" aria-selected="${k === tab}">${l}<span class="cnt">${r.length}</span></button>`).join("")}</div></div>
+        ${reconHtml(tab)}
         <div id="tradeTable"></div>
         <div id="tradePager"></div>
       </div>
@@ -1304,6 +1309,17 @@ function renderTradesPage(rebuild) {
   ${slice.map((tr) => tradeRowHtml(tr)).join("")}</tbody></table></div>`;
   const pg = $("#tradePager"); if (pg) { pg.innerHTML = pagerHtml("trades", st); bindPager("trades", () => renderTradesPage(false)); }
   tightenIfOverflow(host, "trades", () => renderTradesPage(false));
+}
+/* 对账条：主账本 = 起始 + 成交记录盈亏（已扣手续费）+ 资金费；影子子账本各自独立 1000U，不计入主账本 */
+function reconHtml(tab) {
+  const sm = S.tradeSummary; if (!sm) return "";
+  const sg = (v) => (v > 0 ? "+" : "") + f2(v);
+  if (tab === "shadow") {
+    const bs = (sm.shadow || []).filter((b) => b.open || b.closed);
+    return `<div class="note recon-line">影子子账本只做纸面记录：每本独立起始 1000U，<b>不计入主账本的权益、成交笔数和盈亏</b>，也不会下任何单。${bs.map((b) => `<span class="recon-chip" title="${esc(b.name)}"><span class="book-tag bk-shadow">${esc(b.book)}</span> 权益 ${f2(b.equity)} · 持仓 ${b.open} · 已平 ${b.closed}${Math.abs(b.diff_usdt) > 0.01 ? ` · <span class="neg">对账差 ${f2(b.diff_usdt)}</span>` : ""}</span>`).join(" ")}</div>`;
+  }
+  const m = sm.main;
+  return `<div class="note recon-line" title="资金费在结算点直接计入已实现，不单独生成成交行">主账本对账：起始 ${f2(m.starting_equity, 0)} ${sg(m.closed_pnl_usdt)}（已平 ${m.closed} 笔，已扣手续费） ${sg(m.open_pnl_usdt)}（持仓 ${m.open} 笔浮盈，已扣开仓费） ${sg(m.funding_usdt)}（资金费） = ${f2(m.equity_from_trades)}，账本权益 ${f2(m.equity)} ${m.ok ? '<span class="pos">✓ 一致</span>' : `<span class="neg">差 ${f2(m.diff_usdt)}</span>`}</div>`;
 }
 function tradeRowHtml(tr) {
   const open = tr.status === "open";
