@@ -7653,3 +7653,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 压力费率没有单独跑：实际费率下已经全部落后基线，re 交易更多，压力费率只会更差。
 - 结论：**否决**，不实现、不进观察名单。4h 趋势书的收益靠少数长趋势，盘中锁利（1h 回吐、1h 吊灯、半仓、重开）都会把这部分砍掉，与 4h 口径的结论一致。盘中利润保护族（1h / 15m 回吐、吊灯、半仓、重开）不再重测。
 - CSV（不入库）：`output/research_intraday_profit_protect_4h.csv`；11-14 纸面空单 MFE 核对 `output/paper_short_mfe_giveback_20261114.csv`；脚本 `scratch/gbtrail/run.py`。
+
+## 短线新族：OKX 官方 USDT 杠杆借贷利率 1h 冲击 → 8 币永续篮子 1h 事件（2026-11-14 ~19:35 PST，研究，不改默认；否决）
+
+- 查重：USDT 借贷利率此前只做过 4h 长线体制闸门（13:50 节，弱观察）；从未做 1h 短线冲击事件。
+- 数据：`scratch/lend/okx_usdt_lending_rate_1h.csv`（OKX `finance/savings/lending-rate-history?ccy=USDT` 逐小时年化利率，2021-12→2026-11），该小时结束 +1h 才可用。
+- 公式：x = ln(rate)；特征 lvl_z168 / lvl_z720（x 对过去 W 小时均值方差的 z，shift 1）、chg6_z720 / chg24_z720（x 的 6h / 24h 变化的 720h z）；|z| 首次 ≥ k（2/3/4，hi / lo）→ 下一根 1h 开盘等权 8 币永续篮子做多 / 做空，持 12/24/48h，不重叠，扣 taker 0.051%×2 和资金费。样本 OKX d8、new8（LINK/LTC/DOT/TRX/BCH/ATOM/NEAR/UNI）、Gate d8；分段 train < 2024-10-21、test < 2026-03-05、post。安慰剂 ±168h、+336h。
+- 结果：真实 144 格中 7 格 ≥8/9，安慰剂 2 / 0 / 1；全部集中在「利率骤降 → 做多」。但邻域不稳：chg6_z720 ≤ −4 做多 12h/24h 8/9（OKX 73/32/17 笔，post +54/+50 bps），k3 降到 5–6/9，k2 只有 2–3/9（post −29 ~ −31 bps）；chg24 只在 k4 H12 成立（H24 3/9）；lvl_z720 只有 1–3 笔 post。压力费率（每边再加 10 bps）后 test 段 OKX +7 bps 的格子转负。
+- 结论：**否决**，不实现、不进观察名单；借贷利率短线事件族不再重测。
+- CSV（不入库）：`output/research_usdt_lending_rate_shock_event_1h.csv`；脚本 `scratch/lendev/ev.py`（在 `scratch/stablemint` 目录下运行）。
