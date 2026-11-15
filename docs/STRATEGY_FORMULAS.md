@@ -7991,3 +7991,13 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - M3 / M6：全部显著更差（−14 ~ −30bps 均值），未成交时错过了最猛的第一段反弹；skip（不兜底）大幅更差（−60 ~ −125bps）——#14 的收益大半来自第一时间进场。mkexit 离场全部略差（−3bps）。
 - 结论：「挂开盘价 −1% maker 限价，只挂 1 根，未成交下一根开盘吃单」列**弱观察**：方向一致、安慰剂不支持，但幅度只有每笔 +7bps（post 12 笔合计约 +1.8%），远在样本噪声内，不实现、不改 #14。挂单窗口 ≥ 3 根、不兜底、挂单离场全部否决，不再重测。
 - CSV（不入库）：`output/research_capdvol_maker_limit_entry_exec_1h.csv`；脚本 `scratch/mkexec/run.py`（在 scratch/capit 下运行）。下一轮：长线。
+
+## 长线新族：美国实体经济 / 消费者情绪（FRED 密歇根消费者信心 UMCSENT、零售销售 RSAFS、工业产出 INDPRO）体制 → 4h 默认书入场闸门（2026-11-14 ~23:58 PST，研究，不改默认；否决）
+- 查重：宏观闸门已测美元 / 汇率、实际利率、10Y / 2s10s / WTI、VIX、联储净流动性、金融压力 / 信用利差、BTC–纳指相关、CFTC、初请失业金、M2、CPI、政策利率 / 失业率；从未用**消费者情绪、零售销售、工业产出**等实体 / 情绪月度数据。
+- 数据：FRED `UMCSENT`（观测月 1 日 +31 天可用）、`RSAFS`（+46 天）、`INDPRO`（+47 天），日度前向填充。交易同上一宏观节：同脚本 `qtw.backtest.run_backtest` 默认 4h 书，OKX d8 / Gate d8 / OKX d7（去 BNB），deep 未见 → 2024-10-21 / tune → 2026-03-05 / post → 2026-11-14，官方资金费、真实费率。
+- 公式：cap = `同比 < 0`（yoy）或 `序列 < SMA182 / SMA364 日`（below）；闸门只拦新开仓：long_off / short_off / both / contra_both。安慰剂：UMCSENT below n182 平移 ±365 天。
+- 结果（9 个夏普对比；基线收益 deep / tune / post：OKX d8 35 / 85 / 60%，Gate −4 / 84 / 60%，d7 55 / 93 / 51%）：
+  - 最好 `UMCSENT < SMA182 short_off`（情绪高于半年均线时不开新空）7/9：post +62 / +63 / +55%（略好），但 OKX d8 deep 收益 26 对 35 变差，post 逐月胜 2 负 4 / 4 胜 2 负；邻域 n364 只有 4/9；安慰剂（平移 −365 天）6/9，几乎一样好。
+  - 零售销售 / 工业产出所有格最好 5/9，凡让 post 少开空的格 post 只剩 +8 ~ +14%。
+- 结论：**否决**，不实现、不进观察名单。美国实体经济 / 消费者情绪体制族不再重测。至此主要 FRED 宏观闸门（利率、通胀、就业、流动性、信用、汇率、商品、情绪、实体）已全部覆盖且无一通过，后续长线轮换不再找宏观序列。
+- CSV（不入库）：`output/research_us_real_activity_sentiment_gate_4h.csv`；脚本 `scratch/realact/run.py`。下一轮：短线新族。
