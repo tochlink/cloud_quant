@@ -7531,3 +7531,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（9 个切片 = 3 套 × train / test / post 净收益为正的个数）：真实 16/576 格 ≥ 8/9，安慰剂 +7 天 20、−7 天 11、+14 天 23——真实不优于安慰剂。上榜格几乎全是「做多」边（篮子本身的多头漂移），如 ETH 空头 72h 增量 z≥3 → 做多 48h，单格样本只有 6–20 笔；BTC 多头 24h z≥3 → 做空 48h 每段只有 3–16 笔，且 k=2 / L=6 等邻域不成立。
 - 结论：**否决**，不实现、不进观察名单。Bitfinex 保证金持仓族（短线事件）不再重测；数据保留。
 - CSV（不入库）：`output/research_bitfinex_margin_shock_event_1h.csv`、`output/bitfinex_margin_positions_1h.csv`；脚本 `scratch/bfxmargin/`（fetch.py、ev.py）。
+
+## 长线新族：Bitfinex 保证金持仓趋势（BTC / ETH 多头、净多头 n 日变化）作为 4h 默认书入场闸门（2026-11-14 ~18:30 PST，研究，不改默认；ETH 净多 n30 只拦空列弱观察，其余否决）
+
+- 查重：上一节只把 Bitfinex 保证金持仓做 1h 短线冲击事件（否决）；此前长线闸门用过资金费、基差、多空拥挤（CROWD，OKX 账户比）、宏观、链上、稳定币，从未用过 Bitfinex 保证金借贷持仓的中期趋势。
+- 数据：`output/bitfinex_margin_positions_1h.csv`（Bitfinex 官方 stats1 pos.size 1h，2021-02→，快照 +1h 可用）。交易为 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）官方 4h，默认参数，同脚本基线；分段 deep_unseen（< 2024-10-21）、tune_pre、post（≥ 2026-03-05）。
+- 公式：特征 X = ln(BTC 多头) / ln(ETH 多头) / ln(BTC 多/空) / ln(ETH 多/空)；`cap = X_t − X_{t−n·24h} < 0`（保证金多头在减），n = 7 / 30 / 60 天；闸门只拦新开仓：long_off = cap 时不开多；short_off = 非 cap（多头在加）时不开空；both；contra_both。安慰剂：特征平移 ±60 / 90 / 120 / 180 / 240 / 365 天。
+- 结果：首轮 48 格中只有 ETH_net_n30_short_off（及 both）3 套 × 3 段 Sharpe 全胜：deep Sharpe 0.81 / 0.34 / 0.82（基线 0.71 / 0.09 / 0.75），tune 1.72 / 1.77 / 1.72（基线 1.47 / 1.46 / 1.56），post +70.8 / +71.7 / +60.9%（基线 +59.9 / +60.3 / +50.8%），post 逐月胜 / 负 6/1、6/1、5/2，回撤不变。安慰剂 12 格最多 5/9。但邻域不稳：n25 9/9（post 逐月 4/2）、n40 9/9（5/3）、n20 6/9，而 **n35 1/9，post 只有 +39.4 / +40.3 / +32.9%**，n45 3/9；而且是从 48 格里挑出来的。
+- 结论：**ETH 净多 n30 只拦空列弱观察**（邻域有大洞，不满足改默认、也不进纸面）；BTC 多头 / ETH 多头 / BTC 净多各窗口及 long_off / contra 否决。每月复查一次 n25–n40 是否仍一致；不再重扫本网格。
+- CSV（不入库）：`output/research_bitfinex_margin_trend_gate_4h.csv`、`output/research_bitfinex_margin_trend_gate_4h_nbhd_placebo.csv`；脚本 `scratch/bfxgate/`（run.py、run2.py，需在 `scratch/hashribbon` 目录下运行）。
