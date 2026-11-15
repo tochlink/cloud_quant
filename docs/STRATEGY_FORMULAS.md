@@ -7567,3 +7567,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（9 切片 = 3 套 × train / test / post 净收益为正的个数）：真实 6/216 格 ≥ 8/9（9/9 为 0），安慰剂 +10 日 7、−10 日 7、+20 日 4——真实不优于安慰剂。上榜格大多每段只有 1–12 笔（如 NASDAQ z20 ≥ 3 做空 48h：OKX 3 / 1 / 1 笔），样本最大的 NASDAQ z20 ≤ −2 做空 24h（OKX 23 / 15 / 8 笔）每笔只有 +17–63 bps，扣压力费后不稳；「美股比加密跌得多 → 做多加密补涨」（div lo long）在 Gate test / OKX new8 段不一致，同族安慰剂也有 0–2 格上榜。
 - 结论：**否决**，不实现、不进观察名单。美股指数日收益冲击 / 美股—加密背离短线事件族不再重测。
 - CSV（不入库）：`output/research_us_equity_index_shock_event_1h.csv`；脚本 `scratch/eqshock/ev.py`（复用 `scratch/etfflow/ev.py` 的加载与回测函数；FRED 原始数据 `scratch/eqshock/NASDAQCOM.csv`、`SP500.csv`）。
+
+## 长线新族：美股指数（FRED NASDAQ 综合 / S&P 500）均线趋势体制作为 4h 默认书入场闸门（2026-11-14 ~19:05 PST，研究，不改默认；否决）
+
+- 查重：宏观体制闸门只用过美元广义指数 / 10Y TIPS 实际利率 / VIX（17:25 节），美股只测过事件型（CME 缺口、美股永续休市跳空、上一节日收益冲击）和 TradFi 永续趋势 sleeve；从未用美股指数自身的趋势状态拦加密默认书的开仓。
+- 数据：FRED 官方 `NASDAQCOM`（1971→）、`SP500`（2016-11→）日收盘，按 16:00 America/New_York 收盘 +1h 才可用，在 4h 开盘前向填充。交易为 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）官方 4h，默认参数，同脚本基线；分段 deep_unseen（< 2024-10-21）、tune_pre、post（≥ 2026-03-05）。
+- 公式：`cap = 指数收盘 < 自身 SMA_N`（N = 50 / 100 / 200 个交易日，美股风险偏好走弱）。闸门只拦新开仓、已有同向仓位保留：long_off = cap 时不开多；short_off = 非 cap 时不开空；both；contra_both。安慰剂：NASDAQ N100 序列平移 +180 / −120 天。
+- 结果（3 套 × 3 段比 Sharpe，最多 9/9）：真实 24 格最好只有 3/9，安慰剂最好也是 3/9。post 段美股一直在均线上方，long_off 在 post 段完全不起作用（与基线相同）；NASDAQ N50 long_off 只改善 deep 未见段（Sharpe 0.99 / 0.33 / 0.96 vs 0.71 / 0.09 / 0.75），但 tune 段三套都变差（OKX d8 +69% vs +85%）。short_off / both 在 post 段大伤（如 SP500 N200 short_off OKX d8 post +11.5% vs +59.9%），contra_both 只在 deep 段好、tune 和 post 段都差（NASDAQ N100 post +41% vs +60%）。
+- 结论：**否决**，不实现、不进观察名单。美股指数均线趋势体制闸门不再重测。
+- CSV（不入库）：`output/research_us_equity_index_trend_gate_4h.csv`；脚本 `scratch/eqgate/run.py`（需在 `scratch/hashribbon` 目录下运行，FRED 数据在 `scratch/eqshock/`）。
