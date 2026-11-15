@@ -7615,3 +7615,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（3 套 × 3 段比 Sharpe，最多 9/9）：真实 32 格最好只有 3/9（ALL n30 short_off、各 contra），post 段全部低于基线（如 ALL n30 short_off +45.0 / +45.7 / +38.4%，基线 +59.9 / +60.3 / +50.8%）；contra 只改善 deep 段、tune 段 Sharpe 掉到 0.6–1.2（基线 1.46–1.56）。安慰剂反而 4–6/9（Bitcoin z1 long_off 平移 +180 天 6/9）。
 - 结论：**否决**，不实现、不进观察名单。维基百科关注度体制闸门不再重测（数据保留）。
 - CSV（不入库）：`output/research_wikipedia_attention_gate_4h.csv`、`output/wikipedia_pageviews_crypto_daily.csv`；脚本 `scratch/wikiview/run.py`（需在 `scratch/hashribbon` 目录下运行）。
+
+## 短线新族：美国宏观日度冲击（FRED VIX 日变动、2Y / 10Y 美债收益率日变动、WTI 原油日收益）→ 8 币永续篮子 1h 事件（2026-11-14 ~19:50 PST，研究，不改默认；否决）
+
+- 查重：宏观此前测过 FOMC / CPI / 非农 / PPI 公布窗口（事件日历）、美元 / 实际利率 / VIX 体制闸门（长线）、美股指数日收益冲击（上一个短线节）；从未用 VIX、美债收益率、原油的**日变动冲击**做短线事件。
+- 数据：FRED 官方 `VIXCLS`、`DGS2`、`DGS10`、`DCOILWTICO` 日值（取 2019-06→）。按 16:00 America/New_York 收盘 +1h 后第一根整点 1h 开盘进场（盘后可实时观察到的收盘值）。交易用 OKX 官方 1h 永续 d8、未调参 new8、Gate 官方 1h 永续 d8（2024-10→，最多 8/9），官方资金费，taker 0.051% × 2。
+- 公式：r = 日变动（收益率用差分 bp，VIX / 原油用 log 收益）；`z_W = (r − mean_W) / std_W`（只用过去 W 个交易日，W = 20 / 60）；hi：z ≥ k，lo：z ≤ −k，k = 1.5 / 2 / 3；等权做多或做空 8 币，持有 12 / 24 / 48h，不重叠。4 序列 × 72 格 = 288 格 / 平移。安慰剂：序列平移 ±10 / +20 个交易日。
+- 结果：真实 10/288 格 ≥ 8/9（9/9 为 0），安慰剂 +10 日 5、−10 日 10、+20 日 9——真实不优于安慰剂。上榜格方向大致合理（VIX 急升 → 做空、10Y 收益率急跌 → 做多、2Y 急升 → 做空），但大多每段只有 3–20 笔，样本多的格每笔只有 +1–60 bps（如 DGS2 z20 ≥ 1.5 做空 24h：OKX 48 / 25 / 18 笔，+16 / +1 / +2 bps）。
+- 结论：**否决**，不实现、不进观察名单。VIX / 美债收益率 / 原油日度冲击短线事件族不再重测。
+- CSV（不入库）：`output/research_us_macro_daily_shock_event_1h.csv`；脚本 `scratch/eqshock/ev_macro.py`（FRED 原始数据同目录）。
