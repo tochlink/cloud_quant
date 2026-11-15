@@ -7477,3 +7477,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（144 格 × 9 个切片，Gate 无 train 段，最多 8/9 为正）：真实 9 格 ≥ 8/9，安慰剂 2–8 格（平移 7 天 8 格）。最好的一族是「手续费单日跳升 dz ≥ 2 → 做多 24h」：W90 k2 OKX d8 +112 / +192 / +69 bps（n 9 / 13 / 8），新 8 币 +103 / +158 / +133，Gate +328 / +69；但同一族持有 12h、48h 就掉到 5–7/8，平移 14 天的安慰剂也有 8/9，且多头篮子本身就有正漂移，样本只有每段个位数。
 - 结论：**否决**，不实现、不进观察名单。链上手续费跳升没有超出安慰剂的稳定增量。
 - CSV（不入库）：`output/research_btc_onchain_fee_shock_event_1h.csv`；脚本 `scratch/onchainfee/ev.py`（需在 `scratch/capit` 目录下运行）。下一轮（长线）：比特币算力带（hash ribbon，mempool.space 日度算力 SMA30 / SMA60）作为 4h 默认书体制闸门。
+
+## 长线新族：比特币算力带（hash ribbon，矿工投降 / 恢复）作为 4h 默认书入场闸门（2026-11-14 ~17:50 PST，研究，不改默认；否决）
+
+- 查重：上一节只用了链上手续费做短线事件（否决），此前从未把算力 / 矿工投降作为长线体制输入；与 BTC / ETH 均线体制、DVOL 体制、宏观体制、稳定币溢价等闸门都不同。
+- 数据：mempool.space 公开接口 `/api/v1/mining/hashrate/all`（比特币日度平均算力估计，UTC 日），**当日结束后再加 1 天才使用**（day + 49h）；存为 `output/btc_hashrate_daily_mempool.csv`（2019-01 →）。交易为 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）的官方 4h 数据，默认参数，同一脚本跑基线；分段 deep_unseen（< 2024-10-21）、tune_pre、post（≥ 2026-03-05）。
+- 公式：`cap = SMA_a(算力) < SMA_b(算力)`（矿工投降），(a, b) = (30, 60) / (20, 60) / (14, 56) / (30, 90) / (45, 90) / (60, 120)。闸门只拦新开仓，已有同向仓位保留：long_off = 投降期不开多；short_off = 恢复期不开空；both = 两者；contra_both = 反向。安慰剂：30/60 平移 +180 / −120 天。
+- 结果（24 格 × 9 个切片比 Sharpe）：最好只有 5/9（hr30_60_short_off：deep +0.3 点、tune +16 点、post −29 点，post 逐月胜 / 负 9 / 18）。经典 long_off（投降期不追多）抬高了 deep 段（OKX d8 +35→+47%、Gate −3.6→+5.4%），但 tune_pre 掉 47 点、post 掉 18 点（OKX d8 post +59.9→+42.0%）。安慰剂平移 −120 天 long_off 反而 4/9、tune +22 点，比真实格不差。
+- 结论：**否决**，不实现、不进观察名单。算力带对 4h 趋势书没有稳定增量；链上数据族（手续费、算力）不再重测。
+- CSV（不入库）：`output/research_btc_hash_ribbon_gate_4h.csv`；脚本 `scratch/hashribbon/run.py`。
