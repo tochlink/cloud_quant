@@ -7782,3 +7782,17 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 邻域：BTC_SMA2400 6/7 格更好（分位 0.84–0.98，new8 test 0.50），BTC_SMA4800 Gate 变差（0.25），ETH_SMA800 / BASKET_R720 只在 test 段好（分位 0.95–0.99），其余约随机。
 - 结论：**弱观察**，不实现、不改 #14、不进纸面。方向一致（牛市反弹单每笔多赚约 1.5–4 倍），ETH SMA4800 熊市减半 7/7 格 Sharpe 更好且与 #12 体制线同源，但相对随机减半的安慰剂只有约 0.8 分位，2026-03 后只有 12 笔，不足以改 #14。前向：#14 影子子账本每次触发时记录 ETH SMA4800 体制，累计 ≥ 10 笔真实纸面后复核。不再重扫本族（体制线 / 半仓比例）。
 - CSV（不入库）：`output/research_capitulation_dvol_regime_filter_1h.csv`、`output/research_capitulation_dvol_regime_filter_1h_placebo.csv`；脚本 `scratch/dvreg/run.py`、`plc.py`（在 `scratch/capit` 下运行）。
+
+## 长线新族：链上估值 MVRV（市值 / 已实现市值，CoinMetrics 社区版 BTC / ETH 日度）体制作为 4h 默认书入场闸门（2026-11-14 ~21:15 PST，研究，不改默认；否决）
+- 查重：此前测过 Puell 倍数（矿工收入估值）、算力带、链上活跃 / NVT、稳定币供给、ETF 流、TVL；从未用过「持币者整体浮盈」的 MVRV / 已实现价格估值。
+- 数据：CoinMetrics community API `timeseries/asset-metrics?metrics=CapMVRVCur`，BTC / ETH 日度 2018-01 →（保存 `output/coinmetrics_mvrv_btc_eth_daily.csv`）；D 日值于 D+2 00:00 UTC 才使用（不回补、不前视）。
+- 公式（只拦新开仓，已有同向仓位不受影响）：x = ln MVRV。trend：cap = x < SMA_n(x)，n ∈ {30, 90, 180}，side ∈ {long_off（cap 时不开多）, short_off（非 cap 时不开空）, both, contra_both}；z：cap = 365 日 z(x) > k（估值过热），k ∈ {1, 1.5, 2}，long_off；under：cap = MVRV < k（整体亏损），k ∈ {0.9, 1.0, 1.1}，cap 时不开空。安慰剂：ETH n90 与 BTC n90 序列平移 +182 / −119 / ±60 天。
+- 回测：4h 默认书，OKX d8（深段 2023-02 →）、Gate d8（2022-07 →）、OKX d7 无 BNB（2022-04 →）；分段 deep_unseen → 2024-10-21，tune → 2026-03-05，post → 2026-11-14；实费。base Sharpe 深 / 调 / post：OKX 0.71 / 1.47 / 2.23，Gate 0.09 / 1.46 / 2.25，d7 0.75 / 1.56 / 2.10。
+- 结果：
+  - 唯一 3/3 平台深段 + 调参段 Sharpe 都更好的是 BTC_trend_n90_long_off（深 +0.29 / +0.35 / +0.18，调 +0.10 / +0.09 / +0.05），但 2026-03 后从不触发（post 与 base 完全相同，0 个月更好）。
+  - 邻域：n60 / 75 / 120 / 150 深段都更好（+0.12 – +0.58）但调参段全部变差（−0.02 – −0.17，收益 −7 – −20 点），n ≥ 105 的 post −6 – −11 点；只有 n90 / n105 一个窄点成立。
+  - 安慰剂：BTC n90 平移 +182 天深段 +0.21 / +0.28 / +0.04、−60 天 +0.22 / +0.55 / +0.10，与真实相当 → 深段提升是「熊市少开多」的泛效应，不是 MVRV 信息。
+  - ETH MVRV < 1.0 / 1.1 不开空：深段、调参段 Sharpe 3/3 更好，但 post 收益 −25 / −50 点（2026 年 ETH 长期 MVRV < 1，等于关掉空头），0/9 月份达标。
+  - z365 过热拦多：几乎不触发（与 base 相差 ≤ 0.05）。trend short_off / both / contra 全面变差。
+- 结论：**否决**，不实现、不改默认。MVRV 估值体制对 4h 趋势书没有超过安慰剂的增量；不再重测 MVRV / 已实现价格估值族。
+- CSV（不入库）：`output/research_mvrv_valuation_gate_4h.csv`、`output/research_mvrv_valuation_gate_4h_nbhd_placebo.csv`；脚本 `scratch/mvrv/run.py`、`nb.py`。
