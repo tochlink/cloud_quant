@@ -7486,3 +7486,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（24 格 × 9 个切片比 Sharpe）：最好只有 5/9（hr30_60_short_off：deep +0.3 点、tune +16 点、post −29 点，post 逐月胜 / 负 9 / 18）。经典 long_off（投降期不追多）抬高了 deep 段（OKX d8 +35→+47%、Gate −3.6→+5.4%），但 tune_pre 掉 47 点、post 掉 18 点（OKX d8 post +59.9→+42.0%）。安慰剂平移 −120 天 long_off 反而 4/9、tune +22 点，比真实格不差。
 - 结论：**否决**，不实现、不进观察名单。算力带对 4h 趋势书没有稳定增量；链上数据族（手续费、算力）不再重测。
 - CSV（不入库）：`output/research_btc_hash_ribbon_gate_4h.csv`；脚本 `scratch/hashribbon/run.py`。
+
+## 短线新族：稳定币供给冲击（USDT / USDC / 全部稳定币流通量单日增发 / 赎回）→ 8 币永续篮子 1h 事件（2026-11-14 ~17:55 PST，研究，不改默认；否决）
+
+- 查重：此前稳定币只用过 USDC/USDT 兑换价（溢价闸门，弱观察），从未用过稳定币**流通量 / 增发赎回**；与链上手续费、算力、资金费、基差、期权流、韩国 / Coinbase 溢价都不同。
+- 数据：DefiLlama 公开接口 `stablecoins.llama.fi/stablecoincharts/all`（全部稳定币）及 `?stablecoin=1`（USDT）/ `?stablecoin=2`（USDC）的日度流通量（peggedUSD，去掉未完成的当天），存 `output/stablecoin_supply_daily_defillama.csv`；**快照日次日 01:00 UTC 才使用**（day + 25h），下一根 1h 开盘成交。注意：聚合方历史可能有事后修订，不是严格时点数据。交易同上一节：OKX d8、Gate d8、OKX 新 8 币（未调参），官方 1h 永续，taker 5.1 bps × 2 + 官方资金费；分段 train（< 2024-10-21，未见）/ test / post（≥ 2026-03-05）。
+- 公式：`g_L = ln(S_t) − ln(S_{t−L})`（L = 1 / 3 日）；`z = (g_L − mean_W(g_L 前移 1 日)) / sd_W`（W = 30 / 90 日）；hi（z ≥ k，增发冲击）/ lo（z ≤ −k，赎回冲击），k = 1.5 / 2 / 3；多 / 空 8 币等权篮子，持有 12 / 24 / 48h，持仓期间不重复开。安慰剂：日度特征平移 ±14 / 30 天。
+- 结果（432 格 × 9 切片，Gate 无 train 段，最多 8/9）：真实 15 格 ≥ 8/9，安慰剂平移 +14 天 25 格、−14 天 24 格、+30 天 8 格——真实不比安慰剂好。最像信号的是「USDT 单日增发 z ≥ 1.5–2 → 做多 48h」（W90 k2：OKX d8 +345 / +273 / +12 bps，n 29 / 19 / 7），但 post 段几乎归零，且多头篮子在 2023–2025 本身有正漂移；USDC 赎回 z ≤ −2 → 做多 24h（OKX d8 +17 / +208 / +120）样本每段 7–31 笔，不稳。
+- 结论：**否决**，不实现、不进观察名单。稳定币单日增发 / 赎回没有超出安慰剂的短线增量。
+- CSV（不入库）：`output/research_stablecoin_supply_shock_event_1h.csv`；脚本 `scratch/stablemint/ev.py`。下一轮（长线）：稳定币 30–90 日供给增速作为 4h 默认书体制闸门（流动性扩张 / 收缩）。
