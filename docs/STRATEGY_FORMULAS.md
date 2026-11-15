@@ -7831,3 +7831,14 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 但邻域不稳：同一触发持有 24h 的 test 段 −54 / −65 bps，广度 6 / 8 在 train 或 test 段为负；剔除 #14 附近事件后 OKX train / test 降到 −23 / −6 bps——大部分收益与 #14 投降 / DVOL 冲击重叠，增量很小。
 - 结论：**否决**，不实现。「全篮子负资金费 ≥ 7/8 → 做多 48h」只作为弱观察（与 #14 高度重叠，等 2026-03 后事件更多再看增量）；资金费水平 / z 分数 / 正费率极端做空均不再重测。
 - CSV（不入库）：`output/research_basket_funding_extreme_event_1h.csv`（64 格 × 切片 × 真实 / 压力 / 安慰剂）、`output/research_basket_funding_extreme_event_1h_nbhd.csv`（广度 × 持有 × 剔除 #14 + 随机整点安慰剂）；脚本 `scratch/fundev/run.py`、`nb.py`（在 `scratch/capit` 下运行）。下一轮（长线）：换新族。
+
+## 长线新族：美国金融条件 / 金融压力 / 高收益信用利差（FRED NFCI、STLFSI4、BAMLH0A0HYM2）趋势体制作为 4h 默认书入场闸门（2026-11-14 ~22:00 PST，研究，不改默认；否决）
+
+- 查重：此前宏观闸门测过美元指数 / 实际利率、美债 10Y / 2s10s、WTI、美联储净流动性、美股指数趋势、VIX 日冲击、日元 / 人民币；从未用**金融条件 / 金融压力指数和信用利差**（衡量信用与融资环境，不同于利率水平与股价）。
+- 数据：FRED 官方 `NFCI`（芝加哥联储全国金融条件指数，周五为周末，周三发布 → 按日期 +7 天才使用）、`STLFSI4`（圣路易斯联储金融压力指数，+7 天）、`BAMLH0A0HYM2`（ICE 美国高收益债 OAS，FRED 只提供 2023-11 起，+2 天），逐日前值填充。交易：默认 4h 书同脚本（`qtw.backtest.run_backtest`），OKX d8（2023-02 起）、Gate d8（2022-07 起）、OKX d7（去 BNB，2022-04 起），官方现货 + 永续深历史、真实费率与官方资金费。分段 deep_unseen（→ 2024-10-21）/ tune_pre / post（2026-03-05 →）。
+- 公式：cap = x > SMA_n(x)（金融条件收紧 / 利差走阔），n = 30 / 90 / 180 日；或水平 cap = NFCI > 0 / −0.4、STLFSI > 0 / −0.5。闸门只拦新开仓（同向持仓保留）：long_off（cap 时不开多）/ short_off（非 cap 时不开空）/ both / contra_both（反向）。安慰剂：NFCI n90 整体平移 +182 / −119 天。
+- 结果（Sharpe 胜基线计数，3 套 × 3 段，最多 9；基线三套均值 deep 0.52 / tune 1.49 / post 2.20，post 收益 +57.0%）：
+  - 真实最好只有 6/9：NFCI_n180_both（post +66.4% / 2.51，但 tune Sharpe 0.77，逐月 8 胜 10 负）、NFCI_n90_long_off（post +58.3%，逐月 4 / 5）、NFCI_n30_long_off（post +52.9%）。HY 利差最好 4/9（long_off post +46.9 ~ +55.5%）。水平类闸门在 post 段从不触发（与基线完全相同），deep 段反而更差或持平。
+  - 安慰剂平移 NFCI n90 both +182 天 5/9、post +65.5% / 2.69，short_off +182 天 post +69.2%——安慰剂与真实同样好甚至更好。
+- 结论：**否决**，不实现、不进观察名单。金融条件 / 压力 / 信用利差对 4h 默认书没有超出安慰剂的体制信息；不再重测此族。
+- CSV（不入库）：`output/research_financial_stress_credit_gate_4h.csv`；脚本 `scratch/credit/run.py`（原始 FRED CSV 在同目录）。下一轮（短线）：换新族。
