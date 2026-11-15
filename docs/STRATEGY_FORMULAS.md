@@ -7960,3 +7960,13 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 其他格（rise / acc3 / long_off / both / contra）最好 6/9，凡是让 post 少开空的格 post 都大幅变差（+13 ~ +35%）。
 - 结论：「CPI 同比 ≤ 2.75–3% 不开新空」列为**弱观察**（不实现、不改默认），每月 CPI 公布后复查一次是否仍成立；其余通胀体制格否决，不再重测。
 - CSV（不入库）：`output/research_cpi_inflation_regime_gate_4h.csv`、`output/research_cpi_inflation_regime_gate_4h_nbhd_placebo.csv`；脚本 `scratch/cpi/run.py`、`scratch/cpi/nb.py`。下一轮：短线新族。
+
+## 短线新族：逐币「价格-资金费背离」与资金费变号事件（1h 永续，逐币持有 24 / 48h；2026-11-14 ~23:35 PST，研究，不改默认；否决）
+- 查重：资金费此前测过 4h 闸门、carry、截面 carry、跨所费差、结算窗口、8 币**篮子**资金费极端事件与 n 日均值体制；从未测过**逐币**的价格走势与资金费方向背离（上涨中空头付费 / 下跌中多头仍付费）或逐币资金费变号事件。
+- 公式（结算根 j 判定，j+1 开盘吃单，持有 H = 24 / 48h 后开盘离场，同币持仓中不重复，每币名义 1/8，计实际资金费）：`z = ln(C_j / C_{j−L}) / (σ_720(1h 对数收益) × √L)`，L = 24 / 72，k = 1.5 / 2.5。
+  - 背离（主假设）：`z ≥ k ∧ f_j ≤ −θ` 做多（空头逆势拥挤 → 轧空），`z ≤ −k ∧ f_j ≥ θ` 做空（多头接刀），θ = 0 / 0.5bp；对照：同向拥挤 `z ≥ k ∧ f ≥ 1bp`、`z ≤ −k ∧ f ≤ −1bp`；变号：`f_{prev} > 0 → f_j < 0`、反之。两个方向都测。
+- 数据：OKX 官方 1h 永续 + OKX 官方深历史资金费（默认 8 币 train 2022-02→2024-10-21 / test →2026-03-05 / post →2026-11-14，未调参 new8 同切片），Gate 官方 1h + Gate 官方资金费（全段 / post）；真实 taker 5.1bps，压力 15.1bps；安慰剂 = 事件 ±720h 平移。
+- 结果（8 切片每笔净收益为正的个数）：真实 104 格最多 7/8（8 格），安慰剂 +720h 有 13 格 ≥ 7/8（3 格 8/8）、−720h 5 格（3 格 8/8），真实不优于安慰剂。主假设格：轧空做多最好 5/8（up_L72_k2.5_f≤0 48h，样本 121，OKX d8 post −778bps）；接刀做空最好 6/8（dn_L72 k1.5/2.5 θ0.5bp 48h），但 OKX d8 test −148 ~ −601bps、new8 test −206 ~ −465bps，跨期翻转。变号事件每笔 −78 ~ +57bps，各 2.4 万次，≈ 0 优势。
+- 结论：**否决**，不实现、不进观察名单。逐币价格-资金费背离 / 资金费变号短线事件族不再重测。
+- CSV（不入库）：`output/research_coin_funding_price_divergence_event_1h.csv`；脚本 scratch/fdiv/run.py（未推送）。
+- 下一轮：长线。
