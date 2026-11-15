@@ -7588,3 +7588,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 兑换成交额放量做多（vol_z720 ≥ 3）post 只有 3 笔，Gate test 段不一致。
 - 结论：**否决**，不实现、不进观察名单。USDC-USDT 兑换价 / 成交额短线冲击族不再重测（数据保留）。
 - CSV（不入库）：`output/research_usdc_usdt_peg_shock_event_1h.csv`、`output/okx_usdc_usdt_spot_1h.csv`；脚本 `scratch/usdcev/`（dl.py、ev.py）。
+
+## 长线新族：BTC 链上活跃度（活跃地址 / 交易笔数 n 日变化）与 NVT（市值 / 链上转账额）体制作为 4h 默认书入场闸门（2026-11-14 ~19:20 PST，研究，不改默认；否决）
+
+- 查重：链上数据此前只测过手续费冲击（短线）、算力带、Puell 倍数（矿工侧）；从未用过需求侧的活跃地址、交易笔数或 NVT 估值。
+- 数据：blockchain.com 官方 charts API `n-unique-addresses`、`n-transactions`、`estimated-transaction-volume-usd`、`market-cap`（按 UTC 日取最后值），2019-01 →，存 `output/btc_onchain_activity_daily_blockchain_com.csv`。日值保守按当日 0 点 +49h 才算已知。交易为 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）官方 4h，默认参数，同脚本基线；分段 deep_unseen（< 2024-10-21）、tune_pre、post（≥ 2026-03-05）。
+- 公式：AA / TX = ln(7 日均值)，`cap = n 日变化 < 0`（链上活跃度收缩，n = 30 / 90）；`NVT = ln(市值 / 28 日均链上转账额)`，`cap = NVT > 自身 n 日滚动中位数`（估值偏贵，n = 90 / 365）。闸门只拦新开仓、已有同向仓位保留：long_off / short_off / both / contra_both。安慰剂：AA n90 平移 +180 / −120 天。
+- 结果（3 套 × 3 段比 Sharpe，最多 9/9）：真实 24 格最好 NVT n90 short_off 5/9（post +31.8 / +32.6 / +25.3%，基线 +59.9 / +60.3 / +50.8%），TX n30 short_off 4/9（post 只有 +8–16%）；安慰剂 AA n90 short_off 平移 +180 天反而 8/9。long_off 各格都让 tune 段大幅变差（如 NVT n90 long_off tune Sharpe 0.40–0.54，基线 1.46–1.56），只有 deep 段变好；short_off / both 在 post 段普遍砍掉近一半收益。
+- 结论：**否决**，不实现、不进观察名单。链上活跃度 / NVT 体制闸门不再重测（数据保留）。
+- CSV（不入库）：`output/research_btc_onchain_activity_gate_4h.csv`、`output/btc_onchain_activity_daily_blockchain_com.csv`；脚本 `scratch/onchainact/run.py`（需在 `scratch/hashribbon` 目录下运行，原始 JSON 在 `scratch/puell/bc_*.json`）。
