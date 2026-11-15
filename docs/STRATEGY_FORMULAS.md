@@ -8014,3 +8014,16 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 解读：#14 的反弹收益几乎全部是整体市场（BTC）β，山寨相对 BTC 的超额 ≈ 0；对冲只是按比例同时砍掉收益和尾部，t 值不升。若要压尾部，直接降 #14 名义即可（等价且更省费）。
 - 结论：**否决**，#14 不改结构（继续不对冲的等权做多）。#14 BTC / β 对冲版不再重测。
 - CSV（不入库）：`output/research_capdvol_btc_hedged_alt_rebound_1h.csv`；脚本 `scratch/hedge14/run.py`（在 scratch/capit 下运行）。下一轮：长线（非宏观序列）。
+
+## 长线：交易所平台币相对强弱体制门（OKB/BTC、GT/BTC）→ 4h 默认书只拦新开仓（2026-11-14 23:55 PST，观察，不改默认）
+- 思路：平台币相对 BTC 走强 ≈ 交易所散户活跃/风险偏好上升 → 趋势书的空头更容易被轧。
+- 数据：OKX 官方 OKB-USDT、BTC-USDT 现货日线（history-candles 1Dutc，2018-03→）；Gate 官方 GT_USDT、BTC_USDT 现货日线（2019-04→）。日线收盘后 +1 天才可用，无回填。
+- 公式：R_t = ln(TOKEN/BTC)；cap_t = R_t < SMA_n(R)，n ∈ {30, 90, 180} 天。侧别：long_off（cap 时不新开多）/ short_off（非 cap 即平台币走强时不新开空）/ both / contra_both；已持仓不受影响。安慰剂：OKB n90 序列平移 +182 / −119 天。
+- 回测：4h 默认参数，OKX d8（深 2023-02→）/ Gate d8（深 2022-07→）/ OKX d7_noBNB（深 2022-04→）；段：deep_unseen →2024-10-21、tune_pre →2026-03-05、post →2026-11-14；真实费率。
+- 结果（夏普胜场 /9）：
+  - OKB n30 short_off 9/9、n90 short_off 9/9、n180 short_off 6/9；安慰剂 short_off 4/9 与更低，最高安慰剂 6/9（both +182d）。
+  - OKB n90 short_off：深段夏普 OKX 0.71→0.78、Gate 0.09→0.26、d7 0.75→1.12；tune 段收益 OKX +85→+125%、Gate +84→+133%；post 收益 +58.0/+58.7/+50.8%（基线 +59.9/+60.3/+50.8），post 月 4 好 3 差。
+  - OKB n30 short_off：post +60.3/+61.0/+50.7%，月 4/3、4/3、3/3；深段回撤 −29→−23%（OKX）。
+  - GT/BTC 不复现（short_off 最好 3/9，n30 post +40% vs +60%）；long_off / both / contra 全部无效。
+- 结论：观察（不改默认）。pre-2026-03 改善明显且 n30–90 邻域稳定、优于安慰剂，但 post 几乎持平、月度未达 ≥6/9，且只有 OKB 有效（GT 不复现，可能是 OKB 个别事件）。每月复查 post；GT 版与 long_off/both/contra 拒绝，勿重测。
+- CSV：output/research_exchange_token_relstrength_gate_4h.csv；脚本 scratch/xtok/{fetch,run}.py。
