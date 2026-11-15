@@ -7949,3 +7949,14 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 「hammer N10 做多 48h」8/8 正但 Gate 全段只有 +17、new8 test +9 bps；同形态 24h 持有在 test 段 −116 / −124 bps（t ≈ −2.7），N20 换邻域即转负。
 - 结论：**否决**，日线反转形态（关键反转 / 锤子 / 吞没）作为短线事件没有稳定增量，不再重测。
 - CSV（不入库）：`output/research_daily_reversal_candle_event_1h.csv`；脚本 `scratch/dkr/run.py`（在 `scratch/capit` 下运行）。下一轮：长线新族。
+
+## 长线新族：美国 CPI 通胀体制（FRED CPIAUCSL 总体 / CPILFESL 核心）→ 4h 默认书入场闸门（2026-11-14 ~23:25 PST，研究，不改默认；「CPI 同比 ≤ 2.75–3% 不开新空」弱观察，其余否决）
+- 查重：宏观闸门已测过美元 / 汇率、TIPS 实际利率、10Y / 2s10s / WTI、VIX、联储净流动性、金融压力 / 信用利差、BTC–纳指相关、CFTC、初请失业金、M2；通胀只测过 CPI 公布当天的 1h 事件（短线，否决），从未把**通胀水平 / 趋势**当长线体制。
+- 数据：FRED `CPIAUCSL`、`CPILFESL`（月度，观测日 = 当月 1 日，次月中旬公布 → 按观测日 +46 天才可用，日度前向填充）。交易：同脚本 `qtw.backtest.run_backtest` 默认 4h 书，OKX d8（deep 2023-02→2024-10-21）、Gate d8（deep 2022-07→）、OKX d7（去 BNB，deep 2022-04→），tune → 2026-03-05 → post → 2026-11-14；官方资金费，真实费率。
+- 公式：cap（通胀偏热）= `同比 > 2.5% / 3%`（hot）、`同比 > 同比的 182 / 364 日均值`（rise）、`3 个月年化 > 同比`（acc3）；闸门只拦新开仓：long_off（cap 时不开多）/ short_off（非 cap 时不开空）/ both / contra_both。安慰剂：cap 平移 +182 / −119 / ±60 / +365 天。
+- 结果（9 个夏普对比 = 3 套 × deep / tune / post；基线 deep 0.71 / 0.09 / 0.75，post +59.9 / +60.3 / +50.8%）：
+  - `CPI 同比 > 2.75%` short_off（通胀 ≤ 2.75% 时不开新空）9/9：deep 0.82 / 0.16 / 0.82，tune 1.68 / 1.62 / 1.73（基线 1.47 / 1.46 / 1.56），post +65.0 / +65.4 / +57.2%；阈值 3% 是 8/9。同一格的 5 个时间平移安慰剂只有 0–3/9。
+  - 但阈值是悬崖：3.25% / 3.5% 只有 5/9，4% 2/9；核心 CPI 3% 0/9（3.25% 6/9，post 却只有 +13%）；post 逐月只有 2 个月有差别（胜 2 负 0），远达不到 ≥6/9 个月。CPI 跨 3% 的体制切换整段只有几次，有效样本很少。
+  - 其他格（rise / acc3 / long_off / both / contra）最好 6/9，凡是让 post 少开空的格 post 都大幅变差（+13 ~ +35%）。
+- 结论：「CPI 同比 ≤ 2.75–3% 不开新空」列为**弱观察**（不实现、不改默认），每月 CPI 公布后复查一次是否仍成立；其余通胀体制格否决，不再重测。
+- CSV（不入库）：`output/research_cpi_inflation_regime_gate_4h.csv`、`output/research_cpi_inflation_regime_gate_4h_nbhd_placebo.csv`；脚本 `scratch/cpi/run.py`、`scratch/cpi/nb.py`。下一轮：短线新族。
