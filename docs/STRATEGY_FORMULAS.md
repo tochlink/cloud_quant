@@ -7513,3 +7513,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（192 格 × 9 切片，Gate 无 train 段，最多 8/9）：真实 4 格 ≥ 8/9，安慰剂 +14 天 3 格、−14 天 9 格、+30 天 4 格——不比安慰剂好。最好的「F ≤ 15 → 做空 48h」OKX d8 +56 / +77 / +77 bps（n 20/19/19），new8 +33/+52/+87，Gate +150/+82，但样本少、是持续性下跌期的趋势延续，与默认 4h 趋势书重叠；「7 日骤降 ≥ 10 → 做空 48h」post +122 bps 但 24h 只剩 +22，持有期不稳。
 - 结论：**否决**，不实现、不进观察名单。恐惧贪婪指数族不再重测。
 - CSV（不入库）：`output/research_fear_greed_event_1h.csv`；脚本 `scratch/fng/ev.py`（在 `scratch/stablemint` 目录下运行，参数 = 延迟小时）。
+
+## 长线新族：Puell 倍数（BTC 矿工日收入 / 365 日均值）作为 4h 默认书入场闸门（2026-11-14 ~18:15 PST，研究，不改默认；否决）
+
+- 查重：此前链上只测过算力带（hash ribbon，否决）和区块手续费短线冲击（否决），从未用过矿工**收入估值周期**（Puell 倍数）；与稳定币、宏观、DVOL 等闸门不同。
+- 数据：blockchain.com 公开图表接口 `api.blockchain.info/charts/miners-revenue?timespan=all`（BTC 矿工日收入 USD，2009→），存 `output/btc_miner_revenue_puell_daily.csv`；当日数据次日 01:00 UTC 才使用（day + 25h）。交易为 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）的官方 4h 数据，默认参数，同一脚本跑基线；分段 deep_unseen（< 2024-10-21）、tune_pre、post（≥ 2026-03-05）。
+- 公式：`P = SMA7(收入) / SMA365(收入)`（2022-04 后中位数 0.98，范围 0.42–2.19）；`cap = P < t`，t = 0.7 / 0.85 / 1.0 / 1.2。闸门只拦新开仓，已有同向仓位保留：long_off = 低 Puell（矿工压力）不开多；short_off = 高 Puell 不开空；both；contra_both = 反向。安慰剂：t = 1.0 平移 +180 / −120 天。
+- 结果（16 格 × 3 套 × 3 段比 Sharpe，最多 9/9）：真实最好只有 3/9，安慰剂平移 −120 天 short_off 达到 6/9、+180 天 5/9——真实不如安慰剂。P1.2_long_off 的 deep Sharpe 1.34 / 0.72 / 1.15（基线 0.71 / 0.09 / 0.75），但 tune 段变差，post 三套 +39.5 / +39.8 / +38.1%（基线 +59.9 / +60.3 / +50.8%），post 逐月胜 / 负 1 / 3；P0.85_contra_both 的 post +72.8 / +70.0 / +61.8% 更好，但 deep、tune 段都明显变差。2024 年减半让收入断崖，Puell 体制主要反映减半周期，不是可交易的体制信号。
+- 结论：**否决**，不实现、不进观察名单。Puell / 矿工收入族不再重测。
+- CSV（不入库）：`output/research_puell_multiple_gate_4h.csv`；脚本 `scratch/puell/run.py`（需在 `scratch/hashribbon` 目录下运行）。
