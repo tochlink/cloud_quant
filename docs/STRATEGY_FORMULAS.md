@@ -7468,3 +7468,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（128 格 × 3 套数据，每格按 3 段 × 3 套 = 9 个切片比 Sharpe）：没有一格胜 ≥ 8/9。最好的 x_short_lo S7 W90 z1.5 和 S1 W90 z1.5 胜 7/9，但前者 deep 段平均 −11 点、post 逐月胜 / 负 7 / 12，后者 post 只 +0.3 点、逐月 13 / 13。x_long_hi（XRP 狂热不追多）胜 6/9，post 约 +0.8 点，S7 版本在 post 段从未触发。安慰剂 bex_short_lo 平移 180 天同样胜 6/9（tune +8.6 点），真实格比安慰剂强不了多少。
 - 结论：**否决**，不实现、不进观察名单。韩国散户成交占比对 4h 趋势书没有稳定增量。与韩国溢价短线事件一起，Upbit 数据族不再重测。
 - CSV（不入库）：`output/research_korea_retail_volume_share_gate_4h.csv`；脚本 `scratch/kimchi/run.py`（参数 0 / 1 / 2 为三套数据）。
+
+## 短线新族：BTC 链上手续费冲击（mempool.space 日度区块手续费）→ 8 币永续篮子 1h 事件（2026-11-14 ~17:45 PST，研究，不改默认；否决）
+
+- 查重：此前从未用过任何链上数据（手续费、算力、内存池）；与已否决的微观结构 1h 事件（爆仓 / 持仓量 / 主动买卖 / 多空比）、资金费、基差、期权流、韩国溢价都不同。
+- 数据：mempool.space 公开接口 `/api/v1/mining/blocks/fees/all`（比特币区块平均手续费，按 UTC 日分桶，sat；去掉未完成的最后一桶），**当日结束后 1h 才可用**（day + 25h），用下一根 1h 开盘成交。交易为官方 1h 永续：OKX d8（2023-02→）、Gate d8、OKX 新 8 币（LINK/LTC/DOT/TRX/BCH/ATOM/NEAR/UNI，未调参），真实 taker 5.1 bps × 2 + 官方资金费；分段 train（< 2024-10-21，未见）/ test / post（≥ 2026-03-05）。
+- 公式：`f = ln(日均区块手续费)`；`z = (f − SMA_W) / SD_W`（W = 30 / 90 日）；特征 z 或 dz = z − 前一日 z；触发 hi（≥ k）/ lo（≤ −k），k = 1.5 / 2 / 3；多 / 空 8 币等权篮子，持有 12 / 24 / 48h，持仓期间不重复开。安慰剂：日度特征平移 ±7 / 14 / 30 天。
+- 结果（144 格 × 9 个切片，Gate 无 train 段，最多 8/9 为正）：真实 9 格 ≥ 8/9，安慰剂 2–8 格（平移 7 天 8 格）。最好的一族是「手续费单日跳升 dz ≥ 2 → 做多 24h」：W90 k2 OKX d8 +112 / +192 / +69 bps（n 9 / 13 / 8），新 8 币 +103 / +158 / +133，Gate +328 / +69；但同一族持有 12h、48h 就掉到 5–7/8，平移 14 天的安慰剂也有 8/9，且多头篮子本身就有正漂移，样本只有每段个位数。
+- 结论：**否决**，不实现、不进观察名单。链上手续费跳升没有超出安慰剂的稳定增量。
+- CSV（不入库）：`output/research_btc_onchain_fee_shock_event_1h.csv`；脚本 `scratch/onchainfee/ev.py`（需在 `scratch/capit` 目录下运行）。下一轮（长线）：比特币算力带（hash ribbon，mempool.space 日度算力 SMA30 / SMA60）作为 4h 默认书体制闸门。
