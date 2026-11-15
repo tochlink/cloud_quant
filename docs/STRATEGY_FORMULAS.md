@@ -7705,3 +7705,18 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - GAS、BURN 各用法均否决（GAS_n30_long_off deep 好但 post 掉 14 点；BURN_n90_contra_both 6/9 但 deep 全输）。
 - 结论：GAS / BURN 闸门**否决**；TX short_off **弱观察**（post 跨 n 稳定、但未见 deep 段输，不满足改默认条件），每月前向复核，不实现；以太坊链上需求闸门族不再重测。
 - CSV（不入库）：`output/research_eth_onchain_demand_gate_4h.csv`；数据 `scratch/ethgas/{gasprice,dailyethburnt,tx}.csv`；脚本 `scratch/ethgas/run.py`（在 `scratch/hashribbon` 目录下运行）。
+
+## kean 思路：近 15m / 30m / 1h 主动买卖失衡（OKX 官方逐笔成交）→ 做多 / 做空 / 反手（2026-11-14 ~20:30 PST，研究，不改默认；否决）
+
+- 来源：kean 提出“看近 15 分钟 / 30 分钟 / 1 小时的买卖情况来判定做多 / 做空还是反手”。此前只做过价量相关闸门（`research_1h_price_volume_correlation_gate.csv`），从未用逐笔主动方向（taker side）做过。
+- 数据：OKX 官方逐笔成交日包（`public/market-data-history?module=1&instType=SWAP`，`static.okx.com/cdn/okex/traderecords/trades/daily/...`，每笔含 side），逐日下载后聚合为 5m：o/h/l/c、主动买 / 主动卖 USDT 额（价×张数×ctVal）、笔数，不落原始成交。覆盖 d8（BTC ETH XRP DOGE SOL ADA AVAX 2022-01-01 →，BNB 2022-12-23 重新上线 →）与未调参 new8（LINK LTC DOT TRX BCH ATOM NEAR UNI 2023-01-01 →），截至 2026-11-14 15:55 UTC，每币约 41–51 万根 5m。与 OKX rubik `taker-volume-contract` 5m 重叠段核对：失衡比相关系数 0.9999997（rubik 单位为张），即页面实时记录器的 `okx_taker5m` 与历史同口径。存 `output/okx_taker_flow_5m.csv`（563 MB，不入库）。
+- 公式：W ∈ {3, 6, 12} 根 5m（15 / 30 / 60 分钟）；dr = (ΣB − ΣS)/(ΣB + ΣS)；`flow_z` = dr 相对过去 7 天（2016 根，shift 1）的 z；`div` = 价格 W 窗口收益方向与 flow_z 方向相反时的 flow_z（背离）；对照 `ret_z` = W 窗口收益的 z（纯价格动量 / 反转）。
+- (a) 独立短线：|z| 首次 ≥ k（2 / 3 / 4）→ 下一根 5m 开盘按 follow（顺失衡方向）/ fade（反向）进场，持有 1 / 2 / 4 / 8 / 24h，不重叠；单币（name）与 8 币合并失衡等权篮子（basket）两种口径；扣 taker 0.051%×2（压力 0.151%×2）与官方资金费（`okx_funding_history_official_deep.csv`）。切片 OKX d8 / new8 × train（< 2024-10-21）/ test（→ 2026-03-05）/ post，共 6 片；安慰剂把特征序列平移 7 / 14 天。
+  - 结果（真实费，每个特征 × 平移 180 格）：6/6 片为正：flow_z 0 格（安慰剂 7 天 1 格、14 天 0 格），div 0 格（0 / 0），ret_z 0 格。≥5/6：flow_z 1 格（安慰剂 4 / 0），div 4 格（安慰剂 0 / 4），ret_z 1 格。压力费下真实全部 0 格。真实信号不比平移后的随机时点好。
+  - 最像样的 name 30m flow_z k3 fade 24h：okx8 每笔 +2.1 / +1.1 / +11.3 bps，new8 +2.8 / +32.3 / −26.5 bps，优势在费后只有几 bps 且换币即翻向。
+- (b) 4h 默认书反手管理器：持有 4h 仓位期间，若 W 窗口出现反向失衡（−side×flow_z ≥ k），可选附加条件：浮盈 > 0 / 浮盈 ≥ 1R、价格同向确认；动作 flat（全平）/ half（平一半）/ rev（平仓并反手到原离场时刻）；在下一根 5m 开盘执行。逐笔叠加估算：为使“数量×价差 − 手续费 + 资金费 = 已实现盈亏”精确成立，基线用默认参数但关闭调仓带（`rebalance_band = 0`，OKX / Gate 各 439 / 440 笔，2023-01 起）；平仓后到原离场时刻不再进场。另设 k = 0 对照（只看浮盈 / 价格，不看主动成交）。
+  - 结果：162 格 × 2 所 × 3 段（pre 2023-01→2024-10-21 / tune → 2026-03-05 / post）Sharpe 胜基线次数：真实最多 4/6、≥5/6 为 0 格；安慰剂 7 天 15 格、14 天 6 格达到 6/6。k = 0 对照全部变差（印证早前“固定 / 分批止盈砍掉趋势大赚”）。
+  - 最显眼的 30m k4 rev：post Sharpe 两所平均 +0.39、逐月 12 胜 6 负（两所合计），但 pre 段 Sharpe −0.45、收益约 −50 个百分点；60m k4 rev 则 pre 好、tune 差。方向互相矛盾，属于噪声。
+  - 今天 ETH 案例（2026-11-14 12:00–19:30 PST，rubik 5m 接续历史）：12:30 PST 一小时窗口 z = −2.36（卖压，与空单同向，不会触发平空）；17:00 PST 低点 1709 到 18:00 PST 冲到 1822 的反弹期间，15m / 30m / 1h 买方失衡 z 最大只有约 1.1–1.4，任何 k ≥ 2 的规则都不会触发。主动成交失衡救不了这一笔。
+- 结论：**否决**（独立短线和反手管理器都否决），不实现、不接页面、不进观察名单；“近 15m / 30m / 1h 主动买卖失衡”族不再重测。逐笔 5m 数据保留，可供以后做其它微观结构研究。
+- CSV（不入库）：`output/okx_taker_flow_5m.csv`、`output/research_okx_taker_flow_imbalance_event.csv`、`output/research_okx_taker_flow_reversal_manager_4h.csv`；脚本 `scratch/oflow/`（dl.py 下载聚合、build.py 合并、ev.py 短线、base4h_nores.py + ov.py 反手管理器）。
