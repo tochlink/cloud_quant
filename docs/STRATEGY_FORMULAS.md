@@ -7796,3 +7796,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - z365 过热拦多：几乎不触发（与 base 相差 ≤ 0.05）。trend short_off / both / contra 全面变差。
 - 结论：**否决**，不实现、不改默认。MVRV 估值体制对 4h 趋势书没有超过安慰剂的增量；不再重测 MVRV / 已实现价格估值族。
 - CSV（不入库）：`output/research_mvrv_valuation_gate_4h.csv`、`output/research_mvrv_valuation_gate_4h_nbhd_placebo.csv`；脚本 `scratch/mvrv/run.py`、`nb.py`。
+
+## 短线新族：平均单笔成交额（大单参与度）/ 买卖单笔均额倾斜（大单方向）→ 单币 / 8 币篮子 15m 事件（2026-11-14 ~21:35 PST，研究，不改默认；否决）
+
+- 查重：主动买卖失衡（金额比）族已在 20:30 节否决；本节用的是逐笔**笔数**——每笔平均成交额（大户 vs 散户参与度）及买 / 卖两侧单笔均额之比（大单站哪边），1725 行候选清单中列过但从未测。
+- 数据：OKX 官方逐笔成交日包聚合的 5m（`output/okx_taker_flow_5m.csv`，含主动买 / 卖额与笔数）再合成 15m；OKX d8（2022-12-23 →，BNB 最晚）与未调参 new8（2022-12-31 →），截至 2026-11-14。Gate 无官方逐笔笔数历史，未覆盖。
+- 公式：窗口 W ∈ {15, 30, 60} 分钟（1 / 2 / 4 根 15m）。size_z = z672(ln((买额+卖额)/(买笔+卖笔))) × sign(窗口涨跌)（大单推动方向）；tilt_z = z672(ln((买额/买笔)/(卖额/卖笔)))（z 用过去 7 天、不含当根）。|z| 首次 ≥ k（2/3/4）→ 下一根 15m 开盘按 follow / fade 进场，持 4 / 8 / 24 / 48h，不重叠；name（单币）与 basket（≥3/8 币同向触发 → 8 币等权）；taker 0.051%×2（压力 0.151%×2）+ 官方资金费。切片 OKX d8 / new8 × train（< 2024-10-21，未见）/ test / post（≥ 2026-03-05）共 6 片；安慰剂特征平移 7 / 14 天。
+- 结果：真实费率下 288 格（每特征 144）**没有一格 6/6 片为正**；5/6 的只有 2 + 2 格，与安慰剂（平移 7 / 14 天：1–2 格）相同。最好的 basket 30m tilt fade 24h：OKX d8 +20 / +7 / +17 bps，但 new8 post −33 bps，post t = 0.69。单币大样本格（数百到上千笔）post |t| 普遍 < 1.3，方向随 k / 持有期翻转。压力费下全部 ≤ 5/6。
+- 结论：**否决**，不实现、不进观察名单；平均单笔成交额 / 大单方向族不再重测。
+- CSV（不入库）：`output/research_avg_trade_size_whale_event_15m.csv`；脚本 `scratch/tsize/agg.py`（5m → 15m）、`ev.py`。
