@@ -7576,3 +7576,15 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（3 套 × 3 段比 Sharpe，最多 9/9）：真实 24 格最好只有 3/9，安慰剂最好也是 3/9。post 段美股一直在均线上方，long_off 在 post 段完全不起作用（与基线相同）；NASDAQ N50 long_off 只改善 deep 未见段（Sharpe 0.99 / 0.33 / 0.96 vs 0.71 / 0.09 / 0.75），但 tune 段三套都变差（OKX d8 +69% vs +85%）。short_off / both 在 post 段大伤（如 SP500 N200 short_off OKX d8 post +11.5% vs +59.9%），contra_both 只在 deep 段好、tune 和 post 段都差（NASDAQ N100 post +41% vs +60%）。
 - 结论：**否决**，不实现、不进观察名单。美股指数均线趋势体制闸门不再重测。
 - CSV（不入库）：`output/research_us_equity_index_trend_gate_4h.csv`；脚本 `scratch/eqgate/run.py`（需在 `scratch/hashribbon` 目录下运行，FRED 数据在 `scratch/eqshock/`）。
+
+## 短线新族：OKX 官方 USDC-USDT 现货 1h 价格偏离 / 兑换成交额冲击 → 8 币永续篮子 1h 事件（2026-11-14 ~19:15 PST，研究，不改默认；否决）
+
+- 查重：USDC-USDT 兑换价此前只作为 4h 默认书的长线闸门测过（2026-11-10 节，offS 列弱观察），稳定币供给冲击（DefiLlama 流通量）短线已否决；从未用稳定币兑换价 / 兑换成交额的 1h 冲击做短线事件。
+- 数据：OKX 官方 `market/history-candles` USDC-USDT 1H，2022-01-01 → 2026-11-15，42 698 根已收盘 K 线，存 `output/okx_usdc_usdt_spot_1h.csv`。该小时收盘后在下一根 1h 开盘进场。交易用 OKX 官方 1h 永续 d8、未调参 new8、Gate 官方 1h 永续 d8（2024-10→，train 段无数据，最多 8/9），官方资金费，taker 0.051% × 2。
+- 公式：dev = ln(USDC-USDT 收盘) × 1e4（bps；> 0 = USDT 走弱 / USDC 溢价，< 0 = USDT 溢价）；特征 `dev_z168`、`dev_z720`（只用过去 W 小时的均值 / 标准差）、`dchg24_z720` = 24h 变化的 z、`vol_z720` = ln 成交额的 z、`dev_lvl` = dev 本身（阈值 5 / 10 / 20 bps）；z 阈值 k = 2 / 3 / 4，hi / lo 两个方向，只取首次穿越；等权做多或做空 8 币，持有 12 / 24 / 48h，持仓期间不重复开。162 格 / 平移。安慰剂：序列平移 ±7 / +14 天。
+- 结果：真实 6/162 格 ≥ 8/9（安慰剂 2 / 3 / 2），≥ 7/9 有 16 格（安慰剂 5 / 9 / 5）——比安慰剂略多，但邻域不成立：
+  - 「USDT 快速走弱 → 做空」`dchg24_z720 ≥ 2` 做空 24 / 48h 8/9（OKX 每段 106 / 58 / 34 笔，+24–148 bps），但 k = 3 / 4 时方向反转、各段大亏（OKX test −129 ~ −476 bps），冲击越大越不成立，不是单调效应。
+  - 「USDT 溢价 → 做多」`dev_z720 ≤ −3` 做多 12 / 48h 8/9，但每段只有 3–18 笔；k = 2 降到 6–7/9，k = 4 的 post 段转负，换窗口 `dev_z168 ≤ −2 / −3` 的 post 段全部为负。
+  - 兑换成交额放量做多（vol_z720 ≥ 3）post 只有 3 笔，Gate test 段不一致。
+- 结论：**否决**，不实现、不进观察名单。USDC-USDT 兑换价 / 成交额短线冲击族不再重测（数据保留）。
+- CSV（不入库）：`output/research_usdc_usdt_peg_shock_event_1h.csv`、`output/okx_usdc_usdt_spot_1h.csv`；脚本 `scratch/usdcev/`（dl.py、ev.py）。
