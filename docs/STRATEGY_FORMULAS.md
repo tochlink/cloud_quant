@@ -7401,3 +7401,21 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 安慰剂也能拿到 6 / 9 格，跟最好的实盘格子处于同一水平。
 - 结论：**否决**。期权偏斜和成交流对 4h 长线书没有稳定的体制信息，不实现、不列观察，不再重测本族。
 - CSV（不入库）：`output/research_deribit_options_skew_flow_regime_gate_4h_BTC.csv`、`output/research_deribit_options_skew_flow_regime_gate_4h_ETH.csv`；脚本 `scratch/optreg/run.py`（环境变量 OSRC=BTC/ETH）。
+
+## 短线 #14 改进（仓位侧）：按触发时 ETH DVOL z 决定单笔总名义（「平静恐慌」加仓、「隐含波动冲顶」减仓）（1h 永续，2026-11-14 ~17:05 PST，研究，不改默认；列观察，不实现）
+
+- 查重：#13 / #14 已测过篮子内权重（最跌重仓 / 抗跌重仓 / 波动平价，13:30 节）、目标离场、入场时机、补仓、DVOL 回落离场。还没测过**单笔总名义**随触发严重度变化。
+- 数据：OKX 官方 1h 永续 d8（训练 / 测试 / 2026-03-05 后）、未调参 new8（同一触发，用 d8 篮子判定）、Gate 官方 1h d8（2024-10→）；Deribit 官方 ETH / BTC DVOL 1h（`output/deribit_dvol_1h.csv`）；真实资金费，吃单 0.051%，压力 0.151%。
+- 公式：触发与 #14 相同（#13 投降：篮子 24h 对数收益均值 ≤ −0.10 且 ≥7/8 下跌，或 ETH DVOL z168 ≥ 3），下一根 1h 开盘等权做多 8 币，持有 48h，持有中不加仓。单笔总名义 = s_i / mean(s)，其中 s_i 在触发根收盘时已知，均值在全部交易上归一到 1（常数缩放，不影响 Sharpe）：
+  - both_x2：两个触发同时成立 → 2×；dvonly_x0.5 / caponly_x0.5：只有一个触发成立 → 0.5×；
+  - drop_lin / drop_inv：clip(跌幅/0.10, 0.5, 2) 及其倒数；
+  - dvz_lin / dvz_inv：clip(z/3, 0.5, 2) 及 clip(3/z, 0.5, 2)；
+  - rv_inv_target / rv_lin：clip(篮子 1h 收益 24h 波动的 2160h 中位数 / 当前波动, 0.5, 2) 及其倒数；
+  - 安慰剂：同一乘子在交易间随机打乱，跑 20 次。
+- 结果（真实费率，日 Sharpe；基线 OKX d8 训练 / 测试 / 后段为 1.26 / 1.47 / 1.82，new8 为 1.21 / 1.37 / 2.54，Gate 全段 / 后段为 0.94 / 1.83）：
+  - **dvz_inv**（DVOL 冲顶时减仓，触发时 IV 不高的投降加到 2×）在 8 / 8 格都高于基线：OKX d8 1.45 / 1.71 / 1.97，new8 1.41 / 1.62 / 2.61，Gate 1.54 / 1.97。收益：OKX d8 训练 +348% vs +191%，测试 +110% vs +83%，后段 +20.9% vs +22.8%；Gate 全段 +74.6% vs +35.0%。8 / 8 格都高于安慰剂均值，但只有 Gate 全段和 OKX 测试段等 3 / 8 格超过安慰剂 90 分位。压力费率下排序相同。
+  - 邻域（k = 2 / 2.5 / 3 / 3.5 / 4，clip 0.67–1.5 / 0.5–2 / 0.33–3，共 15 格）：每一格的每一段都 ≥ 基线 Sharpe，邻域稳定。
+  - dvonly_x0.5 胜 7 / 8 格（训练段 1.18 < 1.26）；drop_lin 和 rv_lin 在 Gate 和后段较好，但 OKX 训练段输；both_x2、caponly_x0.5、drop_inv、dvz_lin、rv_inv_target 都输。
+  - **关键限制**：2026-03-05 后的 12 笔全是 DVOL 触发（没有单独的投降触发），乘子几乎相同，所以后段 Sharpe 不随 k 变化，收益只因归一化降到 +16.5 ~ +24.8%（基线 +22.8%）。后段没有区分度，增益全部来自 2026-03 以前，主要是 2022–2025 年「IV 没冲高的投降」反弹更强。
+- 结论：**列观察，不实现、不改 #14 默认**。逻辑一致（隐含波动已冲顶的恐慌反弹弱，安静的现货抛售反弹强），邻域和未调参 new8 也一致，但样本外近期段无法检验，安慰剂 90 分位只过 3 / 8。等前向或纸面出现单独的投降触发（或 z < 2 的触发）后再复核；届时实现方式为 #14 的可选参数 `size_dvz_k`（clip(k/z, 0.5, 2)，默认关）。
+- CSV（不入库）：`output/research_capitulation_dvol_severity_sizing_1h.csv`（10 个变体 × 3 套数据 × 真实 / 压力费率 + 20 次打乱安慰剂）、`output/research_capitulation_dvol_severity_sizing_1h_nbhd.csv`（邻域 + 后段月度）；脚本 `scratch/dvsize/run.py`、`scratch/dvsize/nb.py`（cwd 须为 scratch/capit）。
