@@ -7873,3 +7873,18 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（真实费率，8 个切片；72 格）：≥ 7/8 切片为正，真实 2 格，安慰剂 +720h 6 格、−720h 3 格——不如安慰剂。样本多的格子都在噪声里：vz2_dn 做多 48h OKX d8 +17 / +39 / +47 bps（t 0.3–0.7），Gate −57 / −12；vz2_up 做多 48h new8 test / post 为负。k ≥ 3 和 flat 吸收事件每段只有 0–18 次，最好的 vz3_up 做多 48h 在 new8 test −130 bps。做空方向全部偏负。
 - 结论：**否决**，不实现、不进观察名单。篮子成交额突增（顺 / 逆 / 吸收）没有超出安慰剂的方向信息；不再重测此族。
 - CSV（不入库）：`output/research_basket_volume_shock_event_1h.csv`；脚本 `scratch/volev/run.py`（在 `scratch/capit` 下运行）。下一轮（长线）：换新族。
+
+### 2026-11-14 ~22:35 PST 长线（重复确认，否决）：现货 / 永续成交量占比闸门（逐币 + 篮子，W6/42，k0.5/1）
+- 注意：本族已在 2026-11-10 22:05 与 2026-11-13 23:25（深历史复核）否决，本轮查重漏掉「永续 / 现货成交量比」写法而重跑；新增的篮子口径 / W42 也否决：真实最好 6/9 Sharpe 胜（W42_k0.5_basket_short_off_lo deep 0.20 vs 基线 0.52），安慰剂平移 ±540 根最好 5/9，post 收益均不高于基线。今后查重须同时搜「量比 / 成交量比 / volume ratio / 占比」。CSV（不入库）：`output/research_spot_perp_volume_share_gate_4h.csv`；脚本 `scratch/spvol/run.py`。
+
+## 短线 #14 改进（出场侧）：盈利回吐保护——篮子浮盈峰值 ≥ a 后回吐 ≥ g×峰值即离场，可放长最长持有（1h 永续，2026-11-14 ~22:45 PST，研究，不改默认；否决）
+
+- 查重：#13 / #14 已测固定持有 24/48/72h、单币 / 篮子止损（入场即挂）、收复 f×跌幅目标离场、DVOL 回落离场、持有中再触发延长、入场延迟 / 分批、仓位严重度；4h 默认书测过盘中 MFE 回吐（另一账本）。从未对 #14 事件单做「先浮盈后回吐」的利润保护离场。
+- 数据：同 #14 合并子账本研究（`scratch/dvcap`）：OKX 官方 1h 永续 d8 与未调参 new8（train → 2024-10-21 → test → 2026-03-05 → post），Gate 官方 1h 永续 d8；Deribit 官方 ETH DVOL；官方资金费；吃单 5.1 bps / 边，压力 15.1 bps。
+- 公式（因果）：触发同 #14（投降 ∪ ETH DVOL z168 ≥ 3），下一根开盘等权做多 8 币。第 j 根收盘篮子浮盈 `cum_j = Σ w_s (C_s,j − EP_s)/EP_s`，`peak = max cum`；若 `peak ≥ a` 且 `peak − cum_j ≥ g·peak`，第 j+1 根开盘离场，否则持满 Hmax。a = 3 / 5 / 8 / 12%，g = 0.33 / 0.5，Hmax = 48 / 72 / 96。另做固定持有 24–96h（步长 6h）邻域。
+- 结果（实费 Sharpe，d8 train / test / post · new8 train / test / post · Gate 全段）：
+  - 基线固定 48h：1.26 / 1.47 / 1.82 · 1.21 / 1.37 / 2.54 · 0.94。
+  - 没有任何回吐格在 7 个切片全部不差于基线。最接近的 a5% g0.5 H48：1.18 / 1.53 / 1.62 · 1.54 / 1.43 / 2.33 · 1.19（d8 train、两池 post 变差）；a3% g0.5 H48：Gate 1.30、test 1.82，但 post 1.62 / 1.88、new8 test 1.16。g0.33（回吐 1/3 就走）全部大幅变差，post 降到 −0.3 ~ 0.9。a ≥ 8% 几乎不触发，等于固定持有。放长 Hmax 72/96 再加回吐保护也救不回 train 段。压力费同向。
+  - 固定持有邻域（实费 Sharpe）：24h 尚可，30–42h 是一个洞（d8 post −0.25 ~ 0.84、Gate −0.25 ~ 0.26），48–72h 是平台（54h：Gate 1.01、post 1.93 / 2.69；60h：Gate 1.17、post 2.05 / 2.90，但 train 1.01 / 1.03 低于 48h 的 1.26 / 1.21），≥ 84h 回落。48h 处在平台左缘、紧挨 42h 的洞。
+- 结论：**否决**回吐保护离场，#14 维持固定持有 48h，不改参数（54–60h 只在 post / Gate 更好、train 更差，不满足改动门槛）；记录风险：48h 位于平台左缘，若以后要调，只考虑向 54–60h 方向，不往短调。不再重测 #14 回吐 / 追踪离场族。
+- CSV（不入库）：`output/research_capitulation_dvol_trailing_exit_1h.csv`、`output/research_capitulation_dvol_hold_neighborhood_1h.csv`；脚本 `scratch/dvtrail/run.py`、`scratch/dvtrail/hn.py`（需在 scratch/capit 目录运行）。下一轮（长线）：换新族。
