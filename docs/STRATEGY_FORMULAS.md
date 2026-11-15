@@ -8410,3 +8410,24 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - CSV（不入库）：`output/research_btc_avg_block_size_gate_4h.csv`（177 行，含邻域、安慰剂与压力费）；官方日序列 `output/btc_avg_block_size_daily_blockchain_com.csv`（6,508 天，不入库）；脚本 `scratch/blksize4h/{fetch,run}.py`（研究脚本未推送）。Solana / Jito 记录器见上一节，研究脚本 `scratch/soljito1h/record.py` 同样不推送。
 - 下一轮（短线）：CME CF 官方比特币参考汇率（CF Benchmarks Bitcoin Reference Rate, BRR）伦敦 16:00 定盘 / 日度官方结算窗口，作为 1h 事件 → 8 币永续篮子顺势 / 逆势。这不是已否决的 CME / IBIT 月度到期（到期日事件，不是每个交易日的定盘），也不是已否决的 CME 周末缺口或月末 / 到期日历 4h 闸门。文档与 `output/research_*.csv` 检索 BRR / Bitcoin Reference Rate / CF Benchmarks 定盘无短线条目。勿重测已否决的短线族（CME / IBIT 到期、Deribit 到期、出块间隔 / 空块、难度调整、Empire / Philly 调查、漏槽、提款、存款合约、blob / 基础费、mempool 拥堵、链上手续费冲击、Coinbase 溢价、稳定币供给 / 脱锚、美股 / 美国宏观发布、XAUT、维基关注、日历高低突破、日线反转 K、价格-资金费背离、篮子资金费极值、Gate / OKX 官方爆仓 / 持仓量 / 多空比微观结构）。Solana / Jito 优先费在官方历史攒够之前不要重测、也不要用非官方源补历史。
 
+## 短线新族：CME CF 官方比特币参考汇率（BRR）伦敦 16:00 定盘 / 日度结算窗口 → 8 币永续篮子（2026-11-15 ~08:22 PST，研究，不改默认；否决）
+
+- 查重：文档 / `output/research_*.csv` / 记忆中无 BRR / Bitcoin Reference Rate / CF Benchmarks 定盘短线条目。这不是已否决的 CME / IBIT 月度到期（到期日事件，不是每个交易日的定盘），也不是已否决的 CME 周末缺口、资金费结算窗口，更不是无条件的盘中时段季节性（本族不做「到点一律做多 / 做空」）。上一轮（平均块大小 4h 闸门，否决；Solana / Jito 优先费因官方历史不够已推迟）指定本族为下一短线。
+- 数据（只核验官方来源，不编造、不回补许可库里 2016-11 起的完整定盘）：
+  - 定盘规则：官方 [CME CF Reference Rates Methodology](https://docs.cfbenchmarks.com/CME%20CF%20Reference%20Rates%20Methodology.pdf)。BRR 生效时刻 16:00 Europe/London，TWAP 窗口 15:00–16:00 伦敦，窗口结束后 1 分钟取数；CME FAQ 写明定盘在 16:00–16:30 伦敦之间发布。冬令 16:00 UTC，夏令 15:00 UTC，按 `Europe/London` 逐日生成时钟，不把夏令当成固定 UTC。
+  - 官方定盘价：CF Benchmarks 官方页面 `https://www.cfbenchmarks.com/data/indices/BRR` 公开 `__NEXT_DATA__` 的每日 `rrs[]`（与页面成交量分解一致）。本轮 364 个日终定盘，2025-11-16 16:00 UTC → 2026-11-14 16:00 UTC，无 `star` / 重复标记。公开页只给约 1 年；CF Benchmarks `/api/v1/history/values` 要许可证，CME 官网免费历史文件本轮 403，二者都没有用来编造 2016-11 以来的更长序列。BRR 日变化 / 定盘溢价信号因此没有 2024-10-21 之前的训练段。已在本机启动只读官方记录器 `scratch/cmecfbrr1h/record.py`（约 30 分钟一轮，16:30 伦敦之后才拉取当日定盘），追加写入 `output/cme_cf_brr_official_daily.csv`，不入库。
+  - 交易腿：官方 1h 永续 OKX d8（2022-01-29 07:00 → 2026-11-14 06:00 UTC）、OKX 未调参 new8、Gate d8（2025-09-24 → 2026-11-14；Gate 窗口从 2025-09-28 起）。OKX 用官方深历史资金费，Gate 用官方资金费。真实费率 5.1 bps×2 + 资金费，压力 15.1 bps×2。至少 6 条腿。不用现货代替永续。
+- 公式（预注册 384 格，一次跑完，不看结果再加格）。不做时钟无条件多空。
+  - `winret_btc`：官方 TWAP 窗口内 BTC 永续开→收；`winret_basket`：同一窗口交易篮子等权开→收。窗口收盘即 16:00 伦敦已知，入场为 16:00 伦敦这一根的开盘。
+  - `brr_chg`：官方 BRR 相对前一发布日的变化；`brr_prem`：官方 BRR / 窗口收盘 BTC 永续 − 1。二者都要等发布窗口结束，入场为 17:00 伦敦开盘。
+  - 阈值 |信号| ≥ k，k ∈ {0, 25, 50, 100} bps；side ∈ {twosided, up, down}；mode ∈ {mom, contra}；持有 H ∈ {4, 8, 12, 24} 小时。同向持仓不重叠（`used_until = entry+H`）。
+  - 分段：train < 2024-10-21，test → 2026-03-05，post ≥ 2026-03-05；另报 Gate 窗口。8/8 = OKX d8 三段、OKX new8 三段、Gate post + Gate 窗口共 8 个切片均值都为正，且 d8 train≥10、test/post≥8 才算 usable。
+  - 安慰剂（日度事件不用 ±720h，因为平移 30 天几乎还是同一批交易日）：伦敦 04:00 / 10:00 / 22:00 时钟、官方纽约 16:00 CF 窗口（BRRNY 同一套方法论），以及 stale_7d（今日官方入场配 7 天前的窗口 / 定盘信号）。04:00 / 10:00 伦敦早于发布，不算当日 BRR（避免前视）。
+- 结果（真实费率）：
+  - 384 个真实格：usable 8/8 三格、usable 7/8 三格，全部来自窗口收益族；`brr_chg` / `brr_prem` 因公开定盘只有 1 年，train 段为 0，最好只到 6 个有数切片，没有 7/8 或 8/8。
+  - 预注册最好是 `winret_btc twosided k100 mom H12` usable 8/8：OKX d8 +24.97 / +10.30 / +63.81 bps，t=0.89 / 0.32 / 1.60，n=151 / 86 / 22；new8 +25.25 / +13.90 / +38.92；Gate post +64.02 n=22，窗口 +25.44 n=53。同格压力费 test 翻负（+4.97 / −9.70 / +43.81）。预注册邻域 H=8 test 也翻负（+14.14 / −5.37 / +53.83）。另两格 usable 8/8 是同族 `down k100 mom H4`（post 只有 9 次，压力费 test/post 翻负）和 `twosided k100 mom H4`（边只有 4–8 bps，压力费三段全负）。
+  - 这三格本身在匹配安慰剂上并不好（官方 H12 格在 04:00 / 22:00 / NY16 / stale_7d 为 1/8、1/8、2/8、3/8），但**整族**安慰剂打出的 usable 8/8 并不少：伦敦 04:00 3 格、纽约 16:00 2 格、stale_7d 4 格，纽约时钟甚至有 8 个（含不可用）8/8，家族层面没有比安慰剂更稀有的 8/8。
+  - 未预注册邻域 `k=90 H=10 twosided mom` 也是 8/8（d8 +24.6 / +22.9 / +31.2，n=183 / 94 / 33），压力费三段为正（+4.6 / +2.9 / +11.2），且该格安慰剂为 0/8、5/8、1/8、2/8、0/8。这与块大小闸门里未预注册的 n=150 打出 8/9 同类：不能事后把邻域扫到的格子当成新族再测。
+- 结论：**否决**，不实现、不进观察名单、不改默认。官方 BRR 定盘窗口作为 1h 事件，没有可重复的未见历史 + 费用后优势：预注册 8/8 的 t 统计很弱、压力费或预注册邻域（H=8）在 test 上翻负，而且换一个伦敦 / 纽约时钟或把信号错配 7 天，整族同样能扫出 8/8。本族勿以同一机制换 k、H、方向、时钟、BTC 窗口 vs 篮子窗口，或改用 BRR 日变化 / 定盘溢价再测。不要因为未预注册的 k=90 / H=10 看起来更好就重开本族。
+- CSV（不入库）：`output/research_cme_cf_brr_fix_event_1h.csv`（32,256 行，384 个真实格 + 安慰剂与压力费）；官方日定盘 `output/cme_cf_brr_official_daily.csv`（364 行，不入库）；脚本 `scratch/cmecfbrr1h/{fetch,run,analyze,record}.py`（研究脚本未推送）。
+- 下一轮（长线）：Aave V3 官方链上 USDT / USDC / WETH 利用率或借款年化（协议官方或链上视图，不是 DefiLlama TVL，也不是已弱观察的 OKX 储蓄 USDT 借贷利率）作为 4h 默认书入场闸门。文档与 `output/research_*.csv` 检索 Aave utilization / borrow APY 无长线条目。勿重测已否决的长线族（块大小、CBECI 矿工利润带、GDPNow 及其他美国 nowcast / 美国宏观、交易所成交额、矿池集中度、财政部 MTS、按揭 / 营建、L2Beat TVS、UTXO / 确认时间、CM 交易所库存、信标质押 / 排队、闪电容量、stETH 基差、MVRV、Puell、算力带、ETF 流量、DefiLlama TVL、期权 VRP、DVOL、平台币相对强弱、联储净流动性、CPI、CFTC COT、美元 / 实际利率 / VIX / WTI、M2、初请失业金、信用利差 / NFCI、金融条件、稳定币供给、ETH 链上需求 / EIP-1559 燃烧）。Solana / Jito 优先费在官方历史攒够之前不要重测、也不要用非官方源补历史。
