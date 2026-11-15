@@ -8078,3 +8078,15 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：**否决**，不实现、不改默认。`capacity_trend_n180_short_off` 仅作**弱观察**（9/9 夏普、安慰剂更差、压力费同向，但 n 与通道数邻域不稳，post 几乎持平且 2026 年容量处于下降趋势，逐月未达 ≥6/9）。其余格子（`long_off` / `both` / 收缩 z / 通道数 n180）拒绝；闪电网络容量 / 通道数作为 4h 入场闸门勿以同一机制换窗口重测。若保留弱观察，等官方统计补全 2026 年缺口后再看 post。
 - CSV（不入库）：`output/research_lightning_capacity_gate_4h.csv`；日度官方序列 `scratch/lncap/lightning_capacity_daily.csv`；脚本 `scratch/lncap/{fetch,run}.py`。
 - 下一轮（短线）：以太坊官方 blob / 基础费率 1h 冲击（不是已测过的 ETH 链上需求 4h 闸门，也不是 BTC 链上手续费冲击）→ 8 币永续篮子 1h 事件。勿重测已否决的 ETF 资金流短线冲击、FRED 宏观、1h 微结构爆仓 / OI / 主动买卖、黄金冲击、平台币冲击。
+
+## 短线新族：以太坊官方 blob / 基础费率 1h 冲击 → 8 币永续篮子顺势 / 逆势（1h，2026-11-15 ~01:35 PST，研究，不改默认；否决）
+- 查重：文档 / `output/research_*.csv` / 记忆中无 blob fee、base fee、基础费率、EIP-4844 的 **1h 冲击事件**。已测过 ETH 链上需求（Etherscan 日均 gas / 燃烧 / 交易笔数）4h 闸门、BTC 链上手续费日度冲击（短线，否决）、ETH 需求空头投票闸门。本族是执行层官方 1h 基础费 / blob 费的 z 冲击，不是日度体制闸门，也不是 BTC 手续费。
+- 数据：以太坊执行层官方 `eth_feeHistory`（1024 块窗口，自 EIP-1559 激活块 12965000）+ 窗口两端官方块头时间戳，窗内只按时间线性归到整点小时，不编造费率。序列 2021-08-05 12:00 → 2026-11-15 07:00 UTC，过滤 `n_blocks<100` 后 46264 根小时；仅一处未回补缺口：2022-03-05 08:00→12:00 UTC（1 个窗口缺时间戳）。Blob 费只用 Cancun（2024-03-13）及之后。与 ultrasound.money 近 30 日小时序列交叉核对 721/721 小时对齐，基础费相对误差中位 1.2%（p90 1.8%），blob 费中位 0.7%（p90 2.9%）。交易腿为官方 1h 永续：OKX d8（2022-01-29→2026-11-14）、OKX 未调参 new8、Gate d8（2025-09-24→）；OKX 用官方深历史资金费，Gate 用官方资金费。不用现货代替永续成交。
+- 公式：对已收盘小时平均费率 $P$（base / blob；either = 两者中 $|z|$ 更大者），$z_t=( \ln P_t-\ln P_{t-L})/(\sigma_{168}(\Delta\ln P)\times\sqrt{L})$，波动窗口只用到上一根，$P=0$ 视为缺失。触发 $|z|\ge k$，$k\in\{3,4,5\}$，$L\in\{1,4,8\}$。下一根 1h 永续开盘等权交易默认 8 币（或 new8），顺势或逆势，持有 24 / 48h，不重叠。费率：真实永续吃单 5.1bps 往返 2 腿，压力 15.1bps。分段：train→2024-10-21、test→2026-03-05、post→2026-11-14。安慰剂：把 $z$ 平移 ±720h。
+- 结果（真实费率，单笔组合均值；8 个切片 = OKX d8 / new8 的 train·test·post + Gate 窗口 / post，要求 $n\ge5$）：
+  - 108 个真实格子里，8/8 切片都为正的只有两格，且是邻居：`blob` 与 `either` 的 L8 k3 逆势 24h。`either`：OKX train +80.6bps（61 笔，t=1.26）、test +14.0（110，t=0.41）、post +64.8（15，t=0.70）；new8 +91.1 / +7.5 / +29.8；Gate 窗口 +93.0（t=1.65）、post +64.1。`blob` 三段约 +49 / +56 / +59bps（t≤1.21），new8 post 仅 +22.5bps。两格都跑赢对应 OKX post 安慰剂（约 −167/−48 与 −191/−43）。压力费下 post 仍为正（+44.8 / +38.5bps）。但 post 只有 15 笔，t 全程 ≤1.26；仓位几乎是空头（post 13 空 / 2 多），像在吃 2026 年下跌趋势。
+  - 邻域不稳：同族 L8 k4 逆势 post 大幅为负（24h 约 −294bps，仅 3 笔；48h 约 −740bps）；L8 k3 持有 48h 的 post 也翻负（约 −51 / −56bps）；L4 k3 逆势在 test 多为负。
+  - 安慰剂同样能做出「OKX 三段都为正」（$n\ge8$）：真实 5/108，+720h 也是 5/108，−720h 反而是 8/108，且部分安慰剂 post 的 t 更高（例如 −720h `base` L4 k3 逆势 48h post +173bps、t=1.72）。顺势格子在 post 中位为正、train 中位为负，符号随样本段翻转。
+- 结论：**否决**，不实现、不进观察名单、不改默认。看起来整齐的 8/8 逆势格没有超过安慰剂的稳定性，邻域一改阈值/持有期就翻负，post 样本小、空头偏多。以太坊官方 blob / 基础费率 1h 冲击 → 加密永续篮子这一族勿重测（不要再换 z 窗口或阈值重扫）。
+- CSV（不入库）：`output/research_eth_blob_basefee_shock_event_1h.csv`；官方 1h 费率 `scratch/ethfee1h/eth_base_blob_fee_1h.csv`；脚本 `scratch/ethfee1h/{fetch,run}.py`。
+- 下一轮（长线，非宏观）：以太坊信标链官方质押净流入 / 验证者排队（不是已测过的 ETH 链上需求 4h 闸门、stETH 基差，也不是本轮的 1h 费率冲击）→ 4h 默认书入场闸门。勿重测已否决的 FRED 宏观族、MVRV、TVL/DEX、闪电网络容量、平台币相对强弱。
