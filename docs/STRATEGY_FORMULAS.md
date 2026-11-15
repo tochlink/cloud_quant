@@ -7384,3 +7384,20 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 唯一的线索 ETH putdem z ≤ −2（主动买看涨过热）→ 做空 48h、剔除 #14：OKX d8 +10 / +36 / +106 bps，new8 +31 / +94 / +102，Gate test / post +87 / +105。但阈值换到 z ≤ −3、或不剔除 #14 就失效；同一机制换到 BTC（BTC putdem z ≤ −2 做空）在 OKX 各段**全部为负**（48h：−110 / −72 / −52 bps）。机制跨标的不一致，判为拟合。
 - 结论：**否决**期权成交流 / 偏斜短线事件整族，不实现、不列观察。期权数据保留，可作以后长线状态研究的输入（未测）。不再重测本族。
 - CSV（不入库）：`output/research_deribit_options_flow_event_1h_BTC_ETH.csv`（ETH 单独版 `..._ETH.csv`）；脚本 `scratch/dbopt/`（fetch.py 下载聚合，ev.py 事件检验，需在 scratch/capit 目录运行）。
+
+## 长线新族：Deribit 期权偏斜 / 看跌看涨成交比 / 主动买看跌净需求作为 4h 默认书入场闸门（2026-11-14 ~16:50 PST，研究，不改默认；否决）
+
+- 查重：期权成交流此前只做过 1h 短线事件（16:30 节，否决）；DVOL 水平闸门已否决（15:10 节）。4h 长线书从未用期权偏斜或看跌看涨成交流做体制闸门。
+- 数据：`output/deribit_options_flow_1h.csv`（Deribit 官方 history.deribit.com 期权逐笔成交，BTC 和 ETH 各一套，聚合为 1h，按收盘时间 +1h 才算已知）；交易数据为 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）的官方 4h 数据，默认参数，同一脚本跑基线。
+- 公式（因果，4h 开盘时前向填充上一根已收盘小时的值）：S 天滚动（S = 3 / 7）
+  - skew = 虚值看跌量加权 IV − 虚值看涨量加权 IV；pcr = ln(看跌量 / 看涨量)；putdem = [(2·主动买看跌 − 看跌量) − (2·主动买看涨 − 看涨量)] / 总量；
+  - 三个指标都取 z（90 天窗口），阈值 q = 1 / 1.5 / 2；z 高表示恐慌。
+  - 闸门只拦新开仓，已有的同向仓位保留：long_hi（恐慌时不开多）、short_lo（贪婪时不开空）、trend_both（前两条都用）、long_lo / short_hi / contra_both（反向用法）。
+  - 安慰剂：把信号平移 90 天。
+- 结果（3 套数据 × deep / tune_pre / post 共 9 格，Sharpe 与基线比较）：
+  - 108 × 2 个格子中，9 格全胜的只有 BTC skew long_lo S7 z1.5（平均 ΔSharpe +0.019）和 ETH putdem short_lo / trend_both S7 z2（+0.008）。这几格几乎没起作用，邻格 z1.0 在 post 段 −10 ~ −13 点。
+  - 最显眼的是 ETH skew long_hi（ETH 看跌偏斜高时不开多）：S3 三个阈值和 S7 z2 的 tune_pre 段都是 +13 ~ +17 点，但 deep 和 post 段都是 +0，只拦或推迟了 0 ~ 2 笔，属于单段单次的效果。换成 BTC 后方向不一致（S7 z1.0 tune_pre 段 −28 ~ −42 点）。
+  - pcr long_lo（看涨成交过热时不开多）：tune_pre 段 +7 ~ +21，但 post 段 −3 ~ −24。
+  - 安慰剂也能拿到 6 / 9 格，跟最好的实盘格子处于同一水平。
+- 结论：**否决**。期权偏斜和成交流对 4h 长线书没有稳定的体制信息，不实现、不列观察，不再重测本族。
+- CSV（不入库）：`output/research_deribit_options_skew_flow_regime_gate_4h_BTC.csv`、`output/research_deribit_options_skew_flow_regime_gate_4h_ETH.csv`；脚本 `scratch/optreg/run.py`（环境变量 OSRC=BTC/ETH）。
