@@ -7853,3 +7853,14 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 最好的顺势格 L24 X8 B7 做多 48h：OKX d8 train / test / post +26 / +149 / +336 bps（n 44 / 27 / 5，t 0.38 / 1.22 / 1.09），new8 +21 / +135 / +406，Gate 全段 +168 / post +339；压力费 train 只剩 +6 / +1。但同格安慰剂 +720h 在 post 也有 +179 bps、Gate +143——post 段收益主要是 2026-03 后多头整体漂移；深历史 train 段（未见）几乎为 0，t 全部 < 1.3。
 - 结论：**否决**，不实现、不进观察名单。篮子集体暴涨后的顺势 / 回落都没有超出安慰剂的信息；不再重测此族（含不同 L / X / B）。
 - CSV（不入库）：`output/research_basket_meltup_event_1h.csv`（144 格 × 8 切片 × 真实 / 压力 / 安慰剂）；脚本 `scratch/meltup/run.py`（在 `scratch/capit` 下运行）。下一轮（长线）：换新族。
+
+## 长线新族：BTC 与纳斯达克日收益滚动相关（加密-美股耦合度）体制作为 4h 默认书入场闸门（2026-11-14 ~22:15 PST，研究，不改默认；否决）
+
+- 查重：此前美股只测过指数均线趋势闸门（否决）和日度大跌 / 大涨冲击事件（否决），相关性只测过币与币之间（相关性仓位、相关簇预算、两两相关飙升）；从未用**加密与美股的耦合程度**作为体制。
+- 数据：FRED 官方 `NASDAQCOM` 日收盘；BTC 用 OKX 官方现货 4h 深历史聚合成 UTC 日收盘，只在纳斯达克交易日对齐取对数收益。美股收盘日 d 的相关值到 d+2 00:00 UTC 才使用。交易：默认 4h 书同脚本（`qtw.backtest.run_backtest`），OKX d8（2023-02 起）、Gate d8（2022-07 起）、OKX d7（去 BNB，2022-04 起），deep 未见段 / 调参段 2024-10-21→2026-03-05 / post 段；真实费率 + 官方资金费。
+- 公式：`ρ_n = corr_n(Δln NASDAQ, Δln BTC)`，n = 30 / 60 / 120 个交易日；cap = ρ_n > c（c = 0.2 / 0.35 / 0.5），或 ρ_n > SMA60(ρ_n)（耦合上升）。闸门只拦新开仓（同向持仓保留）：long_off（cap 时不开多）/ short_off（非 cap 时不开空）/ both / contra_both（反向）。安慰剂：n60 c0.35 整体平移 +182 / −119 天。
+- 结果（3 套 × 3 段比 Sharpe，最多 9 胜；基线三套均值 deep 0.52 / tune 1.49 / post 2.20，post 收益 +59.9 / +60.3 / +50.8%）：
+  - 真实最好只有 6/9：corr_n30_gt0.5_short_off（tune 1.64、post 2.24、post 收益 +61.2 / +61.6 / +52.0%，但 deep 未见段 Sharpe 掉到 0.19，post 逐月 13 胜 11 负）；corr_n120_gt0.5_long_off（post 从不触发，与基线完全相同）；corr_n60_rising_contra_both（post 收益腰斩到 +29%）。
+  - 安慰剂平移最好 3/9，真实格大多也只有 3–5/9；没有任何格同时改善 deep 未见段和 post。
+- 结论：**否决**，不实现、不进观察名单。加密-美股耦合度对 4h 趋势书没有稳定的体制信息；不再重测此族（含其他美股指数 / 其他窗口）。
+- CSV（不入库）：`output/research_btc_nasdaq_corr_regime_gate_4h.csv`；脚本 `scratch/eqcorr/run.py`。下一轮（短线）：换新族。
