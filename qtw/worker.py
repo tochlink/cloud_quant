@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 
+from . import logtable as LT
 from . import settings as S
 from .timeutil import iso, la, sh, utcnow
 
@@ -105,6 +106,8 @@ def _loop():
         try:
             res = run_cycle(cfg, note="")
             _state.update(last_result=res, last_error="")
+            if res.get("events"):
+                log.info("%s", LT.events_block("主账本 收盘决策", res["events"]))
         except Exception as e:  # noqa: BLE001
             log.exception("cycle failed")
             _state["last_error"] = str(e)[:300]

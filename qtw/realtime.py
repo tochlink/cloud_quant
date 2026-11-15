@@ -17,6 +17,7 @@ import threading
 import time
 from collections import deque
 
+from . import logtable as LT
 from . import settings as S
 
 log = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ def on_tick(q) -> None:
             "exchange_ts_to_decision_ms": None if exch_ms is None else round(exch_ms, 1), "at": done}
     _rec("tick", (done - recv) * 1000, info)
     if events:
-        log.info("实时 tick 离场：%s", "；".join(events))
+        log.info("%s", LT.events_block("主账本 实时 tick 离场", events))
         _LAST["exits"].append({"at": done, "events": events, **info})
 
 

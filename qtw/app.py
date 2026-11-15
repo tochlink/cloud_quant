@@ -24,6 +24,7 @@ mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
 mimetypes.add_type("text/css", ".css")
 
+from . import logtable as LT
 from . import __version__, db, engine, realtime, stream, vault, worker
 from . import settings as S
 from .backtest import btc_spot_for_regime, run_backtest
@@ -81,7 +82,7 @@ def _persist_tick() -> None:
         if not realtime.ws_fresh(S.load()["venue"]):
             ev = engine.poll_stops()
             if ev:
-                log.info("REST 兜底止损：%s", "；".join(ev))
+                log.info("%s", LT.events_block("主账本 REST 兜底止损", ev))
     except Exception:  # noqa: BLE001
         log.exception("poll stops failed")
     _persist_ticks += 1
@@ -382,7 +383,9 @@ def _dashboard_data() -> dict:
                  for p in bk.positions.values()]
     fills = bk.fills()
     ledger = bk.ledger()
-    closed = _closed_trades(fills)
+    # 胜率 / 已平笔数 / 盈亏比按成交页同一口径：开平配对后的整笔净盈亏（含开仓费），不是只看平仓那条成交
+    closed = [{"realized_pnl_usdt": float(t["pnl_usdt"] or 0), "time": t["exit_time"]}
+              for t in bk.trade_records() if t.get("status") == "closed"]
     wins = [f for f in closed if float(f["realized_pnl_usdt"]) > 0]
     week_ago = (utcnow() - timedelta(days=7)).isoformat()
     week_fills = [f for f in fills if f["time"].replace("Z", "+00:00") >= week_ago]
@@ -413,7 +416,17 @@ def _dashboard_data() -> dict:
         "win_rate": (len(wins) / len(closed)) if closed else None, "worker": worker.status(),
         "pnl_by_trade": [float(f["realized_pnl_usdt"]) for f in closed[-30:]],
         "periods": _period_pnl(ledger, eq, bk.starting, closed),
+        "shadow_books": _shadow_brief(),
     }
+
+
+def _shadow_brief() -> list[dict]:
+    """影子子账本概况（持仓页提示用；不计入上面的主账本数字）。"""
+    try:
+        from . import shadow
+        return [{k: x[k] for k in ("sid", "book", "no", "equity", "open", "closed")} for x in shadow.summary()]
+    except Exception:  # noqa: BLE001
+        return []
 
 
 @app.get("/api/dashboard")
@@ -878,6 +891,21 @@ def orders():
 def trades():
     """Round-trip paper trade records (entry/exit paired). Newest first."""
     return ok([{**t, "book": t.get("book") or "长线"} for t in reversed(engine.book().trade_records())])
+
+
+@app.get("/api/trades/summary")
+def trades_summary():
+    """成交页对账条：主账本（成交记录盈亏 + 资金费 = 权益变化）与各影子子账本（独立 1000U，不计入主账本）。"""
+    from . import shadow
+    bk = engine.book()
+    return ok({"main": bk.reconcile(), "shadow": shadow.summary()})
+
+
+@app.get("/api/shadow/trades")
+def shadow_trades():
+    """影子子账本（#13 / #14 等候选策略）的开平记录。只做纸面记录，和主账本完全分开。"""
+    from . import shadow
+    return ok(shadow.trade_rows())
 
 
 # ---------------- 设置 / 密钥 ----------------
