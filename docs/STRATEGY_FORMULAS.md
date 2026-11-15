@@ -7901,7 +7901,7 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：不改默认、不实现。`n30–n90 F_n<0 只拦新空`列**弱观察**（深历史 d7 / Gate 明显胜过安慰剂，但 new8 失败、OKX d8 邻域不稳、post 无样本）——下次全市场出现持续负资金费（F_30 < 0）时再前向复核；其余（拦多 / 趋势 / follow / θ_lo>0）否决，不再重测此族。
 - CSV（不入库）：`output/research_basket_funding_regime_gate_4h.csv`、`output/research_basket_funding_regime_gate_4h_nbhd_placebo.csv`；脚本 `scratch/fundreg/run.py`、`run2.py`。下一轮（短线）：换新族。
 
-## 短线新族：日历锚定前高 / 前低突破（上一 UTC 日 / 周 / 月最高最低价，逐币 1h）（2026-11-14 ~23:00 PST，研究，不改默认；否决）
+## 短线新族：日历锚定前高 / 前低突破（上一 UTC 日 / 周 / 月最高最低价，逐币 1h）（2026-11-14 ~22:40 PST，研究，不改默认；否决）
 - 查重：已测 4h 唐奇安滚动通道（长线信号族）、1h 挤压突破、整数关口穿越、收盘连涨连跌；从未用**日历锚定**的上一日 / 周 / 月高低点做 1h 事件。
 - 数据：OKX 官方 1h 永续 d8（train 2022-02→2024-10-21 / test →2026-03-05 / post →2026-11-14）、未调参 new8（OKX 1h 永续）、Gate 官方 1h 永续 d8；OKX 官方深历史资金费（Gate 用官方资金费）；吃单 5.1 bps / 压力 15.1 bps 每边。
 - 公式（因果）：对每币，上一周期（UTC 日 / 周一起的周 / 自然月）的最高 PH、最低 PL；本周期内 1h 收盘**首次** `C > PH`（向上突破）或 `C < PL`（向下突破）→ 下一根 1h 开盘入场，顺势（follow）或逆势（fade），持有 H ∈ {12, 24, 48}h，单币名义 1/8，同币持仓中不重复；可只做向上 / 只做向下 / 双向。安慰剂：事件整体平移 ±720h。
@@ -7912,10 +7912,18 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：**否决**，日历前高 / 前低突破（日 / 周 / 月，顺势 / 逆势）不再重测。
 - CSV（不入库）：`output/research_calendar_level_breakout_event_1h.csv`；脚本 `scratch/pwbrk/run.py`（在 scratch/capit 下运行）。下一轮：长线新族。
 
-## 长线新族：美国每周首次申领失业金（FRED ICSA）劳动力市场体制 → 4h 默认书入场闸门（2026-11-14 ~23:10 PST，研究，不改默认；否决）
+## 长线新族：美国每周首次申领失业金（FRED ICSA）劳动力市场体制 → 4h 默认书入场闸门（2026-11-14 ~22:48 PST，研究，不改默认；否决）
 - 查重：宏观体制已测过美元 / 人民币日元、利率 / 原油、联储净流动性、金融压力 / 信用利差、BTC–纳指相关、CFTC 持仓、VIX 类；从未用过劳动力市场数据（初请失业金）。
 - 数据：FRED `ICSA`（周六截止当周，周四 12:30 UTC 公布；按截止日 +6 天才可用，日度前向填充），`IC4` = 28 天均值（≈ 4 周均值）。交易：同脚本 `qtw.backtest.run_backtest` 默认 4h 书，OKX d8（deep 2023-02→2024-10-21）、Gate d8（deep 2022-07→）、OKX d7（去 BNB，deep 2022-04→），tune 段 → 2026-03-05 → post → 2026-11-14；官方资金费，真实费率。
 - 公式：cap = `IC4 > SMA_n(IC4)`（n = 91 / 182 / 364 天）或 `IC4 同比 > 0 / 10%`；闸门只拦新开仓：long_off（cap 时不开多）、short_off（非 cap 时不开空）、both、contra_both（反向用法）。安慰剂：cap 序列平移 +182 / −119 天。
 - 结果（9 个夏普对比 = 3 套数据 × deep / tune / post）：最好 `IC4 同比 > 0 contra_both` 6 / 9，但 post 收益 OKX d8 +40% vs +60%（夏普 1.86 vs 2.23），Gate +40% vs +60%，后段月度好 / 差 6 / 9；`同比 > 10% both` deep 夏普 0.90 vs 0.71，但 post 收益只剩 +13% vs +60%；long_off 各格后段从未触发。安慰剂最好 4 / 9。
 - 结论：**否决**，初请失业金体制闸门不再重测。
 - CSV（不入库）：`output/research_jobless_claims_regime_gate_4h.csv`；脚本 `scratch/claims/run.py`。下一轮：短线新族。
+
+## 短线新族：Deribit 期权到期（周五 08:00 UTC：周度 / 月度 / 季度）前后 → 8 币永续篮子事件（1h，2026-11-14 ~22:55 PST，研究，不改默认；否决）
+- 查重：此前只做过月末 / 到期日历的 4h 长线入场闸门（`research_month_end_expiry_calendar_gate_long_history.csv`）和日内时段季节性（否决），从未把期权到期时刻作为 1h 短线事件（到期前漂移 / 到期后释放）。
+- 数据：OKX 官方 1h 永续 d8（train 2022-02→2024-10-21 / test →2026-03-05 / post →2026-11-14）、未调参 new8、Gate 官方 1h 永续 d8；官方资金费；吃单 5.1 bps / 压力 15.1 bps 每边。
+- 公式：到期时刻 T = 周五 08:00 UTC（月度 = 当月最后一个周五，季度 = 3 / 6 / 9 / 12 月最后周五）。① 到期后：T 开盘入场，按到期前 L ∈ {24, 48}h 篮子平均对数收益的符号分组（up / dn / 全部），做多 / 做空 8 币等权篮子，持有 H ∈ {12, 24, 48}h；② 到期前：T−24h 开盘入场，持有 24h。安慰剂：同样规则放到周四 / 周六 / 周二 08:00 UTC。
+- 结果（真实费率，8 个切片 = OKX d8 三段 + new8 三段 + Gate 全段 / 后段）：周五 ≥7/8 正的格 9 个，安慰剂周六 7 个、周二 6 个、周四 3 个；8/8 正的格周五 2 个，周六反而 3 个。最好的「月度到期前 48h 下跌 → 做多 24h」每笔只有 +4 ~ +39 bps（new8 train +129），每段 6–16 个事件，t 值 0.1–1.1；季度格每段只有 1–2 个事件。
+- 结论：**否决**，期权到期事件（周 / 月 / 季，到期前 / 到期后）与普通日子没有可区分的差别，不再重测。
+- CSV（不入库）：`output/research_deribit_expiry_event_1h.csv`；脚本 `scratch/expiry/run.py`（在 scratch/capit 下运行）。下一轮：长线新族。
