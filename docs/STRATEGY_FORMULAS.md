@@ -7558,3 +7558,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（3 套 × 3 段比 Sharpe，最多 9/9）：首轮 36 格只有 **ETH_n20_short_off**（及 both）9/9：deep Sharpe 0.81 / 0.16 / 0.81（基线 0.71 / 0.09 / 0.75），tune 1.83 / 1.87 / 1.89（基线 1.47 / 1.46 / 1.56），post +66.5 / +67.3 / +58.6%（基线 +59.9 / +60.3 / +50.8%），回撤不变，但 post 逐月胜 / 负只有 5/4。邻域：n10 9/9（post +70.9 / +71.5 / +62.0%，逐月 5/3、5/3、4/4），n15 9/9，n25 6/9，n30 5/9，n40 3/9。安慰剂 11 格中 −60 天平移（用的是未来数据）也 9/9，其余 0–6/9。BTC、BTC+ETH 各窗口、long_off、contra 全部不稳或变差（如 BTC_n60_both post 只有 +17%）。方向和 Bitfinex ETH 净多 n30 只拦空列（弱观察）一致：ETH 资金面在流入时不做空。
 - 结论：**ETH n10–n20 只拦空列弱观察**——post 逐月没到 ≥ 6/9，未见历史覆盖太短，不改默认、不进纸面；每月复查一次 n10–n25；BTC / 合计 / long_off / contra 否决，不再重扫本网格。
 - CSV（不入库）：`output/research_us_spot_etf_flow_trend_gate_4h.csv`、`output/research_us_spot_etf_flow_trend_gate_4h_nbhd_placebo.csv`；脚本 `scratch/etfgate/`（run.py、run2.py，需在 `scratch/hashribbon` 目录下运行）。
+
+## 短线新族：美股指数（FRED 官方 NASDAQ 综合 / S&P 500 日收盘）大跌 / 大涨冲击，及「美股 vs 加密篮子」同窗口背离 → 8 币永续篮子 1h 事件（2026-11-14 ~19:00 PST，研究，不改默认；否决）
+
+- 查重：文档 / `output/research_*.csv` / 记忆中美股只测过 CME 周末缺口、美股类永续休市跳空、TradFi 永续趋势 sleeve、宏观体制闸门（美元 / 实际利率 / VIX 只作长线闸门）、CPI / 非农 / FOMC 事件窗口；从未用过美股指数日收益冲击本身或「美股与加密同窗口背离」做短线事件。
+- 数据：FRED 官方 `NASDAQCOM`、`SP500` 日收盘（fredgraph.csv，取 2019-06→2026-11-13）。D 日收盘 16:00 America/New_York（自动处理夏令时），保守按收盘 +1h 后的第一根整点 1h 开盘进场。交易用 OKX 官方 1h 永续 d8、未调参 new8、Gate 官方 1h 永续 d8（2024-10→，train 段无数据，最多 8/9），官方资金费，taker 0.051% × 2。
+- 公式：r = 指数日 log 收益；`z_W = (r − mean_W) / std_W`（只用过去 W 个交易日，W = 20 / 60）；背离 `div_W60 = z60(r) − z60(b)`，b = OKX d8 篮子在同一「收盘 +1h → 收盘 +1h」窗口的平均 log 收益（用可用时刻的开盘价，无前视）。触发 hi：特征 ≥ k，lo：≤ −k，k = 1.5 / 2 / 3；等权做多或做空 8 币，持有 12 / 24 / 48h，持仓期间不重复开。2 指数 × 3 特征 × 36 格 = 216 格 / 平移。安慰剂：序列平移 ±10 / +20 个交易日。
+- 结果（9 切片 = 3 套 × train / test / post 净收益为正的个数）：真实 6/216 格 ≥ 8/9（9/9 为 0），安慰剂 +10 日 7、−10 日 7、+20 日 4——真实不优于安慰剂。上榜格大多每段只有 1–12 笔（如 NASDAQ z20 ≥ 3 做空 48h：OKX 3 / 1 / 1 笔），样本最大的 NASDAQ z20 ≤ −2 做空 24h（OKX 23 / 15 / 8 笔）每笔只有 +17–63 bps，扣压力费后不稳；「美股比加密跌得多 → 做多加密补涨」（div lo long）在 Gate test / OKX new8 段不一致，同族安慰剂也有 0–2 格上榜。
+- 结论：**否决**，不实现、不进观察名单。美股指数日收益冲击 / 美股—加密背离短线事件族不再重测。
+- CSV（不入库）：`output/research_us_equity_index_shock_event_1h.csv`；脚本 `scratch/eqshock/ev.py`（复用 `scratch/etfflow/ev.py` 的加载与回测函数；FRED 原始数据 `scratch/eqshock/NASDAQCOM.csv`、`SP500.csv`）。
