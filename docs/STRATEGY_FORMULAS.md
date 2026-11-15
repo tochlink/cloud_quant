@@ -7436,3 +7436,20 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 其余（实际利率、VIX、投票、long_off、contra_both）都否决：VIX 各格基本为负（安慰剂 0 / 9），long_off 普遍伤 deep 段，contra 全面大亏。
 - 结论：**DTWEXBGS N20 short_on 列观察，不实现、不改默认**。post 段在三套数据上一致 +12 点，且跨所和邻域都成立，但 deep 未见段在 d7 输，tune_pre 段的增益连平移安慰剂也能拿到，而且对发布滞后很敏感。之后每月前向复核：若 post 增益在新月份继续保持，再考虑做成默认关的可选参数 `macro_usd_short_gate_n`。实际利率和 VIX 体制闸门不再重测。
 - CSV（不入库）：`output/research_us_macro_risk_regime_gate_4h.csv`（3 序列 × N × 4 种用法 + 投票 + 安慰剂，3 套数据）、`output/research_us_macro_risk_regime_gate_4h_dollar_nbhd.csv`（美元 N10–N40、平移安慰剂、滞后敏感）；脚本 `scratch/macro/run.py`、`scratch/macro/nb.py`。
+
+## 短线新族：韩国溢价（Upbit KRW 现货 vs OKX 永续 × 韩元汇率）冲击事件 → 1h 永续 8 币篮子（2026-11-14 ~17:20 PST，研究，不改默认；否决）
+
+- 查重：文档、`output/research_*.csv`、记忆中没有 Upbit / 韩国溢价（kimchi）；已测的溢价类是 Coinbase 溢价（长线闸门、短线事件均否决）、Gate × OKX 跨所、USDC/USDT 稳定币溢价、期现基差。本族的信息源是「韩国散户 KRW 需求」，与上述不同。
+- 数据：Upbit 官方公共 1h K 线 KRW-BTC / KRW-ETH / KRW-XRP（2021-12-24 → 2026-11-15，各 42,800 根，只存已收盘），KRW-USDT（2024-06 起，21,331 根）；FRED DEXKOUS 韩元兑美元日线，按 10 天发布滞后才算已知（前向填充）。交易：OKX 官方 1h 永续默认 8 币（2022→）、未调参 new8（OKX 1h），Gate 官方 1h 永续 8 币（只有 2024-10 后数据）；官方资金费；压力费 15.1 bps × 2。
+- 公式（因果，第 i 根 1h 收盘已知、下一根开盘入场）：
+  - fred 口径：`P_i = mean_c [ ln(Upbit KRW-c 收盘) − ln(OKX c-USDT 永续收盘 × DEXKOUS_{已知}) ]`，c ∈ {BTC, ETH} 或 {BTC, ETH, XRP}。
+  - usdt 口径（剔除 USDT 本身在韩国的溢价）：`P_i = mean_c [ ln(KRW-c) − ln(KRW-USDT) − ln(OKX c 永续) ]`。
+  - 特征：`z_W = (P − 均值_W) / 标准差_W`，W = 168 / 720；`dz24 = z_i − z_{i−24}`。事件：特征 ≥ k（溢价飙升 = 韩国追涨）或 ≤ −k（溢价塌缩 = 韩国抛售），k = 2 / 3。
+  - 动作：等权做多或做空 8 币，持有 H = 12 / 24 / 48，持仓期内不重复触发。安慰剂：事件序列平移 +168 / −168 / +336 小时。分段 train < 2024-10-21 / test → 2026-03-05 / post。
+- 结果（压力费；384 个真实格，8 个有数据切片 = OKX d8 / new8 各 3 段 + Gate test / post）：
+  - ≥ 7/8 切片为正：真实 12 格，安慰剂 12 / 8 / 19 格；8/8 全正：真实 2 格，安慰剂各 4 格。**和噪声没有区别。**
+  - 排在前面的格两侧都是「做多」（溢价飙升 z ≥ 3 和溢价塌缩 z ≤ −3 都做多），而且主要是 usdt 口径，train 段只有 2–10 次事件。这些格反映的是「极端波动后 8 币偏反弹」（已经被 #13 / #14 覆盖），不是韩国溢价方向本身的信息。
+  - fred 口径 BTC+ETH z168 ≤ −3 做多：OKX d8 train/test/post H12 为 +44 / +26 / +41 bps（n 46/20/10），但 Gate test 段 H12 −20、H24 −128、H48 −177，邻格 H24 的 test 只有 +10。
+  - 对照：无条件每 H 根开一次，各段为 −16 ~ −45 bps（费用拖累）。
+- 结论：**否决**，不实现、不进观察名单。不再重测韩国溢价（Upbit KRW）短线事件网格。Upbit 数据可留作长线体制输入，但已测的溢价类长线闸门全部否决，优先级低。
+- CSV（不入库）：`output/research_korea_premium_shock_event_1h.csv`；脚本和 Upbit 原始数据在 `scratch/kimchi/`（fetch.py、ev.py；`ev.py 10` 中的 10 = FRED 发布滞后天数）。
