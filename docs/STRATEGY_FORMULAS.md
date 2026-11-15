@@ -7900,3 +7900,14 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 但：OKX d8 邻域不稳（n45 / n60 / n180 deep 31.5 / 35.3 / 23.1 ≈ 或低于基线），安慰剂 −180 日 55–59 高于真实；**未调参 new8 失败**（OKX tune 8.9 vs 30.0、post −3.6 vs 3.3；Gate tune 8.4 vs 26.8、post −3.0 vs 16.4；n30 在 Gate post +20 但 tune 更差）；2026-03 后篮子费率几乎一直为正，闸门基本不触发，post 与基线相同，无法满足 post ≥6/9 月更好的改默认门槛。
 - 结论：不改默认、不实现。`n30–n90 F_n<0 只拦新空`列**弱观察**（深历史 d7 / Gate 明显胜过安慰剂，但 new8 失败、OKX d8 邻域不稳、post 无样本）——下次全市场出现持续负资金费（F_30 < 0）时再前向复核；其余（拦多 / 趋势 / follow / θ_lo>0）否决，不再重测此族。
 - CSV（不入库）：`output/research_basket_funding_regime_gate_4h.csv`、`output/research_basket_funding_regime_gate_4h_nbhd_placebo.csv`；脚本 `scratch/fundreg/run.py`、`run2.py`。下一轮（短线）：换新族。
+
+## 短线新族：日历锚定前高 / 前低突破（上一 UTC 日 / 周 / 月最高最低价，逐币 1h）（2026-11-14 ~23:00 PST，研究，不改默认；否决）
+- 查重：已测 4h 唐奇安滚动通道（长线信号族）、1h 挤压突破、整数关口穿越、收盘连涨连跌；从未用**日历锚定**的上一日 / 周 / 月高低点做 1h 事件。
+- 数据：OKX 官方 1h 永续 d8（train 2022-02→2024-10-21 / test →2026-03-05 / post →2026-11-14）、未调参 new8（OKX 1h 永续）、Gate 官方 1h 永续 d8；OKX 官方深历史资金费（Gate 用官方资金费）；吃单 5.1 bps / 压力 15.1 bps 每边。
+- 公式（因果）：对每币，上一周期（UTC 日 / 周一起的周 / 自然月）的最高 PH、最低 PL；本周期内 1h 收盘**首次** `C > PH`（向上突破）或 `C < PL`（向下突破）→ 下一根 1h 开盘入场，顺势（follow）或逆势（fade），持有 H ∈ {12, 24, 48}h，单币名义 1/8，同币持仓中不重复；可只做向上 / 只做向下 / 双向。安慰剂：事件整体平移 ±720h。
+- 结果（真实费率，8 个切片 = OKX d8 三段 + new8 三段 + Gate 全段 / 后段）：108 格中只有 1 格 ≥7/8 切片正，安慰剂 ±720h 也各 1 格；无一格 8/8。
+  - 日线前高低：顺势 24h 全部为负（OKX d8 −18 / −6 / −17 bps，new8 −32 / −28 / −24），逆势 12h ≈ 0（−10 ~ +2 bps），扣费后无边际。
+  - 周线前高低：顺势 24h OKX d8 +21 / −37 / −21 bps，Gate −24，不稳定。
+  - 月线前高低顺势 48h（最好）：OKX d8 +106 / +107 / +153 bps（n 206 / 112 / 58），Gate +149 / +167，但未调参 new8 测试 / 后段 −36 / −43 bps，−720h 安慰剂同样 6 / 8 正——本质是趋势跟随，与默认 4h 均线书重叠，没有独立增量。
+- 结论：**否决**，日历前高 / 前低突破（日 / 周 / 月，顺势 / 逆势）不再重测。
+- CSV（不入库）：`output/research_calendar_level_breakout_event_1h.csv`；脚本 `scratch/pwbrk/run.py`（在 scratch/capit 下运行）。下一轮：长线新族。
