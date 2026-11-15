@@ -491,6 +491,23 @@ class PaperBook:
         label_actions(out)
         return out
 
+    def reconcile(self, trades: list[dict] | None = None) -> dict:
+        """主账本对账：权益 = 起始资金 + Σ 成交记录盈亏（已平净盈亏 + 持仓浮盈，均已扣开平 / 调仓手续费）+ 资金费累计。
+        资金费按结算点直接计入已实现、不产生成交行，所以成交页的盈亏合计要加上它才等于权益变化。"""
+        trades = self.trade_records() if trades is None else trades
+        closed = [t for t in trades if t.get("status") == "closed"]
+        opened = [t for t in trades if t.get("status") == "open"]
+        cp = sum(float(t.get("pnl_usdt") or 0) for t in closed)
+        op = sum(float(t.get("pnl_usdt") or 0) for t in opened)
+        fees = sum(float(t.get("fee_usdt") or 0) for t in trades)
+        fund = float(getattr(self, "funding_total", 0.0) or 0.0)
+        eq = self.equity()
+        calc = self.starting + cp + op + fund
+        return {"starting_equity": self.starting, "closed_pnl_usdt": cp, "open_pnl_usdt": op, "fees_usdt": fees,
+                "funding_usdt": fund, "unrealized_usdt": eq - self.realized, "equity": eq, "equity_from_trades": calc,
+                "diff_usdt": eq - calc, "ok": abs(eq - calc) < 0.01, "trades": len(trades), "open": len(opened),
+                "closed": len(closed), "positions": len(self.positions)}
+
     def ledger(self) -> list[dict]:
         return self._q(f"SELECT {','.join(LEDGER_COLS)} FROM paper_ledger ORDER BY id")
 

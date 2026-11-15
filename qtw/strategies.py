@@ -419,12 +419,13 @@ def run(sid: str, data: dict, cfg: dict, btc_spot=None) -> dict:
     return res
 
 
-def latest_signals(sid: str, data: dict, cfg: dict) -> dict:
-    """最新一根已收盘 K 线上的目标方向 {sym: -1/0/1}（影子子账本在收盘事件里调用）。"""
+def latest_signals(sid: str, data: dict, cfg: dict, detail: bool = False):
+    """最新一根已收盘 K 线上的目标方向 {sym: -1/0/1}（影子子账本在收盘事件里调用）。
+    detail=True 时返回 (方向, 信号已持续根数 {sym: int|None}, 对齐后的 K 线开盘时间索引)。"""
     spec = BY_ID[sid]
     fn = signal_fn(sid)
     if fn is None or spec.get("separate_sim"):
-        return {}
+        return ({}, {}, None) if detail else {}
     syms = sorted(s for s in data.get("spot", {}) if s in data.get("perp", {}))
     ind = {m: {s: data[m][s].set_index("open_time", drop=False) for s in syms} for m in ("spot", "perp")}
     idx = None
@@ -434,7 +435,32 @@ def latest_signals(sid: str, data: dict, cfg: dict) -> dict:
     idx = idx.sort_values()
     al = {m: {s: ind[m][s].loc[idx] for s in syms} for m in ind}
     sig = fn(al, idx, syms)
-    return {s: int(v[-1]) for s, v in sig.items()}
+    last = {s: int(v[-1]) for s, v in sig.items()}
+    if not detail:
+        return last
+    return last, _signal_ages(sig, spec), idx
+
+
+def is_event(sid: str) -> bool:
+    """事件型短线策略（#13 / #14 等）：信号 = 触发后固定持有 H 根，迟到的入场不等于回测里的入场。"""
+    return "事件" in str(BY_ID[sid].get("kind", ""))
+
+
+def _signal_ages(sig: dict, spec: dict) -> dict:
+    """每个币当前非零信号已经持续了几根（0 = 最新一根已收盘 K 线就是触发 / 翻转那根）。
+    事件型策略的持有段长度固定为 hold，连续两段首尾相接时按 hold 取模，得到距本次触发的根数。"""
+    H = int((spec.get("params") or {}).get("hold") or 0) if "事件" in str(spec.get("kind", "")) else 0
+    out = {}
+    for s, v in sig.items():
+        v = np.asarray(v)
+        if not len(v) or int(v[-1]) == 0:
+            out[s] = None
+            continue
+        r = 1
+        while r < len(v) and int(v[-1 - r]) == int(v[-1]):
+            r += 1
+        out[s] = (r - 1) % H if H > 0 else r - 1
+    return out
 
 
 def public_list() -> list[dict]:

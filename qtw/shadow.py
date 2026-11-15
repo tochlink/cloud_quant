@@ -19,6 +19,7 @@ import pandas as pd
 
 from . import db
 from . import settings as S
+from . import logtable as LT
 from . import strategies as R
 from .risk import scale_to_room, size
 from .strategy import name_vol_mult
@@ -26,6 +27,8 @@ from .timeutil import iso, utcnow
 
 log = logging.getLogger(__name__)
 START_EQ = 1000.0
+# 事件型策略（#13 / #14）：只在触发 K 线收盘后的这么多根内入场；重启 / 停机后发现触发已过更久，就不补开（回测里不存在这种晚到的入场）
+EVENT_GRACE_BARS = 1
 STATUSES = ("采用", "观察")
 _LOCK = threading.RLock()
 _BOOKS: dict[str, dict] = {}
@@ -67,7 +70,11 @@ def book(sid: str) -> dict:
 def _save(sid: str) -> None:
     _ensure()
     b = _BOOKS[sid]
-    b["trades"] = b["trades"][-400:]
+    if len(b["trades"]) > 400:  # 只保留最近 400 笔明细；被裁掉的盈亏累计到 trimmed_pnl，对账仍然闭合
+        cut = b["trades"][:-400]
+        b["trimmed_pnl"] = float(b.get("trimmed_pnl", 0.0)) + sum(float(t["pnl_usdt"]) for t in cut)
+        b["trimmed_n"] = int(b.get("trimmed_n", 0)) + len(cut)
+        b["trades"] = b["trades"][-400:]
     db.execute("INSERT OR REPLACE INTO shadow_books(sid,state,updated_at) VALUES(?,?,?)", (sid, json.dumps(b), iso(utcnow())))
 
 
@@ -103,14 +110,30 @@ def _close(cfg, b, s, px, reason, when, src):
     b["realized"] += g - f
     b["fees"] += f
     pnl = g - f - p["fee_in"]
-    b["trades"].append({**p, "exit_time": when, "exit_price": px, "exit_reason": reason, "exit_src": src,
+    b["trades"].append({**p, "exit_time": when, "exit_price": px, "exit_reason": reason, "exit_src": src, "fee_out": f,
                         "pnl_usdt": pnl, "return_pct": pnl / p["notional"] if p["notional"] else 0.0, "status": "closed"})
+    return pnl
 
 
-def decide(sid: str, data: dict, cfg: dict, when: str | None = None) -> list[str]:
-    """按最新已收盘 K 线做一次决策（离场 → 解锁 → 开仓）。data = {"spot": {sym: df}, "perp": {...}}。"""
+def _mk_cn(side, mkt, verb):
+    return f"{verb}{'多' if side == 'long' else '空'}·{'现货' if mkt == 'spot' else '永续'}"
+
+
+def decide(sid: str, data: dict, cfg: dict, when: str | None = None, rows: dict | None = None) -> list[str]:
+    """按最新已收盘 K 线做一次决策（离场 → 解锁 → 开仓）。data = {"spot": {sym: df}, "perp": {...}}。
+    rows（可选）收集结构化的开 / 平明细 {"open": [...], "close": [...], "stale": [...]}，用于日志表格。"""
     spec = R.BY_ID[sid]
-    sig = R.latest_signals(sid, data, cfg)
+    sig, ages, idx = R.latest_signals(sid, data, cfg, detail=True)
+    event = R.is_event(sid)
+    rows = rows if rows is not None else {}
+    for k in ("open", "close", "stale"):
+        rows.setdefault(k, [])
+
+    def bar_t(age):
+        try:
+            return iso(pd.Timestamp(idx[-1 - int(age)]).to_pydatetime())
+        except Exception:  # noqa: BLE001
+            return ""
     venue = cfg["venue"]
     when = when or iso(utcnow())
     ev: list[str] = []
@@ -127,16 +150,22 @@ def decide(sid: str, data: dict, cfg: dict, when: str | None = None) -> list[str
             want = {1: "long", -1: "short"}.get(sig.get(s, 0), "flat")
             if want != p["side"]:
                 px, src = _px(venue, s, p["market"], last[p["market"]][s]["close"])
-                _close(c, b, s, px, "信号反转" if want != "flat" else "信号转空仓", when, src)
+                pnl = _close(c, b, s, px, ("持有期满" if event else "信号转空仓") if want == "flat" else "信号反转", when, src)
                 ev.append(f"{s} 平{('多' if p['side'] == 'long' else '空')} @{px:.6g}")
+                rows["close"].append([s, _mk_cn(p["side"], p["market"], "平"), f"{p['entry']:.6g}", f"{px:.6g}", f"{pnl:+.2f}"])
         for s in list(b["blocked"]):
             if sig.get(s, 0) != b["blocked"][s]:
                 b["blocked"].pop(s)
         eq = equity(b)
         gross = sum(abs(p["qty"]) * _mark(b, s, p) for s, p in b["positions"].items())
         want = {}
+        stale = {}
         for s, g in sig.items():
             if not g or s in b["positions"] or s in b["blocked"]:
+                continue
+            age = ages.get(s)
+            if event and age is not None and age > EVENT_GRACE_BARS:
+                stale[s] = age
                 continue
             long_mkt = "perp" if rk.get("trade_mode") == "perp_both" else "spot"  # 跟随风控「交易方式」
             side, mkt = ("long", long_mkt) if g > 0 else ("short", "perp")
@@ -152,9 +181,16 @@ def decide(sid: str, data: dict, cfg: dict, when: str | None = None) -> list[str
             z = size(side=side, equity=eq, price=px, atr=atr, max_risk=float(rk["max_risk_per_trade"]) * m,
                      max_weight=float(rk["max_weight_per_name"]) * m, atr_mult=float(st["atr_stop_mult"]))
             if z.notional > 0:
-                want[s] = (side, mkt, px, src, z)
+                want[s] = (side, mkt, px, src, z, ages.get(s))
         alloc = scale_to_room({s: w[4].notional for s, w in want.items()}, eq * float(rk["max_gross_exposure"]) - gross, _fee(c, "spot"))
-        for s, (side, mkt, px, src, z) in want.items():
+        if stale:
+            t0 = bar_t(max(stale.values()))
+            if b.get("stale_skip") != t0:  # 同一次触发只记一次，避免持有期内每根都刷屏
+                b["stale_skip"] = t0
+                a = max(stale.values())
+                ev.append(f"触发已过 {a} 根（触发 K 线开盘 {t0}），超过 {EVENT_GRACE_BARS} 根宽限，不补开 {len(stale)} 个币")
+                rows["stale"].append([len(stale), a, t0])
+        for s, (side, mkt, px, src, z, age) in want.items():
             n = alloc.get(s, 0.0)
             if n <= 1.0:
                 continue
@@ -162,12 +198,32 @@ def decide(sid: str, data: dict, cfg: dict, when: str | None = None) -> list[str
             b["realized"] -= f
             b["fees"] += f
             b["positions"][s] = {"symbol": s, "side": side, "market": mkt, "qty": n / px, "entry": px, "stop": z.stop_price,
-                                 "notional": n, "fee_in": f, "entry_time": when, "entry_src": src, "venue": venue, "strategy": sid}
+                                 "notional": n, "fee_in": f, "entry_time": when, "entry_src": src, "venue": venue, "strategy": sid,
+                                 "signal_bar": bar_t(age or 0), "late_bars": int(age or 0)}
             b["marks"][s] = {"px": px, "t": when}
-            ev.append(f"{s} 开{'多' if side == 'long' else '空'}·{'现货' if mkt == 'spot' else '永续'} {n:.1f}U @{px:.6g}")
+            ev.append(f"{s} {_mk_cn(side, mkt, '开')} {n:.1f}U @{px:.6g}")
+            rows["open"].append([s, _mk_cn(side, mkt, "开"), f"{n:.1f}", f"{px:.6g}"])
         b["last_decision"] = {"at": when, "events": ev, "signals": sig}
         _save(sid)
     return ev
+
+
+OPEN_HEADERS = ["币种", "方向", "金额(U)", "开仓价"]
+CLOSE_HEADERS = ["币种", "方向", "开仓价", "平仓价", "盈亏(U)"]
+
+
+def log_text(sid: str, rows: dict) -> str:
+    """影子子账本一次决策的日志：平仓表、开仓表各一张（一行一个币），过期触发单独一行说明。"""
+    no = R.BY_ID.get(sid, {}).get("no")
+    tag = f"影子子账本 {sid}" + (f"（#{no}，不计入主账本）" if no else "")
+    parts = []
+    if rows.get("close"):
+        parts.append(LT.block(f"{tag} 平仓", CLOSE_HEADERS, rows["close"]))
+    if rows.get("open"):
+        parts.append(LT.block(f"{tag} 开仓", OPEN_HEADERS, rows["open"]))
+    for n, a, t0 in rows.get("stale") or []:
+        parts.append(f"\n{LT.stamp()} {tag}：触发已过 {a} 根（触发 K 线开盘 {t0} UTC），超过 {EVENT_GRACE_BARS} 根宽限，不补开 {n} 个币")
+    return "".join(parts)
 
 
 def on_tick(q) -> None:
@@ -184,7 +240,9 @@ def on_tick(q) -> None:
             hit = px <= p["stop"] if p["side"] == "long" else px >= p["stop"]
             if hit:
                 cfg = S.load()
-                _close(cfg, b, q.symbol, px, "ATR止损", iso(utcnow()), q.data_source or "ws")
+                pnl = _close(R.strategy_cfg(cfg, sid) if sid in R.BY_ID else cfg, b, q.symbol, px, "ATR止损", iso(utcnow()), q.data_source or "ws")
+                log.info("%s", LT.block(f"影子子账本 {sid} · ATR 止损（不计入主账本）", CLOSE_HEADERS,
+                                        [[q.symbol, _mk_cn(p["side"], p["market"], "平"), f"{p['entry']:.6g}", f"{px:.6g}", f"{pnl:+.2f}"]]))
                 b["blocked"][q.symbol] = 1 if p["side"] == "long" else -1
                 _save(sid)
                 _LAST["decisions"].append({"sid": sid, "at": time.time(), "events": [f"{q.symbol} ATR 止损 @{px:.6g}"]})
@@ -202,10 +260,11 @@ def _run_bar(sid: str, venue: str, interval: str, close_ms: int) -> None:
         if not fr.get("spot") or not fr.get("perp"):
             log.warning("shadow %s: 行情获取失败 %s", sid, err)
             return
-        ev = decide(sid, fr, cfg, iso(utcnow()))
+        rows: dict = {}
+        ev = decide(sid, fr, cfg, iso(utcnow()), rows=rows)
         _LAST["decisions"] = (_LAST["decisions"] + [{"sid": sid, "at": time.time(), "close_ms": close_ms, "events": ev}])[-50:]
         if ev:
-            log.info("影子子账本 %s：%s", sid, "；".join(ev))
+            log.info("%s", log_text(sid, rows))
     except Exception:  # noqa: BLE001
         log.exception("shadow decision failed: %s", sid)
 
@@ -258,4 +317,66 @@ def status() -> list[dict]:
                     "positions": pos, "closed_trades": len(cl), "wins": sum(1 for t in cl if t["pnl_usdt"] > 0),
                     "recent_trades": cl[-20:][::-1], "last_decision": b.get("last_decision"), "venue": b.get("venue"),
                     "created_at": b.get("created_at")})
+    return out
+
+
+def _label(sid: str) -> str:
+    no = R.BY_ID.get(sid, {}).get("no")
+    return f"影子 #{no}" if no else f"影子 {sid}"
+
+
+def trade_rows(sids: list[str] | None = None) -> list[dict]:
+    """影子子账本的开平记录，字段与 /api/trades 一致（供成交页单独一栏展示），book = 「影子 #13」等。
+    这些记录只属于各自独立的 1000U 影子账本，不在主账本 paper_fills 里，也不计入主账本权益 / 成交数 / 盈亏。"""
+    out = []
+    ids = sids if sids is not None else active_ids()
+    for sid in ids:
+        b = book(sid)
+        lab = _label(sid)
+        recs = []
+        for t in b["trades"]:
+            d = 1 if t["side"] == "long" else -1
+            g = d * t["qty"] * (float(t["exit_price"]) - t["entry"])
+            f_out = t.get("fee_out")
+            if f_out is None:  # 旧记录：pnl = 价差 − 平仓费 − 开仓费
+                f_out = g - float(t["pnl_usdt"]) - float(t.get("fee_in") or 0)
+            recs.append((t, "closed", float(t.get("fee_in") or 0) + float(f_out), float(t["pnl_usdt"]), None))
+        for s, p in b["positions"].items():
+            m = _mark(b, s, p)
+            d = 1 if p["side"] == "long" else -1
+            recs.append((p, "open", float(p.get("fee_in") or 0), d * p["qty"] * (m - p["entry"]) - float(p.get("fee_in") or 0), m))
+        for i, (t, st, fee, pnl, m) in enumerate(recs):
+            entry_reason = f"{R.BY_ID.get(sid, {}).get('name', sid)}"
+            if t.get("late_bars"):
+                entry_reason += f"（触发后第 {t['late_bars']} 根才入场）"
+            out.append({
+                "trade_id": f"{lab.replace('影子 #', 'S').replace('影子 ', 'S')}-{i + 1}", "book": lab, "shadow_sid": sid,
+                "symbol": t["symbol"], "market": t["market"], "side": t["side"], "qty": t["qty"],
+                "entry_time": t.get("entry_time") or "", "entry_price": t["entry"], "entry_reason": entry_reason,
+                "entry_action": "开多" if t["side"] == "long" else "开空", "signal_bar": t.get("signal_bar") or "",
+                "exit_time": t.get("exit_time") or "", "exit_price": t.get("exit_price"),
+                "exit_reason": t.get("exit_reason") or "", "exit_action": "止损" if "止损" in str(t.get("exit_reason")) else ("平仓" if st == "closed" else ""),
+                "exit_note": "",
+                "fee_usdt": fee, "pnl_usdt": pnl, "pnl_pct": pnl / t["notional"] if t.get("notional") else None,
+                "status": st, "mode": "paper", "venue": t.get("venue") or b.get("venue") or "",
+                "mark_price": m, "mark_source": "", "mark_time": (b["marks"].get(t["symbol"], {}) or {}).get("t", "") if st == "open" else "",
+                "partial_tp": False, "resizes": 0,
+            })
+    out.sort(key=lambda r: (r["exit_time"] or r["entry_time"] or ""), reverse=True)
+    return out
+
+
+def summary() -> list[dict]:
+    """每本影子账的对账：起始 + 已平盈亏（含手续费）+ 持仓浮盈 − 持仓开仓费 = 权益。"""
+    out = []
+    for sid in active_ids():
+        b = book(sid)
+        closed = sum(float(t["pnl_usdt"]) for t in b["trades"]) + float(b.get("trimmed_pnl", 0.0))
+        up = sum((1 if p["side"] == "long" else -1) * p["qty"] * (_mark(b, s, p) - p["entry"]) for s, p in b["positions"].items())
+        fin = sum(float(p.get("fee_in") or 0) for p in b["positions"].values())
+        eq = equity(b)
+        out.append({"sid": sid, "book": _label(sid), "no": R.BY_ID[sid].get("no"), "name": R.BY_ID[sid]["name"],
+                    "start_equity": b["start_equity"], "equity": eq, "closed_pnl_usdt": closed, "unrealized_usdt": up,
+                    "open_fees_usdt": fin, "open": len(b["positions"]), "closed": len(b["trades"]) + int(b.get("trimmed_n", 0)),
+                    "diff_usdt": eq - (b["start_equity"] + closed + up - fin), "venue": b.get("venue")})
     return out
