@@ -7369,3 +7369,18 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 固定持有 72h 只有 test 段更好，train 段从 +190% 降到 +82%；48h 仍是最稳的持有期。
 - 结论：**否决**，#14 维持固定持有 48h。不再重测 DVOL 回落 / 状态离场。
 - CSV（不入库）：`output/research_capitulation_dvol_normalize_exit_1h.csv`；脚本 `scratch/dvexit/run.py`（需在 scratch/capit 目录运行）。
+
+## 短线新族：Deribit 期权成交流冲击事件（看跌 / 看涨成交比、主动买看跌净需求、虚值看跌−看涨 IV 偏斜）→ 1h 永续 8 币篮子（2026-11-14 ~16:30 PST，研究，不改默认；否决）
+
+- 查重：已测 DVOL（隐含波动水平）作 4h 闸门（否决）和 #14 事件触发、1h 微观结构事件（爆仓 / 持仓量 / 主动买卖 / 多空比，否决）、基差极值、Coinbase 溢价；从未用期权成交流（谁在买看跌 / 看涨）或偏斜做信号。
+- 数据：Deribit 官方 history.deribit.com 期权逐笔成交，BTC / ETH 2022-01→2026-11，聚合为 1h（看涨 / 看跌成交量、主动买量、成交量加权 IV；虚值看跌 K/S ≤ 0.95、虚值看涨 ≥ 1.05、平值）→ `output/deribit_options_flow_1h.csv`（不入库）。交易用 OKX 官方 1h 永续 d8 与未调参 new8（2022-02→），Gate 官方 1h 永续 d8（2024-10→）；官方资金费；吃单 5.1 bps（压力 15.1）。
+- 公式（因果，第 t 根 1h 收盘已知，下一根开盘进场）：24h 滚动和
+  - pcr = ln(看跌量 / 看涨量)；
+  - putdem = [(2·主动买看跌 − 看跌量) − (2·主动买看涨 − 看涨量)] / 总量；
+  - skew = 虚值看跌 vw IV − 虚值看涨 vw IV（24h 量加权）；
+  - 各自取 z720；事件 z ≥ k 或 z ≤ −k，k = 2 / 3；8 币等权做多或做空，持有 H = 12 / 24 / 48，事件不重叠；可选剔除 #14 持仓窗口；安慰剂事件后移 720h。
+- 结果（真实费，「全段为正」= OKX d8 / new8 train·test·post 与 Gate test·post 共 8 格每笔均值 > 0 且 n ≥ 3）：
+  - 288 格中只有 5 格全段为正，后移 720h 安慰剂 6 格，属于噪声水平。pcr 与 skew 0 / 96，putdem 5 / 96。
+  - 唯一的线索 ETH putdem z ≤ −2（主动买看涨过热）→ 做空 48h、剔除 #14：OKX d8 +10 / +36 / +106 bps，new8 +31 / +94 / +102，Gate test / post +87 / +105。但阈值换到 z ≤ −3、或不剔除 #14 就失效；同一机制换到 BTC（BTC putdem z ≤ −2 做空）在 OKX 各段**全部为负**（48h：−110 / −72 / −52 bps）。机制跨标的不一致，判为拟合。
+- 结论：**否决**期权成交流 / 偏斜短线事件整族，不实现、不列观察。期权数据保留，可作以后长线状态研究的输入（未测）。不再重测本族。
+- CSV（不入库）：`output/research_deribit_options_flow_event_1h_BTC_ETH.csv`（ETH 单独版 `..._ETH.csv`）；脚本 `scratch/dbopt/`（fetch.py 下载聚合，ev.py 事件检验，需在 scratch/capit 目录运行）。
