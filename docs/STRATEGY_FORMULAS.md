@@ -7624,3 +7624,11 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果：真实 10/288 格 ≥ 8/9（9/9 为 0），安慰剂 +10 日 5、−10 日 10、+20 日 9——真实不优于安慰剂。上榜格方向大致合理（VIX 急升 → 做空、10Y 收益率急跌 → 做多、2Y 急升 → 做空），但大多每段只有 3–20 笔，样本多的格每笔只有 +1–60 bps（如 DGS2 z20 ≥ 1.5 做空 24h：OKX 48 / 25 / 18 笔，+16 / +1 / +2 bps）。
 - 结论：**否决**，不实现、不进观察名单。VIX / 美债收益率 / 原油日度冲击短线事件族不再重测。
 - CSV（不入库）：`output/research_us_macro_daily_shock_event_1h.csv`；脚本 `scratch/eqshock/ev_macro.py`（FRED 原始数据同目录）。
+
+## 研究（已否决）：美债 10Y / 2s10s 利差 / WTI 原油均线趋势门控（长线 4h，2026-11-14）
+
+- 数据：FRED DGS10、T10Y2Y、DCOILWTICO 日线（收盘 +1h 才可用，ffill 到 4h）。
+- 公式：cap = 序列 < SMA_n（n=50/100/200）；在 4h 默认策略上只拦新开仓：long_off（cap 时禁多）、short_off（非 cap 时禁空）、both、contra_both。
+- 计划：OKX d8 / Gate d8 / OKX d7_noBNB；分段 deep_unseen / tune_pre / post（2026-03-05 起），手续费同标准。
+- 结果：最佳仅 6/9 Sharpe 段胜出（DCOILWTICO_n50_both post +62.0/+62.9/+55.4% vs 基线 +59.9/+60.3/+50.8%，但 tune 段 1.18/1.11/1.39 远低于 1.47/1.46/1.56；DGS10_n50_long_off 6/9 但 post 不变；T10Y2Y 门控 post 降到 +40–50%）；安慰剂 DGS10 shift180d 同样 6/9。
+- 结论：否决，不再重测。脚本 scratch/macrogate2/run.py，CSV output/research_us_rates_oil_trend_gate_4h.csv。
