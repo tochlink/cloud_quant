@@ -7540,3 +7540,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果：首轮 48 格中只有 ETH_net_n30_short_off（及 both）3 套 × 3 段 Sharpe 全胜：deep Sharpe 0.81 / 0.34 / 0.82（基线 0.71 / 0.09 / 0.75），tune 1.72 / 1.77 / 1.72（基线 1.47 / 1.46 / 1.56），post +70.8 / +71.7 / +60.9%（基线 +59.9 / +60.3 / +50.8%），post 逐月胜 / 负 6/1、6/1、5/2，回撤不变。安慰剂 12 格最多 5/9。但邻域不稳：n25 9/9（post 逐月 4/2）、n40 9/9（5/3）、n20 6/9，而 **n35 1/9，post 只有 +39.4 / +40.3 / +32.9%**，n45 3/9；而且是从 48 格里挑出来的。
 - 结论：**ETH 净多 n30 只拦空列弱观察**（邻域有大洞，不满足改默认、也不进纸面）；BTC 多头 / ETH 多头 / BTC 净多各窗口及 long_off / contra 否决。每月复查一次 n25–n40 是否仍一致；不再重扫本网格。
 - CSV（不入库）：`output/research_bitfinex_margin_trend_gate_4h.csv`、`output/research_bitfinex_margin_trend_gate_4h_nbhd_placebo.csv`；脚本 `scratch/bfxgate/`（run.py、run2.py，需在 `scratch/hashribbon` 目录下运行）。
+
+## 短线新族：美国现货 BTC / ETH ETF 日净流入冲击 → 8 币永续篮子 1h 事件（2026-11-14 ~18:40 PST，研究，不改默认；否决）
+
+- 查重：文档 / `output/research_*.csv` / 记忆中无 ETF 资金流（etf flow / farside / GBTC）测试；此前的资金面信号是稳定币供给、Coinbase / 韩国溢价、Bitfinex 保证金持仓，没用过美国现货 ETF 申赎净额。
+- 数据：Farside Investors 公开页面 `farside.co.uk/bitcoin-etf-flow-all-data/`、`/ethereum-etf-flow-all-data/`（各发行人披露汇总的每日 Total 净流入，US$m）：BTC 730 个交易日 2024-01-11 → 2026-11-13，ETH 592 个交易日 2024-07-23 → 2026-11-13；存 `output/us_spot_etf_flows_daily_farside.csv`。D 日数据保守按 **D+1 13:00 UTC**（美股开盘前）才可用，在其后第一根 1h 开盘进场。交易用 OKX 官方 1h 永续 d8、未调参 new8、Gate 官方 1h 永续 d8（2024-10→，train 段无数据，最多 8/9），官方资金费，taker 0.051% × 2。
+- 公式：f = 当日净流入；`z1 = (f − mean_W) / std_W`、`z3` = 3 日累计的同样 z（只用过去 W 个交易日，W = 20 / 60）；streak = 连续同号天数，第 k = 3 / 5 天触发一次。触发 hi：z ≥ k / 连续 k 天流入，lo：z ≤ −k / 连续 k 天流出，k = 1.5 / 2 / 3；等权做多或做空 8 币，持有 12 / 24 / 48h，持仓期间不重复开。2 资产 × 336 格 / 平移。安慰剂：序列平移 ±10 / +20 个交易日。
+- 结果（9 切片 = 3 套 × train / test / post 净收益为正的个数）：真实 6/336 格 ≥ 8/9（9/9 为 0），安慰剂 +10 日 18、−10 日 15、+20 日 5——真实不优于安慰剂。上榜 6 格全是「做多」边（篮子多头漂移），每段只有 1–16 笔（如 ETH z1 W20 ≤ −2 → 做多 12/24h，OKX test 7 笔 / post 6 笔）；做空边 0 格；大流入后追多、大流出后做空都不成立。
+- 结论：**否决**，不实现、不进观察名单。ETF 资金流短线事件族不再重测（数据保留，若做长线闸门需另立题目）。
+- CSV（不入库）：`output/research_us_spot_etf_flow_shock_event_1h.csv`、`output/us_spot_etf_flows_daily_farside.csv`；脚本 `scratch/etfflow/`（parse.py、ev.py）。
