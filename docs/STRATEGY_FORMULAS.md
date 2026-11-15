@@ -7755,3 +7755,15 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 公式：x = 7 日均（ln TVL_all / ln TVL_eth / ln DEX 日成交 / ln DEX − ln TVL_all）；cap = x < x 的 n 日均线（n = 30 / 90 / 180）；long_off = cap 时不开多，short_off = 非 cap 时不开空，both = 两者，contra_both = 反向；已持仓同向不受影响。安慰剂 = DEX n90 闸门整体平移 +180 / −120 天。分段 deep_unseen（→2024-10-21）/ tune_pre（→2026-03-05）/ post。
 - 结果：基线 post OKX d8 +59.9% / Gate d8 +60.3% / OKX d7 +50.8%。TVL、ETH TVL、DEX 成交额三条闸门 post 普遍掉 10–40 点，否决。最好的是 TURN_n180_short_off（DEX 换手低于 180 日均线以外时不开空）：post +65.1 / +66.0 / +56.3%（Sharpe 2.39 / 2.41 / 2.28），deep 三组都更好（+43.0 / +9.4 / +67.8% vs +35.1 / −3.6 / +54.9%），但 tune_pre 掉 10–21 点，post 月份只有 5/9 更好（未达 6/9），邻居 n30 全面变差（post +42 / +43 / +32%）、n90 持平，安慰剂 DEX 平移 180 天 short_off post 也有 +62.5 / +63.8 / +54.5%，说明 post 提升多半来自「少开空」本身而非换手信息。
 - 结论：**否决**，不改默认、不实现；TURN_n180_short_off 仅记弱观察（同属「少开空」类，已有多个弱观察，不叠加）。DefiLlama TVL / DEX 族不再重测。CSV（不入库）`output/research_defillama_tvl_dex_gate_4h.csv`，脚本 `scratch/defitvl/run.py`。
+
+## 组合：ETH 资金 / 需求「只拦空」弱观察闸门投票（以太坊交易笔数 TX、ETH 现货 ETF 净流入、Bitfinex ETH 净多、DEX 换手）→ 4h 默认书只拦新空（2026-11-14 ~20:55 PST，研究，不改默认；弱观察，参数邻域不稳）
+
+- 查重：四个成分此前各自单测为「只拦空」弱观察（ETH TX n180、ETF ETH n20、Bitfinex ETH 净多 n30、DEX 换手 TURN n180），从未合成投票；不是重扫单个网格。
+- 数据：Etherscan 日交易笔数（+2 天可用）、Farside ETH ETF 日净流入（D+1 13:00 UTC 可用，2024-07 起）、Bitfinex 官方 ETH 保证金多 / 空 1h 快照（+1h）、DefiLlama DEX 成交 ÷ 总 TVL（+2 天）。交易 OKX d8 / Gate d8 / OKX d7 去 BNB 官方 4h，默认参数，同脚本基线，分段 deep（< 2024-10-21）/ tune_pre / post（≥ 2026-03-05）。
+- 公式：各成分 bull_k ∈ {0,1}（TX、TURN：7 日均对数 ≥ SMA n；ETF：n 日累计净流入 ≥ 0；BFX：ln(多/空) n 日变化 ≥ 0），无数据不计票；fr = Σbull / 可用票数。规则 half：fr ≥ 0.5 时不开新空（已有空仓不受影响）；对照 any / maj（> 0.5）/ all，逐一去掉成分，参数整体 ×0.75 / ×1.25 / ×1.5、快参数，安慰剂全体平移 +60 / +180 / +270 / −120 / −240 天。
+- 结果（基线 Sharpe deep / tune / post：OKX d8 0.71 / 1.47 / 2.23，Gate 0.09 / 1.46 / 2.25，d7 0.75 / 1.56 / 2.10；post +59.9 / +60.3 / +50.8%）：
+  - core4_half 9/9：deep 0.87 / 0.31 / 0.87，tune 1.94 / 1.99 / 1.94，post +71.2 / +71.9 / +62.0%（2.61 / 2.63 / 2.52），三段回撤都不更深，逐月 5 胜 3 负；去掉任一成分的 3 票多数也都 9/9。
+  - 但参数邻域不稳：×0.75 tune 变差（1.38 / 1.40 / 1.42），×1.25 deep 变差（0.48 / 0.03 / 0.61），×1.5 deep 崩（0.21 / −0.18 / 0.36），快参数 tune 也输；「any」（一票即拦空）post +84% 但 deep / tune 全输。成分参数本身是逐个在全历史上挑过的，deep 并非真正未见。
+  - post 段几乎所有变体和 +180 / −240 天安慰剂都 +1 ~ +11 点 → post 提升主要是 2026-03 后「少开空」的通用效应；安慰剂 deep 全部变差（+180 天 −0.08 / −0.57 / 0.08），说明 deep 改善有一定真实性但只在精确参数点。
+- 结论：**弱观察**（不实现、不改默认、不进纸面）：逐月未达 ≥ 6/9，邻域不稳。每月与各成分弱观察一起前向复核 core4_half；本投票族不再重扫。
+- CSV（不入库）：`output/research_eth_demand_shortblock_vote_4h.csv`、`output/research_eth_demand_shortblock_vote_4h_nbhd_placebo.csv`；脚本 `scratch/shortvote/run.py`、`run2.py`（在 `scratch/hashribbon` 下运行）。
