@@ -7606,3 +7606,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（9 切片 = 3 套 × train / test / post 每笔净收益为正的个数）：真实费率下没有一格 ≥ 8/9；最好的 q = 0.10、L6、follow、H48 也只有 7/9，每笔 +8–62 bps（new8 test −4.8 bps），压力费率下全部 ≤ 4/9。不要求压缩的对照（q = 1.01）follow H48 有 6/9，压缩只多 1 个切片；fade 各格大多为负。平移安慰剂同样 0 格 ≥ 8/9。单笔优势只有 0.1–0.6%，跟已否决的 1h 吃单族一样被费率吃掉。
 - 结论：**否决**，不实现、不进观察名单。1h 压缩突破短线事件族不再重测。
 - CSV（不入库）：`output/research_1h_squeeze_breakout_event.csv`；脚本 `scratch/sqz1h/ev.py`。
+
+## 长线新族：维基百科加密词条浏览量（散户关注度）体制作为 4h 默认书入场闸门（2026-11-14 ~19:40 PST，研究，不改默认；否决）
+
+- 查重：散户情绪此前用过恐惧贪婪指数（短线）、韩国散户成交占比、Coinbase / 韩国溢价、ETF 资金流；从未用过网络关注度（维基百科 / 搜索量）。
+- 数据：Wikimedia 官方 REST API `metrics/pageviews/per-article/en.wikipedia/all-access/user/{Bitcoin, Ethereum, Cryptocurrency}/daily`，2015-07-01 → 2026-11-13，每条 4154 天，存 `output/wikipedia_pageviews_crypto_daily.csv`；日值保守按当日 0 点 +49h 才算已知。交易为 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）官方 4h，默认参数，同脚本基线；分段 deep_unseen（< 2024-10-21）、tune_pre、post（≥ 2026-03-05）。
+- 公式：x = ln(7 日均浏览量)，序列 Bitcoin 或三条合计 ALL；`z = (x − 过去 365 天均值) / 过去 365 天标准差`，cap = z > 1 / 2（关注度过热）；或 cap = x 的 n 日变化 > 0（关注度上升，n = 30 / 90）。闸门只拦新开仓、已有同向仓位保留：long_off / short_off / both / contra_both。安慰剂：Bitcoin z1 平移 +180 / −120 天。
+- 结果（3 套 × 3 段比 Sharpe，最多 9/9）：真实 32 格最好只有 3/9（ALL n30 short_off、各 contra），post 段全部低于基线（如 ALL n30 short_off +45.0 / +45.7 / +38.4%，基线 +59.9 / +60.3 / +50.8%）；contra 只改善 deep 段、tune 段 Sharpe 掉到 0.6–1.2（基线 1.46–1.56）。安慰剂反而 4–6/9（Bitcoin z1 long_off 平移 +180 天 6/9）。
+- 结论：**否决**，不实现、不进观察名单。维基百科关注度体制闸门不再重测（数据保留）。
+- CSV（不入库）：`output/research_wikipedia_attention_gate_4h.csv`、`output/wikipedia_pageviews_crypto_daily.csv`；脚本 `scratch/wikiview/run.py`（需在 `scratch/hashribbon` 目录下运行）。
