@@ -7726,3 +7726,11 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 数据：OKX 官方 1h 永续（2022-01-29→，d8 + 未调参 new8）、Gate 官方 1h（2025-09-24→）；分段 pre 2024-10-21 / tune → 2026-03-05 / post。
 - 结果：真实 96 格中 9 个切片 ≥8/9 正的 4 格、9/9 为 0；安慰剂 0.25 / 0.5 / 0.75 档分别 1 / 7 / 5 格，≥7/9 真实 16 格 vs 安慰剂 13 / 12 / 19。靠前格子几乎全是“做多”，即加密市场的整体上涨漂移，整数位本身没有额外信息。
 - 结论：**否决**，整数关口 / 心理价位族不再重测。CSV（不入库）`output/research_round_number_level_cross_event_1h.csv`，脚本 `scratch/roundlvl/ev.py`。
+
+### 2026-11-14 ~20:25 PST 长线：CFTC 周报（CME 比特币 / 以太坊期货 TFF）机构持仓趋势 → 4h 默认书入场闸门（弱观察）
+- 数据：CFTC 官方 Traders in Financial Futures（publicreporting.cftc.gov 数据集 gpe5-46if，合约 133741 BTC 2018-04→、146021 ETH 2021-04→，到 2026-11-03），存 `output/cftc_tff_cme_btc_eth_weekly.csv`。周二持仓，周五美东 15:30 公布；可用时间保守取周二 + LAG 天 00:00 UTC，LAG = 4（正常）和 11（考虑 2025 年政府停摆补发等延迟的敏感性）。
+- 公式：序列 LEV = (杠杆基金多 − 空) / 总持仓，AM = (资管多 − 空) / 总持仓，OI = ln(总持仓)；cap = 序列 < 自身 n 周均线，n ∈ {4, 13, 26}；动作 long_off（cap 时不开新多）/ short_off（非 cap 时不开新空）/ both / contra_both（非 cap 不开多、cap 不开空），已持仓不受影响。默认参数 4h，OKX d8（2023-02→）/ Gate d8（2022-07→）/ OKX d7（2022-04→），分段 deep 未见 → 2024-10-21 / tune → 2026-03-05 / post。安慰剂：BTCOI n13 平移 +182 / −119 天。
+- 结果（9 个 Sharpe 切片胜基线数）：LAG 4 最好 BTCAM_n4_contra 7/9、BTCAM_n13_contra 6/9；LAG 11 最好 BTCAM_n13_contra 9/9。安慰剂最高 6/9。
+  - BTCAM_n13_contra（资管净多高于 13 周均线时不开新多，低于时不开新空）：post 收益 OKX d8 +69.6 / +66.0%（LAG 4 / 11），基线 +59.9%；Gate d8 +70.5 / +66.6%，基线 +60.3%；OKX d7 +60.1 / +53.6%，基线 +50.8%。post 月份 d8 两所都是 6 胜 3 负，d7 3–4 胜。deep 未见 Sharpe 都提高（OKX 0.71 → 0.94 / 0.76，Gate 0.09 → 0.59 / 0.36）。但 tune 段 LAG 4 时变差（OKX 85 → 61%），LAG 11 时变好（→ 101%），也就是对公布延迟敏感；n26 的 post 掉到约 +28–35%，参数附近不稳。
+  - LEV / OI / ETH 合约序列在两种 LAG 下都不稳定，否决。
+- 结论：BTCAM_n13_contra_both 列为**弱观察**（不实现、不改默认）；每月有新周报后复查 post 月份，并用真实公布日（CFTC 发布日历）替代固定 LAG 再测一次。其余 COT 变体否决，不再重测。CSV（不入库）`output/research_cftc_cot_positioning_gate_4h_lag4d.csv`、`..._lag11d.csv`，脚本 `scratch/cot/run.py`。
