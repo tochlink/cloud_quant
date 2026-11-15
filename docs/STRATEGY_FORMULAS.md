@@ -7888,3 +7888,15 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 固定持有邻域（实费 Sharpe）：24h 尚可，30–42h 是一个洞（d8 post −0.25 ~ 0.84、Gate −0.25 ~ 0.26），48–72h 是平台（54h：Gate 1.01、post 1.93 / 2.69；60h：Gate 1.17、post 2.05 / 2.90，但 train 1.01 / 1.03 低于 48h 的 1.26 / 1.21），≥ 84h 回落。48h 处在平台左缘、紧挨 42h 的洞。
 - 结论：**否决**回吐保护离场，#14 维持固定持有 48h，不改参数（54–60h 只在 post / Gate 更好、train 更差，不满足改动门槛）；记录风险：48h 位于平台左缘，若以后要调，只考虑向 54–60h 方向，不往短调。不再重测 #14 回吐 / 追踪离场族。
 - CSV（不入库）：`output/research_capitulation_dvol_trailing_exit_1h.csv`、`output/research_capitulation_dvol_hold_neighborhood_1h.csv`；脚本 `scratch/dvtrail/run.py`、`scratch/dvtrail/hn.py`（需在 scratch/capit 目录运行）。下一轮（长线）：换新族。
+
+## 长线新族：8 币篮子资金费 n 日均值（全市场杠杆拥挤度）体制作为 4h 默认书入场闸门（2026-11-14 ~22:55 PST，研究，不改默认；n30–n90「均值 < 0 不开新空」弱观察，其余否决）
+
+- 查重：已测单币资金费水平只拦空（2026-11-10，当时 OKX 只有 3 个月历史）、单币资金费成本仓位倾斜 / 成本离场（深历史）、资金费 carry、跨所资金费价差、篮子资金费极端 1h 事件（21:55）。从未用**全市场（8 币篮子）资金费的长窗均值**做 4h 默认书的方向体制闸门；本轮首次用 OKX 官方深历史资金费（2022-01 起）。
+- 数据：OKX 官方深历史资金费（`output/okx_funding_history_official_deep.csv`）、Gate 官方资金费（d8 `output/gate_funding_history_long.csv`，new8 `scratch/dnew/gate_funding_deep.csv`）；官方 4h 现货 + 永续 K 线：OKX d8（2023-02 起）、Gate d8（2022-07 起）、OKX d7 无 BNB（2022-04 起）、未调参 new8 两所（2024-03 起）。段：deep_unseen（→2024-10-21）/ tune_pre（→2026-03-05）/ post。默认配置 perp_both 10× + 官方资金费，真实费 + 压力费（20 / 15.1 bps）。
+- 公式（因果）：每 8h 结算点篮子均值 `b_t = mean_s f_s,t`（bps / 8h），`F_n = mean(b, 最近 3n 个结算)`；结算后再滞后一个结算周期（+8h）才可用，4h 根上前向填充。闸门只拦新开 / 反手（已有同向持仓不受影响）：`long_off`：F_n > θ_hi 不开新多（θ_hi 1 / 1.5 / 2.5）；`short_off`：F_n < θ_lo 不开新空（θ_lo −0.25 / 0 / 0.25 / 0.5）；contra / follow 双边组合；F_n 相对其 90 日均线的趋势版。n = 7 / 30 / 45 / 60 / 90 / 120 / 180 日。安慰剂：体制序列平移 ±180 / ±365 日。
+- 结果（收益 %，deep / tune / post；基线 OKX d8 35.1 / 85.1 / 59.9，Gate d8 −3.6 / 84.3 / 60.3，OKX d7 54.9 / 92.9 / 50.8）：
+  - 拦新多（资金费过热）、趋势版、follow 版：全部无效或变差（高费率期多头仍在赚钱）。θ_lo 0.5 / 0.25 拦空过多，post 掉到 +5 ~ +35%。
+  - **F_n < 0 不开新空**（全市场持续负费率 = 空头拥挤时不追空）：n90：OKX d8 38.8 / 94.5 / 59.9，Gate d8 9.6 / 84.3 / 65.4，d7 85.6 / 99.5 / 50.8；n30：46.4 / 101.7 / 59.9，4.0 / 91.9 / 58.1，77.7 / 102.1 / 50.9。d7 上 n30–n180 deep 78–92 全部高于基线 55，而 8 个安慰剂只有 30–45（全低于基线）；Gate d8 n30–n120 deep +1.6 ~ +17.7 对安慰剂 −14 ~ +10。压力费同向（d7 n90 72.1 对 41.7）。
+  - 但：OKX d8 邻域不稳（n45 / n60 / n180 deep 31.5 / 35.3 / 23.1 ≈ 或低于基线），安慰剂 −180 日 55–59 高于真实；**未调参 new8 失败**（OKX tune 8.9 vs 30.0、post −3.6 vs 3.3；Gate tune 8.4 vs 26.8、post −3.0 vs 16.4；n30 在 Gate post +20 但 tune 更差）；2026-03 后篮子费率几乎一直为正，闸门基本不触发，post 与基线相同，无法满足 post ≥6/9 月更好的改默认门槛。
+- 结论：不改默认、不实现。`n30–n90 F_n<0 只拦新空`列**弱观察**（深历史 d7 / Gate 明显胜过安慰剂，但 new8 失败、OKX d8 邻域不稳、post 无样本）——下次全市场出现持续负资金费（F_30 < 0）时再前向复核；其余（拦多 / 趋势 / follow / θ_lo>0）否决，不再重测此族。
+- CSV（不入库）：`output/research_basket_funding_regime_gate_4h.csv`、`output/research_basket_funding_regime_gate_4h_nbhd_placebo.csv`；脚本 `scratch/fundreg/run.py`、`run2.py`。下一轮（短线）：换新族。
