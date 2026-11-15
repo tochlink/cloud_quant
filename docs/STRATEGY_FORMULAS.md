@@ -7767,3 +7767,18 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - post 段几乎所有变体和 +180 / −240 天安慰剂都 +1 ~ +11 点 → post 提升主要是 2026-03 后「少开空」的通用效应；安慰剂 deep 全部变差（+180 天 −0.08 / −0.57 / 0.08），说明 deep 改善有一定真实性但只在精确参数点。
 - 结论：**弱观察**（不实现、不改默认、不进纸面）：逐月未达 ≥ 6/9，邻域不稳。每月与各成分弱观察一起前向复核 core4_half；本投票族不再重扫。
 - CSV（不入库）：`output/research_eth_demand_shortblock_vote_4h.csv`、`output/research_eth_demand_shortblock_vote_4h_nbhd_placebo.csv`；脚本 `scratch/shortvote/run.py`、`run2.py`（在 `scratch/hashribbon` 下运行）。
+
+## 短线 #14 改进（入场 / 仓位侧）：按长线体制过滤或减半投降 / DVOL 冲击反弹（1h 永续，2026-11-14 ~21:05 PST，研究，不改默认；ETH SMA4800 熊市减半列弱观察）
+
+- 查重：#14 已测过严重度仓位（篮子跌幅 / DVOL z / 波动反比）、恐慌回落离场、入场时机、篮子权重、16 币池、与默认书交互（投降后暂停空头）；从未按「当时处在牛市还是熊市」区分反弹单。
+- 公式：#14 触发不变（1h 收盘，8 币 24h 对数收益均值 ≤ −10% 且 ≥ 7/8 下跌，或 Deribit ETH DVOL z168 ≥ 3；下一根开盘等权做多 8 币，持有 48h，持仓期不重复）。触发根 i 的体制 a_i ∈ {0,1}：ETH_SMA4800 = ETH 1h 收盘 > SMA4800（= 4h SMA1200，与 #12 体制线同口径）；BTC_SMA4800；BTC_SMA2400；ETH_SMA800；BASKET_R720 = 8 币 720h 对数收益均值 > 0；均线未预热按 a = 1。变体：bull_only（a=0 跳过）、bear_only（a=1 跳过）、bear_half（a=0 时单笔名义 ×0.5）。实费 5.1 bps/边（压力 15.1）+ 官方资金费。
+- 安慰剂：bull/bear_only 为随机保留同样笔数（30 次）；bear_half 为在同一事件序列里随机挑同样笔数减半（100 次），看真实 Sharpe 的分位。
+- 数据：OKX 官方 1h 永续 8 币 2022-02 →（train → 2024-10-21，test → 2026-03-05，post → 2026-11-14），未调参 new8（用默认 8 币触发），Gate 官方 1h 永续 2025-09 →。
+- 结果（实费，日 Sharpe；顺序 Gate 全段 / OKX post / test / train / new8 post / test / train）：
+  - base：0.94 / 1.82 / 1.47 / 1.26 / 2.54 / 1.37 / 1.21（事件 24 / 12 / 38 / 58）。
+  - 每笔均值：牛市触发明显更赚——ETH_SMA4800 牛 +201 / +507 / +247 / +343 bps，熊 +47 / −47 / +129 / +116；BTC_SMA2400 牛 +255 / +389 / +242 / +345，熊 +60 / −22 / +121 / +146。
+  - bull_only 砍掉一半事件，收益明显下降（OKX test +49% vs +83%），Sharpe 不稳定；bear_only 全面变差。
+  - ETH_SMA4800_bear_half：0.99 / 2.32 / 1.58 / 1.47 / 2.88 / 1.39 / 1.39，7/7 格 Sharpe ≥ base；收益 Gate +37.2% vs +35.0%，OKX post +25.7 vs +22.8，train +199 vs +191，test +67 vs +83（少了熊市里的大反弹）。压力费同向。随机减半安慰剂分位 0.62 / 0.96 / 0.77 / 0.95 / 0.97 / 0.63 / 0.94（均值约 0.83，3/7 格超过 p90）。
+  - 邻域：BTC_SMA2400 6/7 格更好（分位 0.84–0.98，new8 test 0.50），BTC_SMA4800 Gate 变差（0.25），ETH_SMA800 / BASKET_R720 只在 test 段好（分位 0.95–0.99），其余约随机。
+- 结论：**弱观察**，不实现、不改 #14、不进纸面。方向一致（牛市反弹单每笔多赚约 1.5–4 倍），ETH SMA4800 熊市减半 7/7 格 Sharpe 更好且与 #12 体制线同源，但相对随机减半的安慰剂只有约 0.8 分位，2026-03 后只有 12 笔，不足以改 #14。前向：#14 影子子账本每次触发时记录 ETH SMA4800 体制，累计 ≥ 10 笔真实纸面后复核。不再重扫本族（体制线 / 半仓比例）。
+- CSV（不入库）：`output/research_capitulation_dvol_regime_filter_1h.csv`、`output/research_capitulation_dvol_regime_filter_1h_placebo.csv`；脚本 `scratch/dvreg/run.py`、`plc.py`（在 `scratch/capit` 下运行）。
