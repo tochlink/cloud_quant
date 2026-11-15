@@ -7692,3 +7692,16 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 最显眼的 DEXJPUS_n50_short_off（日元未走强时不开空）：post +73.0 / +73.8 / +62.6%（基线 +59.9 / +60.3 / +50.8%），post Sharpe 2.75 / 2.77 / 2.61，逐月 6 / 7 / 3 胜；但 deep Sharpe 0.55 / 0.14 / 0.42、tune 1.35 / 1.28 / 1.35 都低于基线，只有 4/9，邻格 n100 / n200 不成立。
 - 结论：**否决**，不实现、不进观察名单；单一汇率趋势闸门族不再重测。
 - CSV（不入库）：`output/research_fx_jpy_cny_trend_gate_4h.csv`；脚本 `scratch/fxgate/run.py`（在 `scratch/hashribbon` 目录下运行）。
+
+## 长线新族：以太坊链上需求（Etherscan 日均 gas 价格 / 日 ETH 燃烧量 / 日交易笔数）趋势体制作为 4h 默认书入场闸门（2026-11-14 ~20:00 PST，研究，不改默认；TX short_off 弱观察，其余否决）
+
+- 查重：链上只测过 BTC（活跃地址 / 交易笔数 / NVT、手续费冲击、算力带、Puell），以太坊链上需求（gas、EIP-1559 燃烧、交易笔数）从未用过。
+- 数据：Etherscan 官方图表 CSV 日度 `gasprice`（日均 gas 价格，2015-07→）、`dailyethburnt`（日燃烧 ETH，2021-08→）、`tx`（日交易笔数，2015-07→），截至 2026-11-14；当日 UTC 数据保守按 +2 天 00:00 UTC 才算已知，ffill 到 4h。交易为 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）官方 4h，默认参数，同一脚本跑基线，分段 deep_unseen（< 2024-10-21）/ tune_pre / post（≥ 2026-03-05）。
+- 公式：x = 7 日均值的 ln(序列)；cap = x < SMA n(x)（n = 30 / 90 / 180 日，链上需求退潮）。4h 默认书只拦新开仓：long_off（cap 时不开多）/ short_off（非 cap 时不开空）/ both / contra_both。安慰剂：GAS n90 平移 +180 / −120 天。
+- 结果（基线 Sharpe deep / tune / post：OKX d8 0.71 / 1.47 / 2.23，Gate 0.09 / 1.46 / 2.25，d7 0.75 / 1.56 / 2.10；post 收益 +59.9 / +60.3 / +50.8%）：
+  - 没有一格胜 ≥ 7/9 Sharpe 切片，最好 6/9（4 格）；安慰剂 6 格都 ≤ 基线，post 平移 −120 天崩到 +6 ~ +26%。
+  - TX_n180_both：deep 三套都好（1.13 / 0.37 / 0.95），post +66.2 / +66.7 / +57.4%（逐月 5 胜 3 负），但 tune_pre 三套都差 32–40 点（Sharpe 1.32 / 1.34 / 1.35）；邻格 n90 deep 变差 → 不成立。
+  - **TX short_off**（以太坊交易笔数高于自身均线时不开新空）：post 在 n30 / n90 / n180 全部 +8 ~ +11 点（n180：+70.2 / +70.8 / +62.0%，Sharpe 2.62 / 2.64 / 2.56，逐月 5/3；n30 逐月 6 / 6 / 5 胜），tune_pre 略好（1.53 / 1.54 / 1.61），但 deep 未见段三套都输（0.56 / −0.05 / 0.63）。post 期间非 cap 比例约 46–50%，不是简单「全程不做空」。
+  - GAS、BURN 各用法均否决（GAS_n30_long_off deep 好但 post 掉 14 点；BURN_n90_contra_both 6/9 但 deep 全输）。
+- 结论：GAS / BURN 闸门**否决**；TX short_off **弱观察**（post 跨 n 稳定、但未见 deep 段输，不满足改默认条件），每月前向复核，不实现；以太坊链上需求闸门族不再重测。
+- CSV（不入库）：`output/research_eth_onchain_demand_gate_4h.csv`；数据 `scratch/ethgas/{gasprice,dailyethburnt,tx}.csv`；脚本 `scratch/ethgas/run.py`（在 `scratch/hashribbon` 目录下运行）。
