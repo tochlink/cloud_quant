@@ -7682,3 +7682,13 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果：真实 144 格中 14 格达到 6/6 可用段（test、post 都 ≥5 笔的 8 格）；安慰剂 14 / 22 / 13 格（≥5 笔：10 / 16 / 7）。真实与安慰剂无差别，价差只有 1 bps 量级，属于噪声。
 - 结论：**否决**，不实现、不进观察名单；跨所价差短线事件族不再重测。
 - CSV（不入库）：`output/research_cross_venue_dislocation_shock_event_1h.csv`；脚本 `scratch/xvdis/ev.py`（在 `scratch/stablemint` 目录下运行）。
+
+## 长线新族：美元兑日元 / 美元兑人民币（FRED H.10）均线趋势作为 4h 默认书入场闸门（2026-11-14 ~19:50 PST，研究，不改默认；否决）
+
+- 查重：宏观闸门此前用过广义美元指数、TIPS、VIX、美股、10Y / 2s10s / WTI、净流动性，没用过单一汇率（日元套息、人民币）。
+- 数据：FRED DEXJPUS（日元 / 美元）、DEXCHUS（人民币 / 美元）日度；H.10 每周一发布 → 按日期 +10 天才算已知，ffill 到 4h。
+- 公式：cap = 序列 < SMA n（n = 50 / 100 / 200；USDJPY 跌破均线 = 日元走强、套息平仓风险）；4h 默认书只拦新开仓：long_off / short_off / both / contra_both。OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）；安慰剂 DEXJPUS n100 平移 +180 / −120 天。
+- 结果：真实最好 6/9 Sharpe 段（DEXCHUS_n50_short_off，但 deep Sharpe 0.16 / −0.24 / 0.17，远低于基线 0.71 / 0.09 / 0.75），安慰剂 short_off shift−120d 同样 6/9。
+  - 最显眼的 DEXJPUS_n50_short_off（日元未走强时不开空）：post +73.0 / +73.8 / +62.6%（基线 +59.9 / +60.3 / +50.8%），post Sharpe 2.75 / 2.77 / 2.61，逐月 6 / 7 / 3 胜；但 deep Sharpe 0.55 / 0.14 / 0.42、tune 1.35 / 1.28 / 1.35 都低于基线，只有 4/9，邻格 n100 / n200 不成立。
+- 结论：**否决**，不实现、不进观察名单；单一汇率趋势闸门族不再重测。
+- CSV（不入库）：`output/research_fx_jpy_cny_trend_gate_4h.csv`；脚本 `scratch/fxgate/run.py`（在 `scratch/hashribbon` 目录下运行）。
