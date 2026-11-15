@@ -7419,3 +7419,20 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - **关键限制**：2026-03-05 后的 12 笔全是 DVOL 触发（没有单独的投降触发），乘子几乎相同，所以后段 Sharpe 不随 k 变化，收益只因归一化降到 +16.5 ~ +24.8%（基线 +22.8%）。后段没有区分度，增益全部来自 2026-03 以前，主要是 2022–2025 年「IV 没冲高的投降」反弹更强。
 - 结论：**列观察，不实现、不改 #14 默认**。逻辑一致（隐含波动已冲顶的恐慌反弹弱，安静的现货抛售反弹强），邻域和未调参 new8 也一致，但样本外近期段无法检验，安慰剂 90 分位只过 3 / 8。等前向或纸面出现单独的投降触发（或 z < 2 的触发）后再复核；届时实现方式为 #14 的可选参数 `size_dvz_k`（clip(k/z, 0.5, 2)，默认关）。
 - CSV（不入库）：`output/research_capitulation_dvol_severity_sizing_1h.csv`（10 个变体 × 3 套数据 × 真实 / 压力费率 + 20 次打乱安慰剂）、`output/research_capitulation_dvol_severity_sizing_1h_nbhd.csv`（邻域 + 后段月度）；脚本 `scratch/dvsize/run.py`、`scratch/dvsize/nb.py`（cwd 须为 scratch/capit）。
+
+## 长线新族：美国宏观风险体制闸门（FRED 官方美元广义指数 / 10Y TIPS 实际利率 / VIX）——4h 默认书只拦新开仓（2026-11-14 ~17:25 PST，研究，不改默认；美元 N20 只拦空列观察，其余否决）
+
+- 查重：宏观只测过事件型（FOMC、CPI / 非农 / PPI 公布窗口），体制闸门只用过加密内部数据（BTC / ETH 均线、DVOL、期权偏斜、Coinbase 溢价、USDT 借贷利率、成交额参与度）。美元、实际利率、VIX 这类跨资产宏观体制从未作为 4h 书的闸门。
+- 数据：FRED 官方日度序列 DTWEXBGS（美联储 H.10 广义美元指数，每周一发布 → 保守按日期 +10 天才算已知）、DFII10（10 年期 TIPS 实际收益率，+2 天）、VIXCLS（CBOE VIX 收盘，+2 天），保存为 `output/fred_macro_daily.csv`，含 known_from_utc 列。HY 信用利差（BAMLH0A0HYM2）在 FRED 只有 3 年，覆盖不了深历史，所以没用。交易数据为 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）的官方 4h 数据，默认参数，同一脚本跑基线，分段为 deep_unseen（< 2024-10-21）/ tune_pre / post（≥ 2026-03-05）。
+- 公式：off_k = 序列 > 自身 N 日均线（N = 20 / 50 / 100），表示美元走强、实际利率上升或 VIX 偏高，即风险偏好下降。在 4h 开盘时前向填充已知值。
+  - 闸门只拦新开仓，已有同向仓位保留：long_off（风险偏好下降时不开新多）、short_on（风险偏好上升时不开新空）、both（两条都用）、contra_both（反向）。
+  - 三序列投票 ≥ 2 / 3 之 3。
+  - 安慰剂：时间平移 30 / 90 / 180 / 365 / −180 天；另做滞后敏感性（按 14 / 21 天才算已知）。
+- 结果（Sharpe 胜基线的格数，满分 9）：
+  - **DTWEXBGS N20 short_on**（美元低于 20 日均线时不开新空）胜 8 / 9 格。post 段 OKX d8 +72.6% vs +59.9%（Sharpe 2.59 vs 2.23），Gate +73.3% vs +60.3%（2.61 vs 2.25），d7 +62.7% vs +50.8%（2.50 vs 2.10）；post 月度胜 / 负分别为 5/3、5/3、6/2。tune_pre 段 +14 ~ +16 点。deep 段 OKX +13 点、Gate +8 点，d7 −25 点（唯一输的格）。
+  - 邻域 post 增益：N10 +8、N15 +10 ~ +11、N20 +12 ~ +13、N25 +5 ~ +6、N30 +1 ~ +5、N40 约 0，在 N10–N20 是平台，往上逐步衰减；N15 / N25 / N30 在 d7 deep 段也输。
+  - 安慰剂：post 段平移 90 / 180 / 365 / −180 天分别为 0 / −4 / +3 / −3 点，都远低于真实的 +12；平移 30 天崩到 +8%。**但平移 180 / 365 天在 tune_pre 段反而 +46 ~ +50 点**，所以 tune_pre 段的增益不是本信号特有的。
+  - 滞后敏感：按 14 天才算已知时 post 只剩 +0 ~ +3 点，21 天约为 0。信息衰减很快。
+  - 其余（实际利率、VIX、投票、long_off、contra_both）都否决：VIX 各格基本为负（安慰剂 0 / 9），long_off 普遍伤 deep 段，contra 全面大亏。
+- 结论：**DTWEXBGS N20 short_on 列观察，不实现、不改默认**。post 段在三套数据上一致 +12 点，且跨所和邻域都成立，但 deep 未见段在 d7 输，tune_pre 段的增益连平移安慰剂也能拿到，而且对发布滞后很敏感。之后每月前向复核：若 post 增益在新月份继续保持，再考虑做成默认关的可选参数 `macro_usd_short_gate_n`。实际利率和 VIX 体制闸门不再重测。
+- CSV（不入库）：`output/research_us_macro_risk_regime_gate_4h.csv`（3 序列 × N × 4 种用法 + 投票 + 安慰剂，3 套数据）、`output/research_us_macro_risk_regime_gate_4h_dollar_nbhd.csv`（美元 N10–N40、平移安慰剂、滞后敏感）；脚本 `scratch/macro/run.py`、`scratch/macro/nb.py`。
