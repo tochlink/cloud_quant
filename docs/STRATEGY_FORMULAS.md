@@ -7662,3 +7662,14 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果：真实 144 格中 7 格 ≥8/9，安慰剂 2 / 0 / 1；全部集中在「利率骤降 → 做多」。但邻域不稳：chg6_z720 ≤ −4 做多 12h/24h 8/9（OKX 73/32/17 笔，post +54/+50 bps），k3 降到 5–6/9，k2 只有 2–3/9（post −29 ~ −31 bps）；chg24 只在 k4 H12 成立（H24 3/9）；lvl_z720 只有 1–3 笔 post。压力费率（每边再加 10 bps）后 test 段 OKX +7 bps 的格子转负。
 - 结论：**否决**，不实现、不进观察名单；借贷利率短线事件族不再重测。
 - CSV（不入库）：`output/research_usdt_lending_rate_shock_event_1h.csv`；脚本 `scratch/lendev/ev.py`（在 `scratch/stablemint` 目录下运行）。
+
+## 长线新族：美联储净流动性（WALCL − 逆回购 − TGA）/ 资产负债表趋势作为 4h 默认书入场闸门（2026-11-14 ~19:40 PST，研究，不改默认；否决）
+
+- 查重：此前宏观闸门用过美元、TIPS 实际利率、VIX、美股指数、10Y / 2s10s / WTI，没用过美联储资产负债表或净流动性。
+- 数据：FRED WALCL（周三资产总额，百万美元）、WTREGEN（TGA，百万）、RRPONTSYD（隔夜逆回购，十亿 ×1000）。周度数据按日期 +2 天 00:00 UTC 才使用，逆回购 +1 天；日频 ffill。NETLIQ = WALCL − TGA − RRP。（HY 信用利差 BAMLH0A0HYM2 在 FRED 只给 2023-11 以后，无法覆盖深历史，未测。）
+- 公式：cap = 序列 < 自身 n 日均线（n = 28 / 56 / 112 自然日）；4h 默认书只拦新开仓：long_off / short_off / both / contra_both。OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→），分段 deep_unseen / tune_pre / post（2026-03-05 起）。安慰剂 NETLIQ n56 平移 +180 / −120 天。
+- 结果：真实最好 6/9 Sharpe 段胜出，安慰剂 ≤ 1/9；但 6/9 全部来自 2026-03 以前。
+  - NETLIQ_n56_long_off（净流动性低于 56 日均线时不开多）：deep Sharpe 1.17 / 0.46 / 0.98（基线 0.71 / 0.09 / 0.75），tune 1.52 / 1.48 / 1.58（基线 1.47 / 1.46 / 1.56），但 post 只有 +39.8 / +40.3 / +39.6%（基线 +59.9 / +60.3 / +50.8%），post Sharpe 1.76–1.80（基线 2.10–2.25）。
+  - 邻域不稳：n28 long_off 的 deep Sharpe 降到 0.28 / −0.06 / 0.49，n112 的 tune 降到 1.02 / 0.86 / 0.99。WALCL 单独、short_off、both 都使 post 大幅变差（both 只剩 +3–5%）。
+- 结论：**否决**，不实现、不进观察名单；美联储净流动性 / 资产负债表闸门族不再重测。
+- CSV（不入库）：`output/research_fed_net_liquidity_gate_4h.csv`；脚本 `scratch/netliq/run.py`（在 `scratch/hashribbon` 目录下运行）。
