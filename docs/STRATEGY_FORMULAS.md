@@ -7911,3 +7911,11 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 月线前高低顺势 48h（最好）：OKX d8 +106 / +107 / +153 bps（n 206 / 112 / 58），Gate +149 / +167，但未调参 new8 测试 / 后段 −36 / −43 bps，−720h 安慰剂同样 6 / 8 正——本质是趋势跟随，与默认 4h 均线书重叠，没有独立增量。
 - 结论：**否决**，日历前高 / 前低突破（日 / 周 / 月，顺势 / 逆势）不再重测。
 - CSV（不入库）：`output/research_calendar_level_breakout_event_1h.csv`；脚本 `scratch/pwbrk/run.py`（在 scratch/capit 下运行）。下一轮：长线新族。
+
+## 长线新族：美国每周首次申领失业金（FRED ICSA）劳动力市场体制 → 4h 默认书入场闸门（2026-11-14 ~23:10 PST，研究，不改默认；否决）
+- 查重：宏观体制已测过美元 / 人民币日元、利率 / 原油、联储净流动性、金融压力 / 信用利差、BTC–纳指相关、CFTC 持仓、VIX 类；从未用过劳动力市场数据（初请失业金）。
+- 数据：FRED `ICSA`（周六截止当周，周四 12:30 UTC 公布；按截止日 +6 天才可用，日度前向填充），`IC4` = 28 天均值（≈ 4 周均值）。交易：同脚本 `qtw.backtest.run_backtest` 默认 4h 书，OKX d8（deep 2023-02→2024-10-21）、Gate d8（deep 2022-07→）、OKX d7（去 BNB，deep 2022-04→），tune 段 → 2026-03-05 → post → 2026-11-14；官方资金费，真实费率。
+- 公式：cap = `IC4 > SMA_n(IC4)`（n = 91 / 182 / 364 天）或 `IC4 同比 > 0 / 10%`；闸门只拦新开仓：long_off（cap 时不开多）、short_off（非 cap 时不开空）、both、contra_both（反向用法）。安慰剂：cap 序列平移 +182 / −119 天。
+- 结果（9 个夏普对比 = 3 套数据 × deep / tune / post）：最好 `IC4 同比 > 0 contra_both` 6 / 9，但 post 收益 OKX d8 +40% vs +60%（夏普 1.86 vs 2.23），Gate +40% vs +60%，后段月度好 / 差 6 / 9；`同比 > 10% both` deep 夏普 0.90 vs 0.71，但 post 收益只剩 +13% vs +60%；long_off 各格后段从未触发。安慰剂最好 4 / 9。
+- 结论：**否决**，初请失业金体制闸门不再重测。
+- CSV（不入库）：`output/research_jobless_claims_regime_gate_4h.csv`；脚本 `scratch/claims/run.py`。下一轮：短线新族。
