@@ -7522,3 +7522,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（16 格 × 3 套 × 3 段比 Sharpe，最多 9/9）：真实最好只有 3/9，安慰剂平移 −120 天 short_off 达到 6/9、+180 天 5/9——真实不如安慰剂。P1.2_long_off 的 deep Sharpe 1.34 / 0.72 / 1.15（基线 0.71 / 0.09 / 0.75），但 tune 段变差，post 三套 +39.5 / +39.8 / +38.1%（基线 +59.9 / +60.3 / +50.8%），post 逐月胜 / 负 1 / 3；P0.85_contra_both 的 post +72.8 / +70.0 / +61.8% 更好，但 deep、tune 段都明显变差。2024 年减半让收入断崖，Puell 体制主要反映减半周期，不是可交易的体制信号。
 - 结论：**否决**，不实现、不进观察名单。Puell / 矿工收入族不再重测。
 - CSV（不入库）：`output/research_puell_multiple_gate_4h.csv`；脚本 `scratch/puell/run.py`（需在 `scratch/hashribbon` 目录下运行）。
+
+## 短线新族：Bitfinex 保证金多 / 空持仓（BTC、ETH）冲击 → 8 币永续篮子 1h 事件（2026-11-14 ~18:30 PST，研究，不改默认；否决）
+
+- 查重：此前否决的 1h 微观结构事件用的是 OKX / Gate 的爆仓、持仓量、主动买卖、账户多空比；从未用过 Bitfinex 保证金借贷持仓（现货杠杆「鲸鱼」多空头寸），信息源不同。
+- 数据：Bitfinex 官方公共接口 `api-pub.bitfinex.com/v2/stats1/pos.size:1h:tBTCUSD|tETHUSD:long|short/hist`，小时快照 2021-02-22 → 2026-11-15，共 50,179 行，只存已结束小时，输出 `output/bitfinex_margin_positions_1h.csv`；快照时刻 +1h 才使用。交易用 OKX 官方 1h 永续 d8（2022-02→）、未调参 new8、Gate 官方 1h 永续 d8（2024-10→，train 段无数据，所以最多 8/9），官方资金费，taker 0.051% × 2。
+- 公式：`ch = ln(pos_t) − ln(pos_{t−L})`，L = 6 / 24 / 72h；`z = (ch − mean_W) / std_W`（只用过去，W = 720 / 2160h）；触发 hi：z ≥ k，lo：z ≤ −k，k = 2 / 3；下一根 1h 开盘等权做多或做空 8 币，持有 12 / 24 / 48h，持仓期间不重复开。4 序列 × 3L × 2W × 2 方向 × 2k × 2 边 × 3H = 576 格。安慰剂：特征平移 ±7 / +14 天。
+- 结果（9 个切片 = 3 套 × train / test / post 净收益为正的个数）：真实 16/576 格 ≥ 8/9，安慰剂 +7 天 20、−7 天 11、+14 天 23——真实不优于安慰剂。上榜格几乎全是「做多」边（篮子本身的多头漂移），如 ETH 空头 72h 增量 z≥3 → 做多 48h，单格样本只有 6–20 笔；BTC 多头 24h z≥3 → 做空 48h 每段只有 3–16 笔，且 k=2 / L=6 等邻域不成立。
+- 结论：**否决**，不实现、不进观察名单。Bitfinex 保证金持仓族（短线事件）不再重测；数据保留。
+- CSV（不入库）：`output/research_bitfinex_margin_shock_event_1h.csv`、`output/bitfinex_margin_positions_1h.csv`；脚本 `scratch/bfxmargin/`（fetch.py、ev.py）。
