@@ -7970,3 +7970,13 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：**否决**，不实现、不进观察名单。逐币价格-资金费背离 / 资金费变号短线事件族不再重测。
 - CSV（不入库）：`output/research_coin_funding_price_divergence_event_1h.csv`；脚本 scratch/fdiv/run.py（未推送）。
 - 下一轮：长线。
+
+## 长线新族：美联储政策利率周期（FRED DFF 加息 / 降息）与失业率 / 萨姆规则（FRED UNRATE）→ 4h 默认书入场闸门（2026-11-14 ~23:40 PST，研究，不改默认；否决）
+- 查重：宏观闸门已测美元 / 汇率、实际利率、10Y / 2s10s / WTI、VIX、联储净流动性（资产负债表）、金融压力 / 信用利差、BTC–纳指相关、CFTC、初请失业金、M2、CPI；FOMC 只测过公布当小时 1h 事件（弱观察）。从未把**政策利率本身的加息 / 降息周期**或**失业率趋势 / 萨姆衰退规则**当长线体制。
+- 数据：FRED `DFF`（有效联邦基金利率日度，+2 天可用）、`UNRATE`（月度失业率，观测月 1 日 +40 天可用，2025-10 缺值跳过）。交易：同脚本 `qtw.backtest.run_backtest` 默认 4h 书，OKX d8（deep 2023-02→2024-10-21）、Gate d8（deep 2022-07→）、OKX d7（去 BNB，deep 2022-04→），tune → 2026-03-05 → post → 2026-11-14；官方资金费，真实费率。
+- 公式：cap = `DFF_t − DFF_{t−n} > +10bp`（n = 91 / 182 / 364 日内加过息，hike）、`< −10bp`（降过息，cut）、`DFF > SMA364`（abovema）；`萨姆值 = 失业率 3 月均值 − 前 12 月内 3 月均值最小值 ≥ 0.3 / 0.5`（sahm）；`UNRATE > SMA182 / 364 日`（rise）。闸门只拦新开仓：long_off / short_off / both / contra_both。安慰剂：cut_n182 平移 ±365 天。
+- 结果（9 个夏普对比 = 3 套 × deep / tune / post；基线 post +59.9 / +60.3 / +50.8%）：
+  - 最好 `hike_n91 both` 夏普 8/9，但收益只赢 3/9，post +41 / +41 / +33%（大幅变差）；`hike_n91 long_off` 6/9：deep 收益 +73 / +38 / +94%（基线 +35 / −4 / +55%，全来自 2022–23 加息周期少开多），tune 不变，post 只多 2 点、逐月胜 1 负 2；邻域 n182 降到 4/9（deep OKX +29%），n364 更差；安慰剂（降息平移 +365 天）long_off / both / short_off 同样 6/9，真实不优于安慰剂。
+  - 降息 / 萨姆 / 失业率趋势格最好 3–4/9，凡让 post 少开空的格 post 跌到 +3 ~ +38%。
+- 结论：**否决**，不实现、不进观察名单。政策利率周期 / 失业率 / 萨姆规则体制族不再重测。
+- CSV（不入库）：`output/research_fed_policy_labor_cycle_gate_4h.csv`；脚本 `scratch/fedcyc/run.py`。下一轮：短线新族。
