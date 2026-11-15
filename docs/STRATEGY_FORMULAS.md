@@ -8027,3 +8027,15 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - GT/BTC 不复现（short_off 最好 3/9，n30 post +40% vs +60%）；long_off / both / contra 全部无效。
 - 结论：观察（不改默认）。pre-2026-03 改善明显且 n30–90 邻域稳定、优于安慰剂，但 post 几乎持平、月度未达 ≥6/9，且只有 OKB 有效（GT 不复现，可能是 OKB 个别事件）。每月复查 post；GT 版与 long_off/both/contra 拒绝，勿重测。
 - CSV：output/research_exchange_token_relstrength_gate_4h.csv；脚本 scratch/xtok/{fetch,run}.py。
+
+## 短线：交易所平台币 1h 相对 BTC 冲击事件（OKB/BTC、GT/BTC）→ 8 币永续篮子顺势 / 逆势（2026-11-15 00:10 PST，拒绝）
+- 思路：平台币相对 BTC 突然暴涨 / 暴跌 ≈ 交易所散户资金突发流入 / 流出，看山寨篮子接下来 1–2 天是跟随还是回吐。
+- 数据：OKX 官方 OKB-USDT、BTC-USDT 现货 1h（history-candles，2021-12→，已收盘）；Gate 官方 GT_USDT、BTC_USDT 现货 1h（API 只给最近约 1 万根，2025-09-28→）。
+- 公式：R = ln(TOKEN/BTC)（第 i 根已收盘）；σ = std(ΔR, 168 根，取上一根)；z = (R_i − R_{i−L}) / (σ√L)，L ∈ {1, 4}。|z| ≥ k（k=3/4/5）→ 下一根 1h 开盘等权进 8 币永续，mom 方向 = sign(z)、contra = −sign(z)；持有 24/48h，不重叠，扣 taker 费（实费 5.1bp/边、压力 15.1bp）和资金费。
+- 样本：OKX d8 与未调参 new8（train 2022-02→2024-10-21 / test →2026-03-05 / post →2026-11-14），Gate d8（2025-09→）；安慰剂 = 触发序列平移 ±720h。
+- 结果：
+  - 顺势全部为负（例 L1 k4 24h：OKX d8 −58bps/笔、Gate −118bps/笔）。
+  - 逆势最好 L1 k4 48h：post +99/+124bps（d8/new8，t 1.4/1.9），Gate +101bps；但深段 train −7/−24bps（122 笔），6 段只有 4 段为正；L4 k3 的 test 段 −54/−36bps。post 的逆势单多是「平台币大涨后做空」（35 笔里 26 笔空），与 2026 年下跌行情重合，属于方向 β，不是事件优势。
+  - GT/BTC 不复现（L1 k4 逆势 48h：Gate 窗口 +5bps，post −32bps）。
+- 结论：拒绝，勿重测（平台币 1h 冲击顺势 / 逆势、L/k/持有期这一族全部覆盖）。
+- CSV：output/research_exchange_token_shock_event_1h.csv；脚本 scratch/xtok1h/run.py，数据抓取 scratch/xtok/fetch1h.py。
