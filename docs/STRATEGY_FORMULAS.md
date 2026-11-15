@@ -7453,3 +7453,18 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 对照：无条件每 H 根开一次，各段为 −16 ~ −45 bps（费用拖累）。
 - 结论：**否决**，不实现、不进观察名单。不再重测韩国溢价（Upbit KRW）短线事件网格。Upbit 数据可留作长线体制输入，但已测的溢价类长线闸门全部否决，优先级低。
 - CSV（不入库）：`output/research_korea_premium_shock_event_1h.csv`；脚本和 Upbit 原始数据在 `scratch/kimchi/`（fetch.py、ev.py；`ev.py 10` 中的 10 = FRED 发布滞后天数）。
+
+## 长线新族：韩国散户成交占比（Upbit KRW 成交额 / 本所现货成交额）作为 4h 默认书入场闸门（2026-11-14 ~17:35 PST，研究，不改默认；否决）
+
+- 查重：上一节只用 Upbit 做了价格溢价的短线事件（否决），此前从未把 Upbit 成交额（韩国散户参与度）作为长线体制输入。与已测的全市场成交额参与度体制（`research_market_participation_volume_regime_4h`，看的是本所总量）、跨所成交占比闸门（Gate / OKX 之间）、永续 / 现货成交量比都不同：本族看的是韩国散户相对全球现货的份额。
+- 数据：Upbit 官方 1h K 线成交额（krw_value；KRW-BTC / ETH / XRP，2021-12 →），按 FRED DEXKOUS（10 天发布滞后）折成美元，按 4h 收盘时间汇总；本所官方 4h 现货成交额 = volume × close（同币求和）。交易为 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）的官方 4h 数据，默认参数，同一脚本跑基线；分段为 deep_unseen（< 2024-10-21）、tune_pre、post（≥ 2026-03-05）。
+- 公式：`P = ln(Upbit USD 成交额 / 本所现货 USD 成交额)`，币组 bex = BTC+ETH+XRP、x = 只看 XRP；`m = P` 的 S 日均值（S = 1 / 3 / 7）；`z = (m − 均值_W) / 标准差_W`（W = 30 / 90 日），阈值 q = 1.5 / 2。闸门只拦新开仓，已有同向仓位保留：
+  - long_hi：韩国狂热（z > q）时不追多；
+  - short_hi：狂热时不开空（顺势）；
+  - both：short_hi 加 long_lo；
+  - long_lo：韩国散户缺席（z < −q）时不开多；
+  - short_lo：缺席时不开空。
+  - 安慰剂：时间平移 90 / 180 天。
+- 结果（128 格 × 3 套数据，每格按 3 段 × 3 套 = 9 个切片比 Sharpe）：没有一格胜 ≥ 8/9。最好的 x_short_lo S7 W90 z1.5 和 S1 W90 z1.5 胜 7/9，但前者 deep 段平均 −11 点、post 逐月胜 / 负 7 / 12，后者 post 只 +0.3 点、逐月 13 / 13。x_long_hi（XRP 狂热不追多）胜 6/9，post 约 +0.8 点，S7 版本在 post 段从未触发。安慰剂 bex_short_lo 平移 180 天同样胜 6/9（tune +8.6 点），真实格比安慰剂强不了多少。
+- 结论：**否决**，不实现、不进观察名单。韩国散户成交占比对 4h 趋势书没有稳定增量。与韩国溢价短线事件一起，Upbit 数据族不再重测。
+- CSV（不入库）：`output/research_korea_retail_volume_share_gate_4h.csv`；脚本 `scratch/kimchi/run.py`（参数 0 / 1 / 2 为三套数据）。
