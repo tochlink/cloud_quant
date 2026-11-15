@@ -7504,3 +7504,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（24 格 × 3 套 × 3 段比 Sharpe，最多 9/9）：最好只有 6/9（all_g30_both、all_g60_both、usdt_g30_long_off），且全部是 deep / tune 段好、post 段大幅变差：all_g60_both 的 OKX d8 deep +35→+72%，但 post +59.9→−6.9%（Sharpe 2.23→−0.51，回撤 −10.6→−18.3%）；all_g30_both post +59.9→+38.6%，post 逐月胜 / 负 10 / 17。安慰剂平移 −120 天 long_off 同样 6/9，真实不比安慰剂好。2026 年稳定币供给转为收缩，闸门在 post 段拦掉了赚钱的多头。
 - 结论：**否决**，不实现、不进观察名单。稳定币供给族（短线事件、长线体制）不再重测。
 - CSV（不入库）：`output/research_stablecoin_supply_growth_gate_4h.csv`；脚本 `scratch/stablegate/run.py`（需在 `scratch/hashribbon` 目录下运行）。
+
+## 短线新族：恐惧贪婪指数（alternative.me 日度 F&G）极值 / 突变 → 8 币永续篮子 1h 事件（2026-11-14 ~18:05 PST，研究，不改默认；否决）
+
+- 查重：文档、`output/research_*.csv`、记忆中均无恐惧贪婪 / 情绪指数族（此前仅测过 OKX 多空人数比闸门，机制不同）。
+- 数据：alternative.me 公开接口 `api.alternative.me/fng/?limit=0` 日度 F&G（2018-02→，每日 00:00 UTC 更新），存 `output/fear_greed_daily_alternative_me.csv`；当日值在 00:00 UTC + 1h 后才用，下一根 1h 开盘成交。注意：第三方合成指数，历史可能有修订。交易：OKX d8、Gate d8、OKX 新 8 币（未调参）官方 1h 永续，taker 5.1 bps × 2 + 官方资金费；分段 train（< 2024-10-21，未见）/ test / post（≥ 2026-03-05）。
+- 公式：水平 `F ≤ 10/15/20/25`（极度恐惧）或 `F ≥ 75/80/85/90`（极度贪婪）；突变 `ΔF_L = F_t − F_{t−L}`（L = 1 / 3 / 7 日）`≤ −q` 或 `≥ q`（q = 10/15/20/30）；多 / 空 8 币等权篮子，持有 12 / 24 / 48h，持仓期间不重复开。安慰剂：日度序列平移 +14 / −14 / +30 天。
+- 结果（192 格 × 9 切片，Gate 无 train 段，最多 8/9）：真实 4 格 ≥ 8/9，安慰剂 +14 天 3 格、−14 天 9 格、+30 天 4 格——不比安慰剂好。最好的「F ≤ 15 → 做空 48h」OKX d8 +56 / +77 / +77 bps（n 20/19/19），new8 +33/+52/+87，Gate +150/+82，但样本少、是持续性下跌期的趋势延续，与默认 4h 趋势书重叠；「7 日骤降 ≥ 10 → 做空 48h」post +122 bps 但 24h 只剩 +22，持有期不稳。
+- 结论：**否决**，不实现、不进观察名单。恐惧贪婪指数族不再重测。
+- CSV（不入库）：`output/research_fear_greed_event_1h.csv`；脚本 `scratch/fng/ev.py`（在 `scratch/stablemint` 目录下运行，参数 = 延迟小时）。
