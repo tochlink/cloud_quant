@@ -8252,3 +8252,19 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：**否决**，不实现、不进观察名单、不改默认。美国财政部月度财政收支（总入库 / 个人所得税入库 / 预算赤字）作为 4h 默认书入场闸门，勿以同一机制换 n、方向、入库 vs 个税 vs 赤字、均线 vs 同比 vs 变动，或改用每日财政报告（DTS）税收入库 / 拍卖倍数重测同一财政机制。
 - CSV（不入库）：`output/research_us_treasury_fiscal_gate_4h.csv`（148 行，含预注册安慰剂）；官方月度序列 `output/us_treasury_mts_fiscal_monthly.csv`（140 个月）；+20 日滞后日度填充 `output/us_treasury_mts_fiscal_daily.csv`；脚本 `scratch/ustfiscal/{fetch,run,analyze}.py`（研究脚本未推送）。
 - 下一轮（短线）：比特币官方难度调整（每 2016 个块的 retarget）公布后，作为 1h 事件 → 8 币永续篮子顺势 / 逆势。这不是已否决的算力带（hash ribbon）4h 闸门或链上手续费 1h 冲击，也不是本轮的财政部月度预算闸门。文档和 `output/research_*.csv` 里还没有难度调整事件。勿重测已否决的短线族（Empire / Philly 调查、信标漏槽、验证者提款、存款合约、blob / 基础费、mempool 拥堵）。
+
+## 短线新族：比特币官方难度调整（每 2016 个块的 retarget）公布后 → 8 币永续篮子顺势 / 逆势（1h，2026-11-15 ~05:25 PST，研究，不改默认；否决）
+
+- 查重：文档 / `output/research_*.csv` / 记忆中无难度调整、retarget、2016 块难度事件作为 1h 篮子交易。这不是已否决的算力带（hash ribbon，日度算力 SMA30 / SMA60）4h 闸门，也不是链上手续费 1h 冲击，更不是上一轮的财政部月度预算闸门。上一轮指定本族为下一短线。
+- 数据：mempool.space 官方 `GET /api/v1/mining/difficulty-adjustments`（无需密钥，不编造、不回补）。每条为 `[块时间戳, 高度, 难度, 新/旧比]`。全历史 470 次，2009-01-03 18:15:05 → 2026-11-14 05:02:50 UTC，高度 0 → 975744，全部为 2016 的整数倍。缺失仅 2009 年最早 15 个高度（2016–30240），交易窗口内无断档。chg 为新/旧难度比（上限 4、下限 0.25）。2022-01-29→2026-11-14 共 127 次（上升 80、下降 47）。最近一次 2026-11-14 05:02 UTC 的持有尚未走完（OKX 1h 缓存到 06:00 UTC），未计入。交易腿为官方 1h 永续：OKX d8（2022-01-29→2026-11-14）、OKX 未调参 new8、Gate d8（2025-09-24→）。官方资金费。不用现货代替永续成交。
+- 公式：事件时刻为 retarget 块的官方时间戳；信号在该块所在 1h 内已知，下一根 1h 永续开盘等权交易默认 8 币（或 new8）。令 $p=$ 新/旧比 $-1$。过滤：twosided（$|p|\ge k$）、up（$p\ge k$ 且 $p>0$）、down（$p\le -k$ 且 $p<0$），$k\in\{0,0.02,0.05,0.08\}$。顺势 mom：难度升做多、降做空；逆势 contra 相反。经济先验 = 矿工投降 lore（难度下降后做多，即 down/contra 或 twosided/contra）。持有 12 / 24 / 48h，不重叠。费率：真实永续吃单 5.1bps 往返 2 腿，压力 15.1bps。分段：train 2022-01-29→2024-10-21、test→2026-03-05、post→2026-11-14；另报 Gate 窗口 2025-09-28→。安慰剂：事件时间平移 ±168h（约半个调整周期，主）与 ±720h。8/8 = OKX d8 train/test/post、new8 train/test/post、Gate post、Gate 窗口均值净 bps>0。可用样本：OKX d8 train $n\ge 10$、test $n\ge 8$、post $n\ge 8$。72 个真实格。
+- 结果（真实费率，单笔组合均值）：
+  - 72 个真实格里 5 个是 8/8，但没有一个满足可用样本；也没有可用的 7/8。5 个 8/8 的 post 只有 3–6 笔、test 低至 2–7 笔，t 统计多在 0.1–0.6，不是可交易的边。
+  - 唯一「OKX d8 三段都为正、且样本够用」的格是 `up k0 contra H12`（难度上升后做空篮子，12h）：OKX d8 train +102.48bps（46 笔，t=3.64）、test +8.34（24，t=0.23）、post +23.58（10，t=0.45）。但 new8 test 为 −9.39，Gate 窗口为 −3.62，只有 6/8。压力费下 4/8（OKX d8 test、new8 test/post、Gate 窗口翻负）。邻域 H24 的 test 已是 −2.48，H48 test −97；+168h 安慰剂的 post 为 +42.03，+720h 的 post 为 +28.51，都强过真实 post +23.58。
+  - 看起来最好的不可用 8/8 `up k0.02 contra H12`（OKX d8 +86.01/+31.15/+41.13，n=34/13/6，post 不足 8 笔）：+168h 安慰剂 post +44.26 已超过真实 +41.13。`up k0.05 contra H12` post 只有 3 笔，+720h 安慰剂 post +169.71 与真实 +168.82 几乎一样。`down k0.05 mom H48` 全程只有 3/2/3 笔，−720h 安慰剂 train +403 还高过真实 +302。
+  - 矿工投降先验（难度下降后做多，down/contra）在可用格上失败：`down k0 contra H12` 为 2/8，test / post 为负。
+  - OKX d8 三段都为正的真实格 6/72；安慰剂 +168 / −168 / +720 / −720h 分别为 2 / 2 / 2 / 4 个，−720h 已接近真实计数，不是可区分的边。
+- 结论：**否决**，不实现、不进观察名单、不改默认。比特币官方难度调整（2016 块 retarget）公布后做多 / 做空加密篮子没有可重复的单笔优势：可用格过不了 8/8，过了 8/8 的样本太少，且被安慰剂追上或超过。本族勿以同一机制换 k、持有、上升 / 下降 / 双边，或顺势 vs 逆势重测。
+- CSV（不入库）：`output/research_btc_difficulty_adj_event_1h.csv`；官方事件 `output/btc_difficulty_adjustments_official_mempool.csv`（470 次）；脚本 `scratch/btcdiff1h/{run,analyze}.py`（研究脚本未推送）。
+- 下一轮（长线）：mempool.space 官方矿池算力集中度（头部矿池占比 / HHI）趋势作为 4h 默认书入场闸门。这不是已否决的算力带（全网算力均线交叉）、也不是本轮的难度调整事件或链上手续费冲击。文档和 `output/research_*.csv` 里还没有矿池集中度闸门。勿重测已否决的长线族（财政部月度财政、按揭 / 营建、L2Beat TVS、UTXO / 确认时间、CM 交易所库存、信标质押 / 排队、闪电容量、stETH 基差、MVRV、Puell、ETF 流量、DefiLlama TVL、期权 VRP、DVOL、平台币相对强弱、联储净流动性、CPI 通胀体制、CFTC COT、美元 / 实际利率 / VIX 宏观风险体制）。
+
