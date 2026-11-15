@@ -7819,3 +7819,15 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - 逐月（post 9 个月）：叠加 / 共享都是 4 胜 3 负（2 个月无事件），不满足 ≥ 6/9。
 - 结论：不改默认。#14 作为默认书的叠加子账本，在两所、深历史未见段、调参窗、post 和压力费下都提高 Sharpe 且 post 回撤不加深，安慰剂明显更差——维持**强观察**。资金口径上**叠加优于共享**（缩默认书去腾资金会丢掉默认书在急跌后的收益），建议模拟盘继续按 8788 影子子账本「额外 0.5× 名义（6.25% / 币）」运行；w1.0 收益更高但 tune 回撤更深，不推荐。post 只有 12 次事件、逐月 4/3，仍需前推积累。
 - CSV（不入库）：`output/research_capitulation_dvol_combo_default_4h.csv`；脚本 `scratch/dvcombo/run.py`（在 `scratch/capit` 下运行）。下一轮（短线）：换新族。
+
+## 短线新族：8 币篮子资金费极端（OKX 官方深历史资金费，8h 结算点）→ 8 币永续篮子做多 / 做空 1h 事件（2026-11-14 ~21:55 PST，研究，不改默认；否决，neg_breadth7 做多 48h 只作弱观察）
+
+- 查重：此前资金费只用于结算窗口漂移（否决）、截面 carry、跨所资金费差、成本感知仓位 / 离场、资金费调整价格信号；微结构 1h 事件测的是爆仓 / OI / 主动买卖 / 多空比。从未用**全篮子资金费水平 / 同号广度**作为择时事件。
+- 数据：OKX 官方深历史资金费（market-data-history module=3，`output/okx_funding_history_official_deep.csv`，2022-01 起）；交易用 OKX 官方 1h 永续（d8 + 未调参 new8，资金费按同一官方深历史计）和 Gate 官方 1h 永续（2025 起，资金费用 Gate 官方）。触发统一用 OKX 8 币资金费。
+- 公式：结算时刻 T，`fb_T = mean_8(r_T)`，`neg_T = #{r_T < 0}`。事件：① z 分数 `z = (fb_T − mean_W(fb 前移 1)) / sd_W`，W = 90 / 270 次结算，lo（z ≤ −k）/ hi（z ≥ k），k = 2 / 3；② 绝对值 fb ≤ 0 / −1 / −3 bp，fb ≥ 3 / 6 / 10 bp；③ 负费率广度 neg ≥ 7 / 8。T 开盘那根 1h 收盘后，下一根开盘（T+1h）等权做多或做空 8 币，持有 24 / 48h，持仓期间不重复；taker 5.1 bps × 2（压力 15.1），计入资金费。安慰剂：事件平移 ±720h；对最好的格子再做 20 次随机结算整点（同样次数）。邻域：广度 5–8 × 持有 12 / 24 / 48 / 72h，并剔除过去 48h 内有 #14 触发的事件（看对 #14 的增量）。
+- 结果（真实费率，8 个切片：OKX d8 train / test / post、new8 train / test / post、Gate 全段 / post）：
+  - 64 格里 ≥ 7/8 为正的：真实 5 格，平移 +720h 安慰剂 8 格、−720h 3 格——整体没有好过安慰剂。z 分数、绝对值类信号符号随参数翻转；fb ≤ 0 做多全段 −5 ~ −35 bps。
+  - 唯一干净的格子 neg ≥ 7/8 做多 48h：8/8 为正，OKX d8 +75 / +71 / +133 bps（n 23 / 63 / 16），new8 +108 / +76 / +127，Gate +102 / +127；压力费仍为 +51 ~ +113；随机整点安慰剂分位 0.8–1.0；t 只有 0.7–1.7。
+  - 但邻域不稳：同一触发持有 24h 的 test 段 −54 / −65 bps，广度 6 / 8 在 train 或 test 段为负；剔除 #14 附近事件后 OKX train / test 降到 −23 / −6 bps——大部分收益与 #14 投降 / DVOL 冲击重叠，增量很小。
+- 结论：**否决**，不实现。「全篮子负资金费 ≥ 7/8 → 做多 48h」只作为弱观察（与 #14 高度重叠，等 2026-03 后事件更多再看增量）；资金费水平 / z 分数 / 正费率极端做空均不再重测。
+- CSV（不入库）：`output/research_basket_funding_extreme_event_1h.csv`（64 格 × 切片 × 真实 / 压力 / 安慰剂）、`output/research_basket_funding_extreme_event_1h_nbhd.csv`（广度 × 持有 × 剔除 #14 + 随机整点安慰剂）；脚本 `scratch/fundev/run.py`、`nb.py`（在 `scratch/capit` 下运行）。下一轮（长线）：换新族。
