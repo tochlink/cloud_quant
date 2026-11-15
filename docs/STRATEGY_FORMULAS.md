@@ -7549,3 +7549,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（9 切片 = 3 套 × train / test / post 净收益为正的个数）：真实 6/336 格 ≥ 8/9（9/9 为 0），安慰剂 +10 日 18、−10 日 15、+20 日 5——真实不优于安慰剂。上榜 6 格全是「做多」边（篮子多头漂移），每段只有 1–16 笔（如 ETH z1 W20 ≤ −2 → 做多 12/24h，OKX test 7 笔 / post 6 笔）；做空边 0 格；大流入后追多、大流出后做空都不成立。
 - 结论：**否决**，不实现、不进观察名单。ETF 资金流短线事件族不再重测（数据保留，若做长线闸门需另立题目）。
 - CSV（不入库）：`output/research_us_spot_etf_flow_shock_event_1h.csv`、`output/us_spot_etf_flows_daily_farside.csv`；脚本 `scratch/etfflow/`（parse.py、ev.py）。
+
+## 长线新族：美国现货 BTC / ETH ETF n 日累计净流入体制作为 4h 默认书入场闸门（2026-11-14 ~18:55 PST，研究，不改默认；ETH n10–n20 只拦空列弱观察，其余否决）
+
+- 查重：上一节只把 ETF 资金流做 1h 短线冲击事件（否决）；长线闸门此前用过资金费、基差、CROWD、宏观、链上、稳定币、Bitfinex 保证金，从未用过 ETF 申赎净额的中期趋势。
+- 数据：`output/us_spot_etf_flows_daily_farside.csv`（Farside 每日 Total 净流入，BTC 2024-01-11→，ETH 2024-07-23→；D 日数据 D+1 13:00 UTC 才使用）。交易为 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）官方 4h，默认参数，同脚本基线；分段 deep_unseen（< 2024-10-21）、tune_pre、post（≥ 2026-03-05）。**注意**：ETF 数据开始前不设闸，所以 deep 段实际只有 2024 年的几个月（ETH 只有约 2024-08→10）受影响，未见历史验证很弱。
+- 公式：S = BTC / ETH / BTC+ETH 最近 n 个交易日净流入之和，n = 5 / 20 / 60；`cap = S < 0`（累计净流出）。闸门只拦新开仓、已有同向仓位保留：long_off = cap 时不开多；short_off = 非 cap（净流入）时不开空；both；contra_both。安慰剂：BTC n20 平移 +180 / −120 天；ETH n20 short_off 平移 ±60 / ±90 / 120 / −180 / 240 / 365 天。
+- 结果（3 套 × 3 段比 Sharpe，最多 9/9）：首轮 36 格只有 **ETH_n20_short_off**（及 both）9/9：deep Sharpe 0.81 / 0.16 / 0.81（基线 0.71 / 0.09 / 0.75），tune 1.83 / 1.87 / 1.89（基线 1.47 / 1.46 / 1.56），post +66.5 / +67.3 / +58.6%（基线 +59.9 / +60.3 / +50.8%），回撤不变，但 post 逐月胜 / 负只有 5/4。邻域：n10 9/9（post +70.9 / +71.5 / +62.0%，逐月 5/3、5/3、4/4），n15 9/9，n25 6/9，n30 5/9，n40 3/9。安慰剂 11 格中 −60 天平移（用的是未来数据）也 9/9，其余 0–6/9。BTC、BTC+ETH 各窗口、long_off、contra 全部不稳或变差（如 BTC_n60_both post 只有 +17%）。方向和 Bitfinex ETH 净多 n30 只拦空列（弱观察）一致：ETH 资金面在流入时不做空。
+- 结论：**ETH n10–n20 只拦空列弱观察**——post 逐月没到 ≥ 6/9，未见历史覆盖太短，不改默认、不进纸面；每月复查一次 n10–n25；BTC / 合计 / long_off / contra 否决，不再重扫本网格。
+- CSV（不入库）：`output/research_us_spot_etf_flow_trend_gate_4h.csv`、`output/research_us_spot_etf_flow_trend_gate_4h_nbhd_placebo.csv`；脚本 `scratch/etfgate/`（run.py、run2.py，需在 `scratch/hashribbon` 目录下运行）。
