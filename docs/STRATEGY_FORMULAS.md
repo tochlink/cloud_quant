@@ -7734,3 +7734,10 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - BTCAM_n13_contra（资管净多高于 13 周均线时不开新多，低于时不开新空）：post 收益 OKX d8 +69.6 / +66.0%（LAG 4 / 11），基线 +59.9%；Gate d8 +70.5 / +66.6%，基线 +60.3%；OKX d7 +60.1 / +53.6%，基线 +50.8%。post 月份 d8 两所都是 6 胜 3 负，d7 3–4 胜。deep 未见 Sharpe 都提高（OKX 0.71 → 0.94 / 0.76，Gate 0.09 → 0.59 / 0.36）。但 tune 段 LAG 4 时变差（OKX 85 → 61%），LAG 11 时变好（→ 101%），也就是对公布延迟敏感；n26 的 post 掉到约 +28–35%，参数附近不稳。
   - LEV / OI / ETH 合约序列在两种 LAG 下都不稳定，否决。
 - 结论：BTCAM_n13_contra_both 列为**弱观察**（不实现、不改默认）；每月有新周报后复查 post 月份，并用真实公布日（CFTC 发布日历）替代固定 LAG 再测一次。其余 COT 变体否决，不再重测。CSV（不入库）`output/research_cftc_cot_positioning_gate_4h_lag4d.csv`、`..._lag11d.csv`，脚本 `scratch/cot/run.py`。
+
+### 2026-11-14 ~20:35 PST 长线：期权方差风险溢价 VRP = ln(Deribit DVOL / 30 天已实现波动) 体制 → 4h 默认书入场闸门（否决）
+- 查重：DVOL 只测过水平 / z / 变化率闸门（15:10 节，否决）和 1h 事件（VRP 分位只作短线事件），从未把「隐含 − 已实现」价差作为 4h 长线体制。
+- 数据：Deribit 官方 DVOL 1h（BTC / ETH，2022-01→，该小时收盘后才可用）；已实现波动 RV30 = OKX 官方 1h 永续收盘对数收益 720 根标准差 × √8760（年化 %）；每天 00:00 UTC 采样 `VRP = ln(DVOL / RV30)`（2022-02-24→）。
+- 公式：cap = VRP < 0（n0，隐含低于已实现＝压力期）或 VRP < 自身 n 日均线（n ∈ {30, 90, 180}，溢价收缩）；动作 long_off / short_off / both / contra_both（同 CFTC 节）；只拦新开仓，已有仓不动。默认书其余不变，OKX d8 / Gate d8 / OKX d7（无 BNB）三套，分段 deep_unseen（→2024-10-21）/ tune_pre（→2026-03-05）/ post；安慰剂 ETHVRP n90 平移 +182 / −119 天。
+- 结果（9 个 Sharpe 切片胜基线数）：真实最好 6/9（BTCVRP n0 / n90 long_off），安慰剂最高 5/9。所有 long_off 的 post 收益（顺序 Gate d8 / OKX d8 / OKX d7）+48.9 / +48.4 / +38.9%，低于基线 +60.3 / +59.9 / +50.8%，post 月份 0 胜（2026-03 后的多单全被拦掉）。最显眼 ETHVRP_n30_contra_both post +69.5 / +68.9 / +59.6%（月份 5 / 4 / 6 胜），但 deep 未见段 Sharpe 全部低于基线（0.03 / 0.37 / 0.71 vs 0.09 / 0.71 / 0.75），邻域 n90 / n180 不成立。
+- 结论：**否决**，VRP 体制闸门不实现、不列观察，不再重测。CSV（不入库）`output/research_options_vrp_regime_gate_4h.csv`，脚本 `scratch/vrpgate/run.py`。
