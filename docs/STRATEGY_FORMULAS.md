@@ -7597,3 +7597,12 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结果（3 套 × 3 段比 Sharpe，最多 9/9）：真实 24 格最好 NVT n90 short_off 5/9（post +31.8 / +32.6 / +25.3%，基线 +59.9 / +60.3 / +50.8%），TX n30 short_off 4/9（post 只有 +8–16%）；安慰剂 AA n90 short_off 平移 +180 天反而 8/9。long_off 各格都让 tune 段大幅变差（如 NVT n90 long_off tune Sharpe 0.40–0.54，基线 1.46–1.56），只有 deep 段变好；short_off / both 在 post 段普遍砍掉近一半收益。
 - 结论：**否决**，不实现、不进观察名单。链上活跃度 / NVT 体制闸门不再重测（数据保留）。
 - CSV（不入库）：`output/research_btc_onchain_activity_gate_4h.csv`、`output/btc_onchain_activity_daily_blockchain_com.csv`；脚本 `scratch/onchainact/run.py`（需在 `scratch/hashribbon` 目录下运行，原始 JSON 在 `scratch/puell/bc_*.json`）。
+
+## 短线新族：1h 波动压缩（布林带宽极低分位）后的 24 根区间突破 → 单币顺势 / 反向，持有 12–48h（2026-11-14 ~19:30 PST，研究，不改默认；否决）
+
+- 查重：布林带宽挤压只作为 4h 默认书入场闸门测过（2026-11-10 两节），Donchian / 通道突破只作为 4h 信号替换测过；1h 单币短线事件此前测过均值回归、特质冲击、15m 插针，从未测过「压缩后突破」的 1h 短线事件。
+- 数据：OKX 官方 1h 永续 d8（2022→）、未调参 new8、Gate 官方 1h 永续 d8（2024-10→，train 段无数据，最多 8/9），官方资金费，taker 0.051% × 2，另算压力费 0.151% × 2。
+- 公式：`BBW = 4 × std20(C) / SMA20(C)`；`pr = BBW 在最近 720 根中的分位`；压缩 = 最近 L 根（L = 6 / 24）内任一根 pr ≤ q（q = 0.02 / 0.05 / 0.10；q = 1.01 即不要求压缩，作对照）。突破：收盘 > 前 24 根最高价 → 向上，< 前 24 根最低价 → 向下；follow = 顺突破方向，fade = 反向；下一根开盘吃单入场，持有 H = 12 / 24 / 48 根，同币持仓期间不重复开。安慰剂：压缩分位序列平移 168h。
+- 结果（9 切片 = 3 套 × train / test / post 每笔净收益为正的个数）：真实费率下没有一格 ≥ 8/9；最好的 q = 0.10、L6、follow、H48 也只有 7/9，每笔 +8–62 bps（new8 test −4.8 bps），压力费率下全部 ≤ 4/9。不要求压缩的对照（q = 1.01）follow H48 有 6/9，压缩只多 1 个切片；fade 各格大多为负。平移安慰剂同样 0 格 ≥ 8/9。单笔优势只有 0.1–0.6%，跟已否决的 1h 吃单族一样被费率吃掉。
+- 结论：**否决**，不实现、不进观察名单。1h 压缩突破短线事件族不再重测。
+- CSV（不入库）：`output/research_1h_squeeze_breakout_event.csv`；脚本 `scratch/sqz1h/ev.py`。
