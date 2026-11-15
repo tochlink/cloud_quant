@@ -8039,3 +8039,15 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
   - GT/BTC 不复现（L1 k4 逆势 48h：Gate 窗口 +5bps，post −32bps）。
 - 结论：拒绝，勿重测（平台币 1h 冲击顺势 / 逆势、L/k/持有期这一族全部覆盖）。
 - CSV：output/research_exchange_token_shock_event_1h.csv；脚本 scratch/xtok1h/run.py，数据抓取 scratch/xtok/fetch1h.py。
+
+## 长线新族：流动性质押基差（OKX 官方 STETH-ETH 折价）→ 4h 默认书只拦新开仓（2026-11-15 ~00:15 PST，研究，不改默认；否决）
+- 查重：文档 / `output/research_*.csv` / 记忆中无 stETH、wstETH、流动性质押基差、质押折价。已测过 ETH 链上需求（gas / 燃烧 / 交易笔数）、MVRV、DeFi TVL/DEX、OKX USDT 借贷利率、期现基差与季度期限结构；从未用过 **stETH 对 ETH 的折价**（流动性质押流动性 / 杠杆压力）。
+- 数据：OKX 官方现货 `STETH-ETH` 日线 UTC（`history-candles`，`bar=1Dutc`，已收盘，2023-07-18 → 2026-11-14，1216 根，直接报价）。日收盘标签为当日 00:00 UTC，次日 00:00 UTC 才可用（+1 天）。Gate 也有 `STETH_USDT`（2021-10 起），但 2023 年初出现接近 0 的坏价、隐含比价噪声远大于 OKX 直报盘（OKX 折价中位约 −4 ~ −8bp，极少超过 −30bp），故两所回测都用同一条 OKX 基差，缺数据时不拦。交易：同脚本 `qtw.backtest.run_backtest` 默认 4h 书，OKX d8（deep 2023-02→）、Gate d8（deep 2022-07→）、OKX d7 去 BNB（deep 2022-04→），tune → 2026-03-05 → post → 2026-11-14；官方资金费，真实费率。
+- 公式：`basis = close(STETH-ETH) − 1`。`cap` = 折价压力：`basis < −θ`（θ = 10 / 20 / 30 bp），或 30 / 90 日 z 分数 `< −k`（k = 1.5 / 2）。闸门只拦新开仓（已有同向仓保留）：`long_off`（压力期不开新多）、`short_off`（非压力期不开新空）、`both`、`contra_both`、`cap_short_off`（压力期不开新空，对应「折价是机会」）。安慰剂：`z90 k1.5` 各侧平移 +182 / −119 天。
+- 结果（9 个夏普对比 = 3 套 × deep / tune / post；基线 post +59.90 / +60.32 / +50.76%，Sharpe 2.23 / 2.25 / 2.10）：
+  - 真实最好：`disc10bp_cap_short_off` 6/9 夏普、6/9 收益。post 三套都更好（+62.99 / +63.36 / +53.62%，Sharpe 2.32 / 2.34 / 2.20），但 **deep 三套都更差**（+25.57 / −10.14 / +43.61% 对 +35.14 / −3.63 / +54.92%），tune 只小幅更好。post 逐月 2/1、3/2、2/1，多数月份持平。该阈值 post 段只有 17/254 天触发。
+  - 邻域不稳：`disc20bp_cap_short_off` 3/9（post 与基线完全相同），`disc30bp` 3/9；z 分数版 `cap_short_off` 最好 3/9（z30 k1.5），其余 1–2/9。`long_off` 只在 deep 变好、tune 明显变差（3/9）；`short_off` / `both` 0/9。
+  - 安慰剂同样打到 6/9：`PLC_z90_k1.5_long_off` 平移 +182d 与 −119d 都是 6/9，`PLC_…_cap_short_off +182d` 也是 6/9。真实并不优于安慰剂。
+- 结论：**否决**，不实现、不进观察名单、不改默认。10bp「折价时不开新空」是阈值孤岛，深历史未见段亏损，安慰剂也能到 6/9。流动性质押基差 / stETH-ETH 折价作为 4h 入场闸门不再重测。
+- CSV（不入库）：`output/research_steth_eth_basis_gate_4h.csv`；官方基差 `output/okx_steth_eth_basis_daily.csv`；脚本 `scratch/steth/run.py`。
+- 下一轮：短线新族（与平台币冲击、已否决的微结构 1h 事件、#14 对冲/挂单执行都不同），例如官方 XAUT 黄金代币 1h 价格冲击后的 8 币永续篮子。
