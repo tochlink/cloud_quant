@@ -1,28 +1,23 @@
-# 长线：官方 ERC-4337 EntryPoint UserOperation → 4h 默认书入场闸门（2026-11-20，否决）
+<!-- Sidecar for docs/STRATEGY_FORMULAS.md (main file exceeds the GitHub connector 1MB push cap). Same text was appended to the local STRATEGY_FORMULAS.md. -->
 
-## 机制与数据
-- 只用以太坊主网官方 EntryPoint v0.6 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789、v0.7 0x0000000071727De22E5E9d8BAf0edAc6f37da032、v0.8 0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108、v0.9 0x433709009B8330FDa32311DF1C2AFA402eD8D009 的 UserOperationEvent 日志（地址取自 eth-infinitism/account-abstraction 官方 release）。
-- 日序列（UTC）：n_ops = UserOperationEvent 次数；eth_fee = actualGasCost 之和（ETH）；n_pm = paymaster 非零的次数。首个官方事件 2023-04-17 14:09:35 UTC（区块 17066994），1,313 个可用日，截至 2026-11-20 完整日（n_ops=34,540，eth_fee=10.934 ETH，n_pm=21,641）。最后 7 天在两个独立 RPC 上逐日完全一致。不回补、不编造。
-- 无前视：UTC 日 D 在 D+1 01:00 UTC 才可用，前向填充到 4h K 线。
-- 官方日序列：output/erc4337_entrypoint_official_daily.csv（不入库）。
+## 长线新族：官方以太坊主网 ERC-4337 EntryPoint UserOperation 次数 / 实际支付费用 / 代付次数 → 4h 默认书入场闸门（2026-11-20 ~21:22 PST，研究，不改默认；否决）
 
-## 公式（在看任何收益前锁定 120 格，scratch/erc43374h/PRE_REGISTER.json）
-- trend：metric > SMA(n)，n ∈ {30,90,180}；chg：n 日变化 > 0，n ∈ {30,90}；z365：(metric − SMA365)/STD365 > k，k ∈ {1,1.5,2}。
-- 闸门方向：long_off / short_off / both / contra_both / cap_short_off，只拦新开仓，已有同向持仓保留。
-- 先验：活动高或上升 = 风险偏好 → cap_short_off（高时不开新空）和 contra_both（高时只开多，低时只开空）。后备先验格：n_ops_trend_n90_cap_short_off。
-- 验证：同脚本默认书基线（4h 永续双向、10 倍、50/150 均线、2×ATR 止损、BTC 1200 均线），OKX 与 Gate 官方永续 K 线，真实费率（永续 maker 0.02%/taker 0.051%）及压力费率 20/15.1 bps，深未见（2024-10-21 前）/ 调参前段 / 2026-03-05 后，d7_noBNB 子篮子，日历平移安慰剂（±7、±14、+180、−120、+365、−119 天）。
-
-## 结果（output/research_erc4337_entrypoint_gate_4h.csv，441 行）
-- 基线 d8：OKX 深未见 Sharpe 0.71 / 前段 1.47 / 后段 +59.90%、2.23；Gate 0.09 / 1.46 / +60.32%、2.25。
-- 后备先验 n_ops_trend_n90_cap_short_off：后段只有 +23.9% / +24.7%（Sharpe 1.17 / 1.20），月份 3/6，前段 Sharpe 0.91 / 0.92，否决。
-- 最好的先验格 eth_fee_trend_n90_contra_both：OKX 深未见 1.14、前段 1.50、后段 +61.10%（2.28）；Gate 0.53 / 1.43（输基线）/ +61.94%（2.30）。后段优势很薄（+1.2 / +1.6 个百分点，Sharpe +0.04 / +0.05），后段月份只有 3/5（OKX）和 4/4（Gate），不到 ≥6/9 的标准。
-- 安慰剂：平移 ±7 天的深未见 Sharpe 1.18 / 1.29（OKX）、0.48 / 0.58（Gate），与真实格相当甚至更高，说明深未见的提升不是这条序列特有的。
-- 邻域：n30 和 n180 的后段都输基线（n180 月份 1/7、2/6），不稳。
-- 其他 2/3 胜的格都是非先验的 short_off 一类，后段月份只有 2–4 个，不采纳。
-- 结论：否决。默认和模拟盘不变。
-
-## 勿重测
-不要用改 n、k、侧、序列（n_ops / eth_fee / n_pm）、按版本拆分、只看成功次数、净费用、更早起点或别的 AA 合约的方式重测本族，也不要改成 1h 冲击来绕过。
-
-## 脚本
-scratch/erc43374h/{probe,fetch,run,record}.py（研究脚本未推送）。docs/STRATEGY_FORMULAS.md 已超过 GitHub 连接器 1MB 写入上限，所以本段写在这个 sidecar 里。
+- 查重：文档与 `output/research_*.csv`、记忆检索 ERC-4337 / EntryPoint / UserOperation / 账户抽象 无完成条目（上一轮官方 EigenLayer StrategyManager 存款 / 提款排队 1h 冲击否决段把本族列为「下一轮」）。这是账户抽象 / bundler 活动的官方链上趋势，不是已否决的 1h 冲击族（EigenLayer 再质押、WETH9 存取、Uniswap v3 成交、Chainlink 心跳、ETH 满块率、blob / 基础费、mempool 拥堵、MEV-Boost），也不是已否决的 Lido / rETH / 信标质押或 Arbitrum 规范桥 4h 闸门。网格在看任何收益之前锁在 `scratch/erc43374h/PRE_REGISTER.json`（2026-11-20 19:45 PST，120 格）。
+- 数据（只核验 [eth-infinitism/account-abstraction](https://github.com/eth-infinitism/account-abstraction) 官方 releases 的 EntryPoint 部署与官方合约上的 `eth_getLogs`，不用 bundler API / Dune / subgraph，不编造、不回补）：
+  - 官方合约：EntryPoint v0.6 `0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789`，v0.7 `0x0000000071727De22E5E9d8BAf0edAc6f37da032`，v0.8 `0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108`，v0.9 `0x433709009B8330FDa32311DF1C2AFA402eD8D009`。事件 `UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)`，topic0 `0x49628fd1471006c1482da88028e9ce4dbb080b815c9b0344d39e5a8e6ec1419f`。已弃用的 pre-v0.6 EntryPoint 不纳入。
+  - 第一条官方 UserOperationEvent：块 17,066,994，2023-04-17 14:09:35 UTC（当天不完整，已丢弃）。可用序列从下一个完整 UTC 日 2023-04-18 起。研究用官方日序列：1,313 个完整 UTC 日，2023-04-18→2026-11-20，日历缺口 0，官方零事件日 34 个（全部在 2023-04-18 至 2023-07-03 的早期采用期；其中 `n_pm` 另有 2 个有 UserOp、无代付的零日），NaN 0。不完整的当前 UTC 日丢弃。起始之后若某日官方事件为 0，记为真实零，不插值。
+  - 封闭窗口合计：官方 UserOperationEvent 8,661,794 笔（v0.6 1,980,401 + v0.7 5,041,290 + v0.8 1,630,277 + v0.9 9,826），其中成功 8,470,842 笔、代付（paymaster 非零）5,670,608 笔，actualGasCost 合计 2,661.161 ETH。分版本次数与成功次数只作为官方日 CSV 的附加列，不是预注册计分指标，看结果后不得升格。滞后：官方 UTC 日 D 的值于 D+1 01:00 UTC 才使用，再 ffill 到 4h 棒，不前视。
+  - 第二路官方公共 RPC 重拉最近 7 个完整 UTC 日的 `n_ops` / `eth_fee_wei` / `n_pm`，与分片结果完全一致。最后完整日 2026-11-20：n_ops=34,540、eth_fee=10.934377 ETH、n_pm=21,641（v06=3,342、v07=23,659、v08=7,428、v09=111），块 26,452,578–26,459,749。
+- 公式（预注册，120 格）：指标 `n_ops`（四个官方 EntryPoint 当日 UserOperationEvent 次数）、`eth_fee`（这些事件 actualGasCost 合计，单位 ETH）、`n_pm`（paymaster 非零的次数）；形态 trend n∈{30,90,180}（指标 > SMA(n)）、chg n∈{30,90}（n 日变动 > 0）、z365 k∈{1.0,1.5,2.0}（(指标−SMA365)/STD365 > k）；五侧 long_off / short_off / both / contra_both / cap_short_off。闸门只拦新开仓，已有同向仓保留。三序列 × 8 种形态 × 5 侧 = 120 格，加同脚本基线。交易为 OKX 默认 8 币、OKX 去掉 BNB 的 d7，以及 Gate 默认 8 币的官方 4h 默认书，计入官方资金费；真实吃单（现货 taker 10 bps / 永续 taker 5.1 bps），压力吃 20 / 15.1 bps。分段 deep_unseen（OKX d8 从 2023-02-01 起、本序列 2023-04-18 起再加形态热身）→2024-10-21，tune_pre 2024-10-21→2026-03-05，post 2026-03-05→2026-11-14。安慰剂把官方序列日历平移 +7 / −7 / +14 / −14 / +180 / −120 / +365 / −119 天。计分 9 段 Sharpe 相对同脚本基线（OKX d8 / Gate d8 / OKX d7_noBNB 的 deep / tune / post）。经济先验（看结果前锁定，不翻转）：官方 UserOperation 次数或实际支付费用偏高或上升 = 账户抽象使用与链上活动偏多（risk-on 注意力）→ 先验侧为 cap_short_off 与 contra_both。long_off / short_off / both 为非先验探索。回退先验格：`n_ops_trend_n90_cap_short_off`。不在看结果之后把分版本次数、成功次数或净费用升为主指标。
+- 结果：CSV 441 行（120 个预注册格 + 基线，以及锚点安慰剂、邻域、压力费，3 个账本）。**没有 8/9 或 9/9；唯一的 7/9 是先验格 `eth_fee_trend_n90_contra_both`，post 边很薄，月份达不到改默认的两边 ≥6/9。**
+  - 同脚本基线：OKX d8 deep +35.14% / Sharpe 0.71，tune +85.08 / 1.47，post +59.90 / 2.23；Gate d8 deep −3.63 / 0.09，tune +84.25 / 1.46，post +60.32 / 2.25；OKX d7_noBNB deep +54.92 / 0.75，tune +92.93 / 1.56，post +50.76 / 2.10。
+  - 先验回退格 `n_ops_trend_n90_cap_short_off` 只有 1/9：OKX d8 deep +35.23 / 0.73，tune +37.25 / 0.91，post +23.87 / 1.17（相对基线 post −36.03 个百分点 / Sharpe −1.06），月份 3/6；Gate post +24.69 / 1.20 vs +60.32 / 2.25，月份 3/6；OKX d7 post +20.38 / 1.09 vs +50.76 / 2.10，月份 3/6。用次数趋势拦新开空，在 tune / post 把趋势收益大幅削掉，不成立。
+  - 先验里最好的是 `eth_fee_trend_n90_contra_both`（费用高于 90 日均时只许新开多、低于时只许新开空），7/9：OKX d8 deep +67.69 / 1.14，tune +82.39 / 1.50（收益略低于基线、Sharpe 略高），post +61.10 / 2.27（+1.20 个百分点 / Sharpe +0.04），月份 3/5；Gate deep +30.47 / 0.53，tune +76.74 / 1.43（输给基线 1.46），post +61.94 / 2.30（+1.62 个百分点 / +0.05），月份 4/4；OKX d7 deep +83.98 / 1.00，tune +84.61 / 1.53（输给 1.56），post +52.60 / 2.17，月份 2/4。输掉的两段都是 Gate 与 d7 的 tune Sharpe。post 边很薄，月份两边都达不到改默认要求的 ≥6/9。同形态的 `eth_fee_trend_n90_cap_short_off` 是 6/9，三段 tune Sharpe 全输，post 边同样很薄（OKX +1.73 个百分点 / +0.06，Gate +1.87 / +0.05），月份 4/4、4/4、2/4。
+  - 压力费下该 7/9 锚点仍是 7/9，post 边依旧薄：OKX d8 post +57.52 / 2.17 vs 基线 +55.94 / 2.12；Gate +58.23 / 2.19 vs +56.78 / 2.15；同样输掉 Gate 与 d7 的 tune Sharpe。
+  - 邻域（同一 `eth_fee` / trend / contra_both，只改预注册附近的 n）：n=60 与 n=75 也是 7/9，但 n=60 的 OKX post 收益 59.69 已低于基线 59.90（只靠 Sharpe 2.25>2.23 计赢）；n=75 输掉两条 OKX deep Sharpe。n=105 / n=120 掉到 3/9，三条账本的 post 全输；n=150 是 6/9，但靠的是 deep / tune，三条 post 全输（OKX +49.15 / 1.98 vs +59.90 / 2.23）。不是一整片稳定邻域。
+  - 安慰剂：把同一锚点平移 +7 天得到 6/9（三段 deep 与三段 tune 全赢，但三条 post 全输，OKX post 只有 +34.98 / 1.62）。−7 天 4/9，+14 天 1/9，−14 天 3/9，+180 天 1/9，−120 / −119 天 0/9，+365 天 3/9。说明 6/9 本身可以被日历平移打出，而且安慰剂在 post 上反而更差。
+  - 其余 14 个真实 6/9 里，8 个是先验侧，不少是靠 deep / tune 计赢、post 被打穿（例如 `n_ops_chg_n30_cap_short_off` OKX post 只有 +10.58 / 0.73；`n_pm_trend_n90_contra_both` post +24.84 / 1.22）。非先验里看起来最好的 `n_pm_z365gt1.5_short_off` 与 `n_pm_trend_n90_short_off` 也是 6/9，但三条 deep Sharpe 全输（后者 OKX deep 已是 −11.26 / −0.11），不能在看结果之后改成「代付次数偏高时拦新开空 / 只做空」的新先验。
+- 结论：**否决**，不实现、不进观察名单、不改默认。先验回退格只有 1/9，post 被削掉一大截。唯一的 7/9 是费用 90 日趋势的 contra_both，post 边只有约 +1.2～+1.6 个百分点、Sharpe +0.04～+0.05，月份 3/5 与 4/4，达不到改默认的两边 ≥6/9；邻域在 n=105 / n=120 塌掉，+7 天安慰剂也能打出 6/9。不能在看结果之后把机制翻成代付次数或 short_off。本族勿以同一机制换 n、k、侧，或把 `n_ops` / `eth_fee` / `n_pm` 对调，或改用分版本次数、成功次数、净费用、更早起点（pre-v0.6 EntryPoint）、bundler API 或其他账户抽象合约再测。也不要把本族改成 1h 冲击来绕过「勿重测」。
+- 现场记录：只读官方 EntryPoint v0.6–v0.9 日志，追加写入 `scratch/erc43374h/erc4337_live_events.csv` 与 `data/erc4337_live_events.csv`（pid / 日志在 `scratch/erc43374h/record.{pid,log}`）。不写 `data/micro.sqlite`，不打断其它记录进程。
+- CSV（不入库）：`output/research_erc4337_entrypoint_gate_4h.csv`（441 行，含 120 个预注册格 / 真实与压力费 / 安慰剂 / 邻域）；官方日序列 `output/erc4337_entrypoint_official_daily.csv`（研究当时 1,313 个完整日，不入库）；脚本 `scratch/erc43374h/{fetch,run,record}.py`（研究脚本未推送）。因 docs/STRATEGY_FORMULAS.md 已超过 GitHub 连接器 1MB 写入上限，本段写在本 sidecar。
+- 下一轮（短线）：官方以太坊主网 Morpho Blue 清算（若官方历史不够 2026-03-05 切分，则改用官方 Compound V3 Comet 的 Absorb / 清算）1h 冲击 → 8 币永续篮子顺势 / 逆势。这是另一套官方借贷协议的清算事件，不是已否决的 Aave V3 借款年化 4h 闸门，也不是已否决的交易所强平 / OI / 主动买卖失衡微观结构 1h，更不是已否决的 EigenLayer / WETH9 / Uniswap v3 1h 冲击。文档与 output/research_*.csv 检索 Morpho / Compound V3 Comet 无完成条目。须用协议官方合约日志，不编造、不回补。先确认官方地址与完整历史长度，不够切分就不要用非官方源补历史，改为启动实时记录器并另选同样未测过、官方历史足够、单笔边结构上更大的短线族。勿重测已否决的短线族，也不要用改 n / k / 侧或把 `n_ops` / `eth_fee` / `n_pm` 对调的方式重测本轮已否决的 ERC-4337 4h 闸门，或把本族改成 1h 冲击来绕过「勿重测」。
