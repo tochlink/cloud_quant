@@ -125,11 +125,14 @@ def _trade_quality(closed) -> dict:
 
 
 def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict | None = None, signals=None,
-                 funding: dict | None = None, btc_spot: pd.DataFrame | None = None) -> dict:
+                 funding: dict | None = None, btc_spot: pd.DataFrame | None = None, schedule: list | None = None) -> dict:
     """signals：可选，多策略注册表（qtw.strategies）用的信号函数 f(ind, idx, syms) -> {symbol: 逐根 {-1,0,1}}，
     替换默认双均线合成信号；执行、止损、仓位、费用与默认完全同一套。None = 默认策略 #1（逐字节不变）。
     btc_spot：可选，BTCUSDT 现货 K 线，只供 BTC 体制过滤（btc_regime_ma）使用、不参与交易。标的里没有 BTCUSDT 时，
-    引擎 / 模拟盘仍会单独读取 BTC 现货判断体制，回测必须传入它才与实盘同口径；标的里有 BTCUSDT 时忽略此参数。"""
+    引擎 / 模拟盘仍会单独读取 BTC 现货判断体制，回测必须传入它才与实盘同口径；标的里有 BTCUSDT 时忽略此参数。
+    schedule：可选参数时间表 [(生效时间, {fast_ma, slow_ma, atr_stop_mult, btc_regime_ma}), ...]（qtw.adaptive 滚动调参回放）。
+    模拟运行中热加载换参数：第 j 根收盘时已生效的参数决定第 j 根的信号 / 体制线 / 新仓止损倍数；已有持仓保留原止损。
+    None = 不换参数（逐字节不变）。"""
     st, rk = cfg["strategy"], cfg["risk"]
     # 分市场 taker 费率：多单在现货、空单在永续成交（下一根开盘市价 = taker），每条市价腿各收一次
     FEE = {"spot": taker_rate(cfg, "spot"), "perp": taker_rate(cfg, "perp")}
@@ -145,7 +148,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     ruin_frac = float(rk.get("ruin_frac", 0.10))
     venue_ = str(cfg.get("venue", "okx") or "okx")
     start_eq = float(rk["starting_equity_usdt"])
-    need = st["slow_ma"] + 2
+    SCHED = sorted([(pd.Timestamp(t), dict(p)) for t, p in schedule], key=lambda x: x[0]) if schedule else None
+    need = (max([st["slow_ma"]] + [int(p.get("slow_ma", st["slow_ma"])) for _, p in SCHED]) if SCHED else st["slow_ma"]) + 2
     spot_d, perp_d = data.get("spot", {}), data.get("perp", {})
     syms = sorted(s for s in spot_d if s in perp_d and len(spot_d[s]) > need and len(perp_d[s]) > need)
     excluded = sorted((set(spot_d) | set(perp_d)) - set(syms))
@@ -173,6 +177,26 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     SIG = {s: combine(PX["spot"]["signal"][s], PX["perp"]["signal"][s]) for s in syms}
     if signals is not None:
         SIG = {s: np.asarray(v, dtype=int) for s, v in signals({m: {s: ind[m][s].loc[idx] for s in syms} for m in ind}, idx, syms).items()}
+    # 可选参数时间表（滚动调参回放）：AI[j] = 第 j 根收盘时已生效的参数序号
+    ATRM = None
+    if SCHED:
+        from .market.base import INTERVAL_MS as _IMS
+        _step = pd.Timedelta(milliseconds=_IMS.get(st["interval"], 14_400_000))
+        _ct = pd.DatetimeIndex(idx) + _step
+        _ts = pd.DatetimeIndex([t if t.tzinfo else t.tz_localize("UTC") for t, _ in SCHED]).tz_convert("UTC").as_unit("ns")
+        _ctn = pd.DatetimeIndex(_ct).tz_convert("UTC").as_unit("ns")
+        AI = np.clip(np.searchsorted(_ts.asi8, _ctn.asi8, side="right") - 1, 0, len(SCHED) - 1)
+        _pp = [{**{k: st[k] for k in ("fast_ma", "slow_ma", "atr_stop_mult")}, "btc_regime_ma": int(st.get("btc_regime_ma", 0) or 0), **p} for _, p in SCHED]
+        ATRM = np.array([float(_pp[k]["atr_stop_mult"]) for k in AI])
+        if signals is None:
+            _sig_cache: dict = {}
+            for k, p in enumerate(_pp):
+                fs = (int(p["fast_ma"]), int(p["slow_ma"]))
+                if fs not in _sig_cache:
+                    _ix = {m: {s: indicators(src[s], fs[0], fs[1], st["atr_period"], st.get("confirm_bars", 1), 0).set_index("open_time").reindex(idx)["signal"].fillna(0).to_numpy(dtype=int)
+                               for s in syms} for m, src in (("spot", spot_d), ("perp", perp_d))}
+                    _sig_cache[fs] = {s: combine(_ix["spot"][s], _ix["perp"][s]) for s in syms}
+            SIG = {s: np.array([_sig_cache[(int(_pp[AI[j]]["fast_ma"]), int(_pp[AI[j]]["slow_ma"]))][s][j] for j in range(len(idx))], dtype=int) for s in syms}
     # 可选 ES NORM 尾部厚度单币乘子（name_es_w，0 = 关闭）：每个市场按该市场收盘与上一根合成信号算 M_s，乘到 NVM（第 i 根用 i−1）
     es_w, es_k, es_a = int(st.get("name_es_w", 0) or 0), float(st.get("name_es_k", 2.0) or 2.0), float(st.get("name_es_alpha", 0.05) or 0.05)
     if es_w >= 2:
@@ -189,6 +213,28 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
     if rg_n and rg_src_df is not None:
         b = rg_src_df.sort_values("open_time").set_index("open_time")
         RGL = btc_regime_blocks_long(b["close"], rg_n, int(st.get("btc_regime_vote_k", 0) or 0)).reindex(idx).fillna(False).to_numpy(dtype=bool)
+        if SCHED:
+            _rg = {}
+            for p in _pp:
+                n_ = int(p.get("btc_regime_ma") or 0)
+                if n_ not in _rg:
+                    _rg[n_] = btc_regime_blocks_long(b["close"], n_, int(st.get("btc_regime_vote_k", 0) or 0)).reindex(idx).fillna(False).to_numpy(dtype=bool)
+            RGL = np.array([_rg[int(_pp[AI[j]].get("btc_regime_ma") or 0)][j] for j in range(len(idx))], dtype=bool)
+    # 可选体制方向偏置（direction_bias，默认关）：上一根体制线来源收盘 > SMA_N × (1 + band) → 只做多（拦新开空）
+    DBS = np.zeros(len(idx), dtype=bool)
+    if st.get("direction_bias") and rg_n and rg_src_df is not None:
+        from .adaptive import bias_blocks_short
+        _b = rg_src_df.sort_values("open_time").set_index("open_time")["close"]
+        _band = float(st.get("direction_bias_band", 0.1) or 0.0)
+        if SCHED:
+            _db = {}
+            for p in _pp:
+                n_ = int(p.get("btc_regime_ma") or 0)
+                if n_ not in _db:
+                    _db[n_] = bias_blocks_short(_b, n_, _band).reindex(idx).fillna(False).to_numpy(dtype=bool)
+            DBS = np.array([_db[int(_pp[AI[j]].get("btc_regime_ma") or 0)][j] for j in range(len(idx))], dtype=bool)
+        else:
+            DBS = bias_blocks_short(_b, rg_n, _band).reindex(idx).fillna(False).to_numpy(dtype=bool)
     MK = {"long": "perp" if t_mode == "perp_both" else "spot", "short": "perp"}
     # 可选动态多空风险平价 up（ls_parity_cap，0 = 关闭）：按上一根已收盘合成信号把较小一侧信号书的单币风险 / 权重乘数放大到与较大一侧相同（≤ cap 倍）
     lsp_c = float(st.get("ls_parity_cap", 0) or 0)
@@ -206,6 +252,14 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         SCL, SCS = side_crowd_scales(SIG, sc_c, sc_m)
         NVS = {"long": {s: np.asarray(NVS["long"][s], dtype=float) * SCL for s in syms},
                "short": {s: np.asarray(NVS["short"][s], dtype=float) * SCS for s in syms}}
+    # 可选趋势强度仓位乘子（adaptive_size_mode，默认 off）：乘到单币风险 / 权重乘子上，乘积封顶 max(原乘子, 1)（5% / 20% 上限不破）
+    as_mode = str(st.get("adaptive_size_mode", "off") or "off")
+    if as_mode != "off":
+        from .adaptive import combine_mult, trend_size_mult
+        _lo, _hi = float(st.get("adaptive_size_lo", 0.5)), float(st.get("adaptive_size_hi", 1.0))
+        TSM = {m_: {s: trend_size_mult(ind[m_][s].loc[idx], as_mode, _lo, _hi) for s in syms} for m_ in ("spot", "perp")}
+        NVS = {"long": {s: combine_mult(NVS["long"][s], TSM[MK["long"]][s]) for s in syms},
+               "short": {s: combine_mult(NVS["short"][s], TSM["perp"][s]) for s in syms}}
     FUND = {}
     if funding:
         tns = pd.DatetimeIndex(idx).as_unit("ns").asi8
@@ -223,7 +277,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
 
     times = list(idx)
     ct = list(ind["spot"][syms[0]].loc[idx, "close_time"])
-    warm = max(st["slow_ma"], st["atr_period"] + 1)
+    warm = max(int(_pp[AI[0]]["slow_ma"]) if SCHED else st["slow_ma"], st["atr_period"] + 1)  # 时间表：按首个生效参数预热（更长慢线的信号在其预热段为 0）
     realized = start_eq
     pos: dict[str, Trade] = {}
     added: set[str] = set()  # 已加过仓的持仓（每笔最多一次）
@@ -376,6 +430,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                 continue
             if sg > 0 and RGL[i - 1]:
                 continue
+            if sg < 0 and DBS[i - 1]:
+                continue
             if not trend_ok(sg, P(sd, "close", s)[i - 1], P(sd, "trend_ma", s)[i - 1], st.get("trend_ma", 0)):
                 continue
             if not chop_ok(P(sd, "chop", s)[i - 1], int(st.get("chop_n", 0) or 0), float(st.get("chop_max", 50) or 50)):
@@ -385,14 +441,14 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                 continue
             z = size(side=sd, equity=eq_prev, price=P(sd, "open", s)[i], atr=P(sd, "atr", s)[i - 1],
                      max_risk=risk_now * NVS[sd][s][i - 1], max_weight=w_now * NVS[sd][s][i - 1],
-                     atr_mult=st["atr_stop_mult"])
+                     atr_mult=st["atr_stop_mult"] if ATRM is None else float(ATRM[i - 1]))
             if z.notional > 0:
                 want[s] = (sg, z)
         sarnew = set()
         for s, d in list(sarq.items()):
             if s in pos or s in want:
                 continue
-            if d > 0 and (RGL[i - 1] or not rk["allow_spot_long"]) or d < 0 and not rk["allow_perp_short"]:
+            if d > 0 and (RGL[i - 1] or not rk["allow_spot_long"]) or d < 0 and (not rk["allow_perp_short"] or DBS[i - 1]):
                 continue
             sd = side_of(d)
             z = size(side=sd, equity=eq_prev, price=P(sd, "open", s)[i], atr=P(sd, "atr", s)[i - 1],
@@ -502,6 +558,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                 g_x += add_n
                 xs_stats["topups"] += 1
         if rb_band > 0 and pos:
+            if ATRM is not None:
+                cfg_eff = {**cfg_eff, "strategy": {**cfg_eff["strategy"], "atr_stop_mult": float(ATRM[i - 1])}}
             held = {q: pos[q] for q in pos if entry_i[q] != i and q not in sarf and not pos[q].tp_done and q not in xs_ex}
             new_n = sum(abs(pos[q].qty) * P(pos[q].side, "open", q)[i] for q in pos if entry_i[q] == i)
             g_now = sum(abs(x.qty) * P(x.side, "open", y)[i] for y, x in pos.items())

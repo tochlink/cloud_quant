@@ -155,6 +155,23 @@ DEFAULTS: dict[str, Any] = {
         "name_vol_lookback": 120,
         "rebalance_mode": "stop",  # stop：按现有止损距离定目标；atr：再取与最新 ATR 止损距离的较大者（更保守）
         "lookback_bars": 200,
+        # 2026-11-20 kean t88u：运行时自适应（qtw/adaptive.py）。默认开关依据 docs/STRATEGY_FORMULAS.md「运行时自适应」：
+        # 只有在未见历史（deep / tune）跑赢同脚本基线、且 2026-03 后 OKX 与 Gate 都至少 6/9 个月更好时才默认开。
+        # 趋势强度仓位乘子：off | spread（|SMA快−SMA慢|/ATR 相对 1000 根中位）| adx（ADX14/25），夹在 [lo, hi]，乘积不破 5% / 20% 上限
+        "adaptive_size_mode": "off",
+        "adaptive_size_lo": 0.5,
+        "adaptive_size_hi": 1.0,
+        # 体制方向偏置：BTC 收盘 > SMA_btc_regime_ma × (1 + band) 时只做多（拦新开空）；低于 SMA 时只做空（原 BTC 体制过滤）
+        "direction_bias": False,
+        "direction_bias_band": 0.1,
+        # 滚动自动调参：每 N 天用过去 L 天数据在小网格（快 30/50/70 × 慢 100/150/200 × ATR 1.5/2/2.5 × 体制 900/1200/1500）
+        # 里按 Sharpe 重选，挑战者需高出 margin 才切换；结果写 SQLite（adaptive_params），热加载生效，不改已保存的设置
+        "auto_retune": False,
+        "retune_every_days": 30,
+        "retune_lookback_days": 365,
+        "retune_margin": 0.3,
+        # 热加载（基础设施，默认开）：运行中改策略参数 / 改 qtw/strategy.py、qtw/adaptive.py 后 ≤ 5 秒生效，不用重启；持仓不受影响
+        "hot_reload": True,
     },
     "risk": {
         "starting_equity_usdt": 1000.0,
@@ -395,6 +412,27 @@ def validate(s: dict) -> dict:
     st["rebalance_mode"] = str(st.get("rebalance_mode", "stop") or "stop")
     if st["rebalance_mode"] not in ("stop", "atr"):
         raise ValueError("调仓模式只能是 stop 或 atr")
+    st["adaptive_size_mode"] = str(st.get("adaptive_size_mode", "off") or "off")
+    if st["adaptive_size_mode"] not in ("off", "spread", "adx"):
+        raise ValueError("自适应仓位模式只能是 off / spread / adx")
+    st["adaptive_size_lo"], st["adaptive_size_hi"] = float(st.get("adaptive_size_lo", 0.5)), float(st.get("adaptive_size_hi", 1.0))
+    if not 0.1 <= st["adaptive_size_lo"] <= st["adaptive_size_hi"] <= 2.0:
+        raise ValueError("自适应仓位乘子需满足 0.1 ≤ 下限 ≤ 上限 ≤ 2（单笔 5% / 单币 20% 上限仍然有效）")
+    st["direction_bias"] = _as_bool(st.get("direction_bias", False))
+    st["direction_bias_band"] = float(st.get("direction_bias_band", 0.1) or 0.0)
+    if not 0 <= st["direction_bias_band"] <= 1:
+        raise ValueError("方向偏置带宽需在 0–1 之间（0.1 = BTC 高于体制线 10% 才只做多）")
+    st["auto_retune"] = _as_bool(st.get("auto_retune", False))
+    st["retune_every_days"] = int(st.get("retune_every_days", 30) or 30)
+    if not 7 <= st["retune_every_days"] <= 180:
+        raise ValueError("自动调参间隔需在 7–180 天之间")
+    st["retune_lookback_days"] = int(st.get("retune_lookback_days", 365) or 365)
+    if not 90 <= st["retune_lookback_days"] <= 600:
+        raise ValueError("自动调参回看需在 90–600 天之间")
+    st["retune_margin"] = float(st.get("retune_margin", 0.3) or 0.0)
+    if not 0 <= st["retune_margin"] <= 2:
+        raise ValueError("自动调参迟滞需在 0–2（Sharpe）之间")
+    st["hot_reload"] = _as_bool(st.get("hot_reload", True))
     rk["starting_equity_usdt"] = float(rk.get("starting_equity_usdt", 1000.0))
     if not 10 <= rk["starting_equity_usdt"] <= 1e9:  # 0 / 负数 / 空输入（前端 +"" = 0）会让纸面账本与回测权益为 0，收益率除零、仓位全为 0
         raise ValueError("起始纸面资金需在 10–1,000,000,000 USDT 之间")
