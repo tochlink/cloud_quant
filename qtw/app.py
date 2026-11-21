@@ -163,6 +163,8 @@ async def lifespan(_app: FastAPI):
     if _shadow.on_tick not in stream._on_quote:
         stream.on_quote(_shadow.on_tick)
     stream.on_bar_close(_shadow.on_bar_close)
+    from . import delist_shadow as _delist  # #15 币安下架公告做空影子（默认关；QTW_SHADOW_DELIST=1 才启动，测试模式永不启动）
+    _delist.start()
     if _kick_after_freeze not in stream._on_host_freeze:
         stream._on_host_freeze.append(_kick_after_freeze)
     stream.start()
@@ -185,6 +187,11 @@ async def lifespan(_app: FastAPI):
         try:
             from . import hotreload
             hotreload.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from . import delist_shadow
+            delist_shadow.stop()
         except Exception:  # noqa: BLE001
             pass
         worker.stop()
@@ -907,6 +914,13 @@ def trades_summary():
     from . import shadow
     bk = engine.book()
     return ok({"main": bk.reconcile(), "shadow": shadow.summary()})
+
+
+@app.get("/api/shadow/delist")
+def shadow_delist():
+    """#15 币安官方下架公告做空影子子账本状态（纸面，不计入主账本）。"""
+    from . import delist_shadow
+    return ok(delist_shadow.status())
 
 
 @app.get("/api/shadow/trades")
