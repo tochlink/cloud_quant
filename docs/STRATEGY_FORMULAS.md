@@ -8960,3 +8960,29 @@ CSV：output/research_stop_distance_clamp.csv、output/research_stop_distance_cl
 - 结论：**否决**，不实现、不进观察名单、不改默认、无代码改动，纸面盘与 shadow 均不变。没有新官方序列，不需要记录器。勿以同一机制换锚点小时、F、k、H、顺逆、逐币代替篮子、或加成交量 / 波动过滤再测。
 - 文件：`output/research_intraday_momentum_event_1h.csv`、`output/research_intraday_momentum_event_1h_placebo_months.csv`（均不入库）；sidecar `docs/intraday_momentum_event_1h.md`；脚本 `scratch/intramom1h/{run,analyze,supp,plog}.py`（未推送）。
 - 下一轮（长线）：CME 官方比特币期货（BTC 月度合约）年化基差 = 近月结算价 / CME CF BRR − 1（按剩余天数年化）的体制 → 4h 默认书入场闸门（只拦新开仓）。数据只用 CME 官方结算价与 `output/cme_cf_brr_official_daily.csv`；先查重 basisgate（永续基差）、CFTC TFF、CME 到期事件；若 CME 官方免费历史不够跨 2026-03-05 切分，则换族。
+
+## 长线新族：npm 官方加密开发 SDK 日下载量（ethers / web3 / viem / bitcoinjs-lib / @solana/web3.js）→ 4h 默认书入场闸门（2026-11-21 ~09:35 PST，研究，不改默认；否决）
+
+- 背景与换题：上节「下一轮（长线）」原定 CME 官方比特币期货（月度合约）年化基差 = 近月结算价 / CME CF BRR − 1（按剩余天数年化）的体制闸门。先做数据核查后放弃：（1）CME 官方结算价没有免费可批量取的历史——cmegroup.com 结算接口对脚本直接返回反爬封禁，其 Data Terms 禁止自动抓取，深历史只在付费 CME DataMine，旧 FTP（ftp.cmegroup.com/settle）已无法连接；（2）本地官方 `output/cme_cf_brr_official_daily.csv` 只从 2025-11-16 开始，覆盖不到 2024-10-21 之前的未见段；（3）机制与已否决的 OKX 季度交割合约年化基差闸门（2026-11-10）和永续基差闸门（research_basis_gate*）几乎相同。不用第三方聚合源顶替、不造数、不回补，按规则换族。
+- 查重：docs/*.md、`output/research_*.csv`（1,079 个）中 npm / PyPI / 开发者活跃 / developer 0 条测试。不同于已否决的维基百科散户关注度闸门（看的是散户浏览量，本族是开发者 CI / 新项目安装量）、链上活跃 / 需求、ENS / Safe / ERC-4337 创建数、永续上线节奏。
+- 数据（全部官方，`output/npm_crypto_dev_downloads_official_daily.csv`）：npm 官方 `api.npmjs.org/downloads/range/{start}:{end}/{pkg}`，五个包 2015-01-10 → 2026-11-19（只取已结束 ≥1 天的完整日，4,332 天，日历无缺）。包上线前官方给 0（真 0）；五个包同日全为 0 的 57 天是 npm 统计中断（不可能为真值）→ 记 NaN，不插值、不回补（其中 2026-09-15、10-06、10-14、10-15、10-19、10-20 在 post 段）。D 日值 D+2 00:00 UTC 才使用（npm 日统计在日结束后发布，有时延迟）。量级：总下载 2022 年日均约 23 万，2025 年约 78 万，2026 年约 165 万（viem 起量 + CI 增长，结构性上升），2026-11-19 合计约 306 万（7 日均）。
+- 公式（`scratch/npmdev4h/PRE_REGISTER.json` sha256 `e4909c86…c21a`，看任何 PnL 前锁定，结果后未改）：
+  - 序列 all7 = 五包合计 7 日均（≥5 个有效日）、all28 = 五包合计 28 日均（≥24 个有效日）、evm28 = ethers + web3 + viem 28 日均；形式 trend（值 > SMA n，n∈{30,90,180}）、chg（n 日变化 > 0，n∈{30,90}）、z365（ln 值的 365 日 z > k，k∈{1,1.5,2}）；方向 long_off / short_off / both / contra_both / cap_short_off。3 × 8 × 5 = **120 格** + 同脚本基线（当前 S.DEFAULTS 4h 默认书 MA 50/150），闸门只拦新开仓，已有同向仓、出场、止损不动，与 safe4h / arbbridge4h 同一 mk()。
+  - 经济先验：开发者活跃偏高 / 上升 = 生态在建设、risk-on → 不开新空。**先验 `all28_trend_n90_cap_short_off`**，回退 `all28_trend_n180_cap_short_off`。
+  - 交易数据：官方 OKX d8（2023-02→）、Gate d8（2022-07→）、OKX d7 去 BNB（2022-04→）4h，真实费率（永续 taker 5.1 bps / maker 2 bps + 官方资金费，压力 taker 15.1 bps），分段 deep_unseen（< 2024-10-21）/ tune_pre / post（≥ 2026-03-05，回测到 2026-11-14）。
+- 结果（`output/research_npm_crypto_dev_downloads_gate_4h.csv`，402 行）：
+  - post 段 flag 几乎恒为 1（下载量结构性上涨，all28 各 trend / chg 占比 1.000），所以 cap_short_off 在 post 等于「不开任何新空」，OKX / Gate post 都从 +59.9% / +60.3% 掉到 +35.7% / +36.1%。
+
+    | 格 | 9 槽胜 | OKX post（Sharpe） | Gate post（Sharpe） | post 月份 好/坏 OKX、Gate | deep 未见 Sharpe OKX / Gate |
+    |---|---|---|---|---|---|
+    | 基线 | — | +59.90%（2.23） | +60.32%（2.25） | — | 0.71 / 0.09 |
+    | 先验 all28_trend_n90_cap_short_off | 3/9 | +35.66%（2.08） | +36.09%（2.10） | 5/4、5/4 | 0.80 / 0.23 |
+    | 回退 all28_trend_n180_cap_short_off | 3/9 | +35.66%（2.08） | +36.09%（2.10） | 5/4、5/4 | 0.67 / 0.08 |
+    | 非先验最好 post：all28_z365gt2_short_off | 3/9 | +65.13%（2.54） | +66.02%（2.57） | 6/2、6/2 | 0.26 / −0.17 |
+  - 全网格最高只有 6/9（all7_trend_n30_long_off / both），但 post 两所都比基线少约 20 点、月份 1/3；邻域 n20–n60 post 全部 +37 ~ +43%，同样输基线。没有一格满足「≥6/9 且两所 post 不差于基线」。
+  - 非先验 all28_z365gt2_short_off（只在下载量极高时允许开空）post 两所 +5 点、月份 6/2，但 deep 未见与 tune 段双输（OKX deep Sharpe 0.26 vs 0.71、Gate −0.17 vs 0.09），不满足未见段成立；未调参 new8 OKX post +13.3% vs +3.3%、Gate +27.3% vs +16.4%，但 pre 段 +26.5% / +26.5% vs +60.3% / +57.1%。非预注册，不可晋升。
+  - 安慰剂：先验平移 ±7 / ±14 / +180 / −120 / +365 / −119 天最高 4/9，高于真实的 3/9；30 日块打乱（种子 1–3）post 最高 OKX +66.3%（回退 SHUF3），说明 post 的差异来自「不开空」本身而非下载信号。
+  - 未调参 new8（`_new8.csv`）：先验 / 回退 pre 段 OKX +30.7% / +28.1%、Gate +27.9% / +24.8%，基线 +60.3% / +57.1%；post OKX +8.1% vs +3.3%、Gate +7.3% vs +16.4%，不一致。
+- 结论：**否决**，不实现、不进观察名单、不改默认、无代码改动、纸面不变（8788 / 8789 / 8792 未动，未加 shadow）。npm 下载量在 2025–2026 结构性上涨，趋势类 flag 在 post 失去信息量；z 版只在 post 有效、未见段反向。勿再以同一机制换 n / k / 方向、换包组合（加 hardhat / wagmi / @coral-xyz/anchor 等）、换 7 / 28 日均或改用 PyPI / crates.io / GitHub star 等开发者活跃指标重测。CME 期货年化基差在 CME 官方免费历史可得之前不要重开，也不要用第三方聚合源顶替。
+- 文件：`output/npm_crypto_dev_downloads_official_daily.csv`、`output/research_npm_crypto_dev_downloads_gate_4h.csv`、`_shuffle.csv`、`_new8.csv`（均不入库）；sidecar `docs/npm_crypto_dev_downloads_gate_4h.md`；脚本 `scratch/npmdev4h/{fetch,run,supp,new8,plog}.py`（未推送）。npm 官方历史已够长，不需要实时记录器。
+- 下一轮（短线）：Upbit 官方公告接口的「신규 거래지원」（KRW / BTC 市场新上币）公告 → 被点名币在 OKX / Gate 永续的 1h 事件（顺势 / 逆势，持有数小时–2 天）。这不是已否决的 Upbit 投资警告（거래 유의）公告、韩国溢价、韩国散户成交占比，也不是已弱观察的 Binance 现货下架公告；须先查重并核对官方公告历史是否覆盖 2026-03-05 切分，不够就不用非官方源回补。
