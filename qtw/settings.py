@@ -115,6 +115,17 @@ DEFAULTS: dict[str, Any] = {
         "lending_gate_z": 1.0,
         "lending_gate_side": "long",
         "lending_gate_stale_hours": 6.0,
+        # 2026-11-21：可选美联储 H.4.1 外国官方托管美债闸门（默认关闭；回测与模拟盘 / 实盘同一函数 qtw/custody.block_mask）。
+        # FRED WMTSECL1（周三水平，可用 = 周三 + 3 天 00:00 UTC）；z = h 周对数变化相对最近 N 周的 z；z < −k（外国官方抛售）时不新开多。
+        # 研究（scratch/fedcustody4h/run.py、output/research_fed_custody_gate_4h.csv、docs/fed_custody_gate_4h.md）：预注册先验 N52 h4 k1
+        # 深历史未见 / 调参前段三组都更好、未调参 new8 两所更好，但 2026-03 后从未拦到新多（post 无信息）→ 强观察，只做纸面前向检验
+        # （8794 paper-custody）。环境变量 QTW_CUSTODY_GATE=1 强制开启。
+        "custody_gate_enabled": False,
+        "custody_gate_series": "tsy",
+        "custody_gate_n": 52,
+        "custody_gate_h": 4,
+        "custody_gate_k": 1.0,
+        "custody_gate_stale_days": 21.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -262,6 +273,8 @@ def load() -> dict:
         out = _merge(DEFAULTS, data)
         if str(os.environ.get("QTW_LENDING_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
             out["strategy"]["lending_gate_enabled"] = True  # 纸面前向检验实例（paper-lendgate）用环境变量强制开启借贷利率闸门
+        if str(os.environ.get("QTW_CUSTODY_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
+            out["strategy"]["custody_gate_enabled"] = True  # 纸面前向检验实例（paper-custody）用环境变量强制开启 H.4.1 托管闸门
         out["strategy"]["fast_exit_tf"] = "off"  # 已存的旧值（5m / 10m / 1d）也不生效，见 validate() 注释
         for k in ("live_enabled", "okx_demo", "gate_testnet"):  # 旧存档里的字符串 "false" 不能被当成 True（实盘闸门 / 模拟盘开关）
             out["live"][k] = _as_bool(out["live"].get(k, DEFAULTS["live"][k]))
@@ -382,6 +395,22 @@ def validate(s: dict) -> dict:
     st["lending_gate_stale_hours"] = float(st.get("lending_gate_stale_hours", 6.0) or 6.0)
     if not 1 <= st["lending_gate_stale_hours"] <= 72:
         raise ValueError("借贷利率过期阈值需在 1–72 小时之间")
+    st["custody_gate_enabled"] = _as_bool(st.get("custody_gate_enabled", False))
+    st["custody_gate_series"] = str(st.get("custody_gate_series") or "tsy").lower()
+    if st["custody_gate_series"] not in ("tsy", "tot"):
+        raise ValueError("托管闸门序列只支持 tsy（可交易美债）或 tot（托管合计）")
+    st["custody_gate_n"] = int(st.get("custody_gate_n", 52) or 52)
+    if not 13 <= st["custody_gate_n"] <= 260:
+        raise ValueError("托管闸门 z 窗口 N 需在 13–260 周之间")
+    st["custody_gate_h"] = int(st.get("custody_gate_h", 4) or 4)
+    if not 1 <= st["custody_gate_h"] <= 13:
+        raise ValueError("托管闸门变化周数 h 需在 1–13 之间")
+    st["custody_gate_k"] = float(st.get("custody_gate_k", 1.0) if st.get("custody_gate_k") is not None else 1.0)
+    if not 0.25 <= st["custody_gate_k"] <= 5:
+        raise ValueError("托管闸门阈值 k 需在 0.25–5 之间")
+    st["custody_gate_stale_days"] = float(st.get("custody_gate_stale_days", 21.0) or 21.0)
+    if not 7 <= st["custody_gate_stale_days"] <= 60:
+        raise ValueError("托管数据过期阈值需在 7–60 天之间")
     st["staged_entry_f1"] = float(st.get("staged_entry_f1", 0) or 0)
     if st["staged_entry_f1"] and not 0.05 <= st["staged_entry_f1"] <= 0.95:
         raise ValueError("分批入场首笔比例需为 0（关闭）或 0.05–0.95")
