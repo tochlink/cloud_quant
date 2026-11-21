@@ -1,4 +1,4 @@
-# 短线新族：交易所官方状态页事故（Coinbase / Kraken Statuspage 平台级连接 / 交易故障）→ 8 币永续篮子 1h 事件（2026-11-21 ~13:10 PST，研究，不改默认；否决）
+# 短线新族：交易所官方状态页事故（Coinbase / Kraken Statuspage 平台级连接 / 交易故障）→ 8 币永续篮子 1h 事件（2026-11-21 ~12:35 PST，研究，不改默认；否决）
 
 > 侧记；主章节见 docs/STRATEGY_FORMULAS.md 同名小节。研究，不改默认；**否决**。
 
@@ -6,7 +6,7 @@
 - 查重：docs/STRATEGY_FORMULAS.md、docs/*.md、`output/research_*.csv`、记忆中检索 outage / incident / status page / 故障 / 宕机 / 状态页 无信号条目（唯一相关是 OKX 2022-12-18 维护平 K 的数据完整性检查，不是信号）。不是交易所公告族（币安 / Upbit 上币 / 下架 / 警告，触发是官方运维事故贴而不是上币决定），不是场所溢价，不是微结构爆仓 / OI / 主动买卖，也不是按价格阈值触发的投降族（#13 / #14）。
 - 数据（只用官方，不编造、不回补）：Coinbase `status.coinbase.com` 与 Kraken `status.kraken.com` 的官方 Atlassian Statuspage。`history.json?page=1..45` 拿到 2015 → 2026-11 全部季度事故索引（Coinbase 2,402 条、Kraken 3,770 条），排除计划维护（impact=maintenance 或 scheduled_for 非空）；标题按 `filt.py` 的 INC / EXC 正则（看 PnL 前锁定）只留平台级访问 / 交易故障（连接、性能下降、网站 / API / App、下单 / 撮合、系统故障），剔除单币转账 / 网络、支付 / 出入金、认证、质押等。再逐条拉 `/incidents/<code>.json`。事件时刻 = 最早一条 incident_update 的 created_at（首次公开发帖），且不早于 incident created_at；可回填的 started_at 不用。2021-01-04 → 2026-11-20 UTC 共 583 条（Coinbase 185 / Kraken 398 条；major+critical 66 条），按年 92 / 84 / 102 / 90 / 109 / 106，存 `output/exchange_status_incidents_official.csv`。合并到 UTC 小时后：any 573 个事件小时（post 80），severe 65 个（post 6）。
 - 公式：事件小时 h = floor(发帖时刻)；h 收盘后下一根 1h 开盘吃单入场，持有 H 根，事件不重叠。方向规则：long / short / follow4 / contra4 / follow24 / contra24（follow = 8 币篮子 close[h] / close[h−L] − 1 的符号，contra 取反）。成本 taker 5.1 bps/边（压力 15.1）+ 官方资金费，同 curve3pool1h / eigenlayer1h 框架。maker 不适用。
-- 预注册（`scratch/exstatus1h/PRE_REGISTER.json`，sha256 `c49b4757…8a439a`，filt.py sha256 `47c90dbe…38b9`，看 PnL 前锁定 144 格）：src {cb, kr, any} × tier {all, severe=major/critical} × rule 6 × H {6, 12, 24, 48}。先验 `any_all_contra24_H24`（散户所在暴涨暴跌时流量过载而宕机，过载那段强平 / 恐慌流量冲过头，访问恢复后一天内回归 → 逆 24h 走势）；回退 `any_severe_contra24_H24`。切分 train → 2024-10-21（深度未见，2022-02-15 起）/ test → 2026-03-05 / post；Gate 自 2025-09-28；未调参 new8（LINK/LTC/DOT/TRX/BCH/ATOM/NEAR/UNI，OKX 官方 1h）；安慰剂事件平移 ±720h；同脚本基线 = 同一规则每小时都入场。
+- 预注册（`scratch/exstatus1h/PRE_REGISTER.json`，sha256 `c49b4757…8a439a`，filt.py sha256 `47c90dbe…38b9`，看 PnL 前锁定 144 格；文件 mtime 2026-11-21 12:29 PST，JSON 内 registered_at_pst 字段误写为 12:50，以 mtime 为准）：src {cb, kr, any} × tier {all, severe=major/critical} × rule 6 × H {6, 12, 24, 48}。先验 `any_all_contra24_H24`（散户所在暴涨暴跌时流量过载而宕机，过载那段强平 / 恐慌流量冲过头，访问恢复后一天内回归 → 逆 24h 走势）；回退 `any_severe_contra24_H24`。切分 train → 2024-10-21（深度未见，2022-02-15 起）/ test → 2026-03-05 / post；Gate 自 2025-09-28；未调参 new8（LINK/LTC/DOT/TRX/BCH/ATOM/NEAR/UNI，OKX 官方 1h）；安慰剂事件平移 ±720h；同脚本基线 = 同一规则每小时都入场。
 - 方法备注：第一次运行时 `direction()` 用 `rule.endswith("4")` 判断回看期，把 contra24 / follow24 也当成 4h 回看（"24" 也以 4 结尾）；发现后改成 `endswith("24")` 重跑，下面全部是修正后的结果。
 - 结果（真实费，每笔净 bps；`output/research_exchange_status_incident_event_1h.csv` 5,292 行）：
   - 同脚本基线（contra24 H24 每小时）：OKX d8 train −1.1 / test −26.6 / post −4.9；Gate post −5.5；new8 −3.8 / −9.0 / 0.0。
