@@ -30,7 +30,7 @@
   - z365 格占用极低（eth_net z>2.0 在 post 窗口占用 0），多数只是几乎永不触发，贴近基线。
   - 安慰剂（锚点 eth_net_trend_n180_cap_short_off）：最高只有 4/9（+365d，post Sharpe 边 −0.09；+7d 也是 4/9 且 post 边为负）。其余平移为 3/9 或 0/9，后段明显弱于真格。安慰剂没有做出 6/9。
   - 邻域（同一 eth_net trend / cap_short_off，只改 n）：n=150 也是 9/9，post 边与 n=180 相同（仍是月份 5/4、薄边）。n=60 / 75 为 6/9，薄边类似。n=105 / 120 掉到 3/9，post 收益边翻负（约 −3.4 / −4.0 个百分点）。邻域不是一整片平稳区域，中间的 n 会翻负。
-  - 压力费（20 / 15.1 bps）：锚点仍是 9/9，post 边约 +7.2 个百分点 / Sharpe +0.22，但月份仍是 5/4（d7 为 4/5），挡不住“后段月份不够、边薄、邻域中间翻负”。
+  - 压力费（20 / 15.1 bps）：锚点相对同脚本压力基线仍是 9/9，但 post 边仍然很薄（OKX d8 +57.32 / 2.18 vs 压力基线 +55.94 / 2.12；Gate +58.10 / 2.20 vs +56.78 / 2.15，约 +1.3 个百分点 / Sharpe +0.05），月份仍是 5/4，挡不住“后段月份不够、边薄、邻域中间翻负”。
 - 结论：否决，不实现、不进观察名单、不改默认、不进纸交易。唯一先验 9/9 在未见历史和安慰剂上站得住，但 post 边相对已经很强的基线过薄，后段月份只有 5/4，邻域在 n=105/120 翻负，回退 n=90 在三段未见历史上全输。本族勿以同一机制换 n、k、方向，或把 eth_net / n_inbox / n_gw 对调，或改用毛 ETH 入金、代币金额、净流量变体、更早起点、其它 L2 官方桥或不在文档中的桥合约再测。
 - 现场记录：只读上述官方合约日志与 EOD 托管余额，写入 output/arb_canonical_bridge_official_daily.csv 与 scratch/arbbridge4h/ 下的同名文件（pid / 日志在 scratch/arbbridge4h/record.pid 与 record.log）。不写 data/micro.sqlite，不打断其它记录进程。
 - CSV（不入库）：output/research_arb_canonical_bridge_gate_4h.csv（441 行，含 120 个预注册格 / 真实与压力费 / 安慰剂 / 邻域）；官方日序列 output/arb_canonical_bridge_official_daily.csv（研究当时 1,945 个完整日，不入库；现场记录会在其后追加完整日）；脚本 scratch/arbbridge4h/ 下的 fetch、shard_fetch、gw_prefetch、watch_and_finish、run、record（研究脚本未推送）。
