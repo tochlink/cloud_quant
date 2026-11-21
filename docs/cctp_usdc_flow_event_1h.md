@@ -1,0 +1,27 @@
+# Circle 官方 CCTP（V1 + V2）以太坊主网 USDC 跨链销毁 / 铸造 1h 突发 → 8 币永续篮子（研究记录，否决）
+
+> 侧车文档：本地与远端 STRATEGY_FORMULAS.md 已分叉；本节同时追加到远端 STRATEGY_FORMULAS.md 末尾。
+
+## 短线：Circle 官方 CCTP（V1 + V2）以太坊主网 USDC 跨链销毁 / 铸造 1h 突发 → 8 币永续篮子（2026-11-21，否决）
+
+- 背景：Pendle 节「下一轮（短线）」所列。机制 = 跨链美元流动性迁移（USDC 离开以太坊去 Arbitrum / Base / Solana 等交易链 = 投机资金部署；回流以太坊 = 避险）；不是已否决的稳定币总供给 / 铸赎、Curve 3pool、WETH9、Tornado、Arbitrum 官方桥（长线 ETH）或 Hyperliquid Bridge2（单一交易所保证金桥，弱观察）。本地文档、output 此前 CCTP 只在 Hyperliquid 段被顺带提及，0 条测试，不是重复。
+- 数据（全部官方链上，`output/cctp_usdc_official_1h.csv`）：合约地址取自 Circle 官方开发者文档 developers.circle.com（`cctp/v1/evm-smart-contracts`、`cctp/evm-smart-contracts`，Ethereum domain 0）：V1 TokenMessenger `0xBd3fa81B58Ba92a82136038B25aDec7066af3155`、MessageTransmitter `0x0a992d191DEeC32aFe36203Ad87D7d289a738F81`、TokenMinter `0xc4922d64a24675E16e1586e3e3Aa56C06fABe907`（代码首现区块 16,730,031 = 2023-02-28）；V2 TokenMessengerV2 `0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d`、MessageTransmitterV2 `0x81D40F21F12A8F0E3252Bccb954D722d4c464B64`、TokenMinterV2 `0xfd78EE919681417d192449715b2594ab58f5D002`（区块 21,819,723 = 2025-02-11）；USDC `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48`。
+  - 序列口径：销毁 = USDC `Burn(burner)` 且 burner = V1/V2 TokenMinter（CCTP 唯一销毁路径）；铸造 = USDC `Mint(minter,to)` 且 minter = V1/V2 TokenMinter（V2 手续费铸造计入 = 到达以太坊的毛额）。V1 与 V2 直接相加（V2 自 2025-02-11 起叠加，不缩放）。交叉核对：TokenMessenger `DepositForBurn`（burnToken = USDC）/ `MintAndWithdraw`（V2 含 feeCollected）逐笔交易对账 —— 铸造 **0 笔不符**；销毁 0 笔「有销毁无 DepositForBurn」，33 笔「有 DepositForBurn 无销毁」（V1 `replaceDepositForBurn` 重发，不计入），合计 2.3 万 USDC。
+  - 公共 RPC tenderly `eth_getLogs` 全量重建区块 16,730,000–26,464,516（100k 块分片检查点 `scratch/cctp1h/ck/`）：1,074,543 次销毁（886.1 亿 USDC）、1,994,440 次铸造（1,188.1 亿）。DepositForBurn 目的链合计：Arbitrum 271 亿、Base 163 亿、Solana 124 亿、Polygon 66 亿、Avalanche 45 亿、OP 33 亿、Noble 19 亿，其余新链合计约 165 亿。
+  - **完整性**：完整 UTC 小时 **2023-04-07 16:00 → 2026-11-21 14:00 共 31,775 小时，0 缺口，不补值**（无事件小时为真实 0：2,390 个零销毁小时几乎全在 2023 年上线初期，2024-02 起 0 个）；随机 12 小时用第二组公共 RPC（mevblocker / publicnode / drpc，fetch 未用）按时间二分区块独立重拉 **12/12 一致**（笔数与金额）。
+  - **充足性检查（先于任何 PnL）通过**：post（≥2026-03-05）6,279 小时、480,693 次销毁、每小时中位 68、0 个零销毁小时；铸造 725,462 次、中位 100。注意深未见段（2023-04 → 2024-10）流量小一个数量级（2023 年每小时中位 0–5 笔）。
+  - 时滞：小时 h 的链上值在 h 收盘后才用，h+1 根 1h 永续开盘入场。
+- 公式（`scratch/cctp1h/PRE_REGISTER.csv` sha256 `b67b5109…1d39dd98d`、`PRE_REGISTER.json` sha256 `48ab9d49…26acdad4`，2026-11-21 08:09 PST 拉数开始前、看任何 PnL 前锁定 192 格；副本 `output/research_cctp_usdc_flow_event_1h_prereg.csv`）：
+  - 序列：burn_usd = log1p(本小时 CCTP 销毁 USDC = 流出以太坊)；burn_count = log1p(本小时销毁次数)；mint_usd = log1p(本小时 CCTP 铸造 USDC = 流入)；net_musd = (铸造 − 销毁) 百万 USDC（原值带符号，高侧 = 净流入突发）。
+  - z：W = 168h 滚动均值 / 标准差截至 t−1（min 84）；L=1 时 z=(x−μ)/σ，L>1 时 z=(Σ_L x − Lμ)/(σ√L)；z ≥ k 触发，下一根 1h 开盘入场，持有 H，不重叠。
+  - 网格：4 序列 × L{1,4,8} × k{3,4} × 方向{long, short} × H{6,12,24,48} = 192 格（只做高侧突发）。销毁：long = 顺势；铸造 / 净流：short = 顺势（回流 = 避险）。
+  - **唯一先验 `burn_usd_L4_k3_high_long_H24`**；回退 `mint_usd_L4_k3_high_short_H24`。
+  - harness 与 hlbridge1h 相同：OKX d8 深历史 1h（train 数据起点 + 84h 预热 →2024-10-21 = 深未见；test →2026-03-05；post →末尾）、Gate d8 官方 1h（test 部分 + post + gate_window 2025-09-28→）、未调参 OKX new8；真实永续 taker 5.1 bps/边，压力 15.1 bps/边；官方资金费；±720h 时移安慰剂；额外 ±168/±336/±2160h 时移、168h 整块打乱（20 种子）与邻域（k 2.5/3.5、W 336/720、L 2/6、H 18/36）；同脚本逐小时基线。
+- 结果（真实费，每笔篮子净 bps）：
+  - 192 格中 10 格 8/8，**7 格可用 8/8，全部是销毁 long**（burn_usd 4 格、burn_count 3 格），但 post t 全部 ≤ 1.3。所有 long 格 OKX 平均 train −1.2 / test +3.8 / post −2.4，short 格 −19.2 / −24.2 / −18.0：整体无方向优势。
+  - **先验** burn_usd L4 k3 long H24：6/8。OKX train（深未见）**−41.0**（t −0.86，n 33，劣于基线 −4.7）/ test +64.5（t 1.24，n 42）/ post +18.7（t 0.32，n 35，中位 +11）；Gate test −7.5（n 17）、post +19.2；压力费 OKX post −1.3、Gate post −0.8。post 逐月：事件均值 > 基线 5/9、月和 >0 4/9（两所相同；主要靠 2026-08 一个月 +1,891）。安慰剂 +720h post +21.0、+168h +16.5 与先验相当；块打乱 post frac≥ 0.30、深未见 frac≥ 1.0（所有打乱种子都优于实际）。邻域乱：k2.5 post −30.9、W336 −15.1、L2 −8.2、L6 −0.1、k3.5 +43.4。
+  - **回退** mint_usd L4 k3 short H24：2/8。OKX train +0.5 / test −40.0 / post −8.8（n 66）；Gate post −9.5；post 逐月事件均值 > 基线 6/9 但月和 >0 仅 4/9；+720h 安慰剂 post +77.3 远优于它。
+  - **非先验、事后挑出的最佳可用格（仅探索）** burn_usd L8 k4 long H12：8/8。OKX train +8.0（t 0.16，n 18，等于块打乱均值 +8.4，frac≥ 0.5）/ test +100.4（t 1.26，n 17，中位 −15）/ post +77.4（t 1.27，n 16，中位 +20）；Gate test +34.2（n 7）/ post +78.0；new8 post +116.9（t 2.06）；压力费 OKX post +57.4（中位 −0.3）。安慰剂 ±168/±336/±720/+2160h post 均为负，块打乱 post 无一 ≥ 实际；但 −2160h post +57.3，post 逐月 **4/9**（月和 >0 3/9，两所相同），邻域 k2.5 −14.1、k3.5 +1.3、L2 −97.0。深未见无优势、月份不过半 —— 连弱观察也不够。
+- 结论：**否决**（先验深未见为负、post 不显著且月份 5/9 / 4/9、与时移安慰剂相当、邻域乱；回退为负；最佳非先验格深未见 ≈ 打乱、月份 4/9）。不进观察名单、不改默认、不动纸面盘、不改代码。已启动官方实时记录器 `scratch/cctp1h/record.py`（只追加新完成小时，5 分钟一轮）。**勿以改 L / k / H / W / 方向、换序列（销毁额 / 次数 / 铸造 / 净流 / 按目的链拆分如只看 Arbitrum / Base / Solana / V1 或 V2 单独 / 大额）、换别的链（Arbitrum / Base / Solana 上的 CCTP 铸造）、或换其他跨链桥（Wormhole / LayerZero / Across / Stargate）的方式在现有历史上重测本族。**
+- 文件：`output/cctp_usdc_official_1h.csv`、`output/research_cctp_usdc_flow_event_1h.csv`、`_prereg.csv`、`_nbhd_placebo.csv`（new8 已在主表 universe=okx_new8 内；均不入库）；脚本 `scratch/cctp1h/{sigs,probe,fetch,build,verify,prereg,run,analyze,baseline,extra,record}.py`（未推送）。
+- 下一轮（长线）：Safe（原 Gnosis Safe）官方 SafeProxyFactory（地址取自 docs.safe.global / github safe-global/safe-deployments，v1.1.1 / v1.3.0 / v1.4.1）以太坊主网 `ProxyCreation` 日度新建多签数 → 4h 默认书入场闸门。机制 = 机构 / 团队 / 金库托管新开户（新资金准备入场），不是已否决的 ENS 注册、ERC-4337 EntryPoint、链上 gas / 满块、稳定币供给或交易所资金费；文档 / output 中 SafeProxyFactory / ProxyCreation 0 条。数据只用官方合约事件，2019 起（v1.0）；预注册须写明多版本工厂的拼接与 L2 工厂不计入。
