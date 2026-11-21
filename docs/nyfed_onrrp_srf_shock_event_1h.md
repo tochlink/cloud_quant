@@ -1,12 +1,12 @@
 # 短线新族：纽约联储官方隔夜逆回购（ON RRP）/ 常备回购（SRF）每日操作冲击 → 8 币永续篮子（1h）
 
-> 侧记，2026-11-21 ~14:40 PST。研究，不改默认；**否决**。无代码改动，纸面实例不动。
+> 侧记，2026-11-21 ~14:15 PST。研究，不改默认；**否决**。无代码改动，纸面实例不动。
 
 - 查重：候选 (a) Lido WithdrawalQueue 1h 突发（`research_lido_wq_burst_event_1h.csv`）与 (b) 信标链 DepositContract 1h 突发（`research_eth_deposit_contract_burst_event_1h.csv`）均已测过并否决，跳过。改用 (c)：docs/mmf_h8_cash_gate_4h.md 留下的短线指针「纽约联储 ON RRP 每日操作结果」。docs / `output/research_*.csv` / scratch 中短线 0 条；只有长线联储净流动性（WALCL − TGA − RRP 水平，4h 闸门）、SOFR−IORB 利差 4h 闸门、FRED 宏观日冲击（VIX/油/2Y/10Y）用过相邻数据，机制不同（这里是每日公布时刻的操作用量冲击，1h 事件）。
 - 数据（只用官方，不编造、不插值、不回补）：markets.newyorkfed.org 官方 API `/api/rp/results/search.json`（半年一段，2013-04 → 2026-11-20，共 5,680 次操作）。按操作日：ON RRP = Reverse Repo / Overnight 的 `totalAmtAccepted`（同日多次相加）与 `participatingCpty`；SRF = 当日所有 Repo 操作 `totalAmtAccepted` 之和（无操作即官方 0）。3,295 个 ON RRP 操作日 2013-04-02 → 2026-11-20；除 2013 年试运行期两处空档（125 / 34 天）外只有周末 / 假日缺口。官方日表 `output/nyfed_onrrp_srf_official_daily.csv`。2026-11 ON RRP 只剩约 0.4 bn 美元、2–7 家机构（已近枯竭）。
 - 公布与入场：结果在 closeTime 公布（ON RRP 13:15 ET；2025 起 SRF 下午场 13:45 ET）。入场 = 当日最晚 closeTime + 30 分钟后第一根 1h 开盘（14:00 或 15:00 ET），持有 H 根，开盘出场，不重叠。成本 taker 5.1 bps/边（压力 15.1 / 20）+ 官方资金费；OKX 8 币 d8、OKX new8（LINK LTC DOT TRX BCH ATOM NEAR UNI，未调参）、Gate d8。
 - 公式：`rrp_dlog = Δ ln(1 + RRP_bn)`；`rrp_dcpty = Δ participatingCpty`；`srf_log = ln(1 + SRF_bn)`（水平尖峰）。`z = (x − 前 N 个操作日均值) / 前 N 个标准差`（不含当日）。
-- 预注册（`PRE_REGISTER.json`，sha256 `c937fa37…f8544a1c`，任何 PnL 前锁定 108 格）：metric 3 × N {60, 250} × k {2, 3} × mode {hyp_both：z ≤ −k 做多、z ≥ k 做空；one_sided：RRP 只做多 / SRF 只做空；contra_both 镜像} × H {4, 24, 48}。先验 `rrp_dlog_z_N250_k2.0_hyp_both_H24`（现金撤出 Fed RRP = 流动性释放 → 做多；涌入 = 抽水 → 做空），回退 `rrp_dlog_z_N60_k2.0_hyp_both_H24`。切分 train → 2024-10-21（深度未见，OKX 自 2022-01-29）/ test → 2026-03-05 / post → 今；Gate 自 2025-09-24。
+- 预注册（`PRE_REGISTER.json`，sha256 `c937fa37…f8544a1c`，任何 PnL 前锁定 108 格；文件 14:12:33 PST 写入，run.py 之后才启动；JSON 内 registered_at_pst 写成 14:20 为笔误）：metric 3 × N {60, 250} × k {2, 3} × mode {hyp_both：z ≤ −k 做多、z ≥ k 做空；one_sided：RRP 只做多 / SRF 只做空；contra_both 镜像} × H {4, 24, 48}。先验 `rrp_dlog_z_N250_k2.0_hyp_both_H24`（现金撤出 Fed RRP = 流动性释放 → 做多；涌入 = 抽水 → 做空），回退 `rrp_dlog_z_N60_k2.0_hyp_both_H24`。切分 train → 2024-10-21（深度未见，OKX 自 2022-01-29）/ test → 2026-03-05 / post → 今；Gate 自 2025-09-24。
 - 结果（真实费，每笔净 bps；`output/research_nyfed_onrrp_srf_shock_event_1h.csv` 5,846 行）：
 
 | 格 | OKX d8 train（深度未见） | test | post | new8 train / test / post | Gate post | post 月正 | 计分 |
