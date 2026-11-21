@@ -170,6 +170,9 @@ async def lifespan(_app: FastAPI):
     # Tests set QTW_FORBID_LIVE=1 (conftest). Skip auto worker so lifespan does not
     # hold CYCLE_LOCK / open network during unrelated unit tests.
     import os as _os
+    if _os.environ.get("QTW_FORBID_LIVE") != "1":
+        from . import hotreload
+        hotreload.start()  # 参数 / 策略代码热加载（不下单，只唤醒 worker）
     if cfg["worker"]["enabled"] and _os.environ.get("QTW_FORBID_LIVE") != "1":
         worker.start()
     elif cfg["worker"]["enabled"]:
@@ -179,6 +182,11 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        try:
+            from . import hotreload
+            hotreload.stop()
+        except Exception:  # noqa: BLE001
+            pass
         worker.stop()
         _stop_persist()
         stream.stop()
@@ -906,6 +914,41 @@ def shadow_trades():
     """影子子账本（#13 / #14 等候选策略）的开平记录。只做纸面记录，和主账本完全分开。"""
     from . import shadow
     return ok(shadow.trade_rows())
+
+
+# ---------------- 运行时自适应 / 热加载 ----------------
+@app.get("/api/adaptive")
+def adaptive_status():
+    """当前生效参数（含自动调参覆盖）、最近一次自适应时间、自适应开关、热加载状态与最近参数变更。"""
+    from . import adaptive, hotreload
+    cfg = S.load()
+    return ok({**adaptive.status(cfg), "hot_reload": {**hotreload.status(), "enabled": bool(cfg["strategy"].get("hot_reload", True))},
+               "recent_changes": adaptive.recent_changes(15)})
+
+
+@app.post("/api/adaptive/retune")
+def adaptive_retune_now():
+    """立即在后台跑一次自动调参（需已开启 auto_retune）。只用官方公共 K 线、只写参数，不下单。"""
+    from . import adaptive
+    cfg = S.load()
+    if not cfg["strategy"].get("auto_retune"):
+        raise HTTPException(400, "自动调参未开启（风控 → 策略参数 → 自动调参）")
+    with adaptive._rt_lock:
+        if adaptive._rt["running"]:
+            return ok({"started": False, "reason": "已在运行"})
+    import threading as _th
+    def _job():
+        try:
+            adaptive._rt["running"] = True
+            res = adaptive.run_retune(cfg)
+            adaptive._rt.update(last_result={k: res[k] for k in ("asof", "params", "reason")}, last_error="")
+            worker.kick("auto_retune")
+        except Exception as e:  # noqa: BLE001
+            adaptive._rt["last_error"] = str(e)[:300]
+        finally:
+            adaptive._rt["running"] = False
+    _th.Thread(target=_job, name="qtw-retune-now", daemon=True).start()
+    return ok({"started": True})
 
 
 # ---------------- 设置 / 密钥 ----------------

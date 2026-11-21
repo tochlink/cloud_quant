@@ -324,7 +324,15 @@ def _btc_regime_state(cfg: dict) -> dict:
     try:
         df = mcache.candles(cfg["venue"], sym, st["interval"], need + 5, "spot")
         b = btc_regime_blocks_long(df["close"], n, vk)
-        return {"n": n, "vote_k": vk, "symbol": sym, "blocked": bool(b.iloc[-1]) if len(b) else False, "error": ""}
+        blocked = bool(b.iloc[-1]) if len(b) else False
+        bs = False
+        if st.get("direction_bias"):  # 体制方向偏置：BTC 高于 SMA_N × (1 + band) → 只做多（拦新开空）
+            from .adaptive import bias_blocks_short
+            x = bias_blocks_short(df["close"], n, float(st.get("direction_bias_band", 0.1) or 0.0))
+            bs = bool(x.iloc[-1]) if len(x) else False
+        from .adaptive import bias_label
+        return {"n": n, "vote_k": vk, "symbol": sym, "blocked": blocked, "bias_block_short": bs,
+                "bias": bias_label(blocked, bs) if st.get("direction_bias") else "both", "error": ""}
     except Exception as e:  # noqa: BLE001 —— 真实错误原样上报
         return {"n": n, "vote_k": vk, "symbol": sym, "blocked": False, "error": str(e)}
 
@@ -486,6 +494,8 @@ def apply_hedge_pair(rows: list[dict], perp_close: dict, window: int, corr_min: 
 
 
 def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
+    from . import adaptive as AD
+    cfg = AD.effective_cfg(cfg)  # 自动调参开启时覆盖最近一次 walk-forward 参数（不写回设置）
     cfg = vol_scaled_cfg(cfg, book(cfg))
     st, rk = cfg["strategy"], cfg["risk"]
     venue = cfg["venue"]
@@ -503,6 +513,11 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     hp_w = int(st.get("hedge_pair_w", 0) or 0)
     if hp_w >= 2:
         need = max(need, hp_w + 5)
+    as_mode = str(st.get("adaptive_size_mode", "off") or "off")
+    if as_mode == "spread":
+        need = max(need, 1005)  # 趋势强度相对 1000 根中位数（与回测一致）
+    elif as_mode == "adx":
+        need = max(need, 200)
     if int(st.get("name_es_w", 0) or 0) >= 2:
         need = max(need, int(st["name_es_w"]) + 5)  # ES 尾部厚度需要 W+1 根对齐收盘  # 对冲对乘数需要 W+1 根对齐的永续收盘
     bk = book(cfg)
@@ -595,6 +610,10 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         pos = bk.positions.get(sym)
         # 单币波动率封顶：用信号所在市场（多=现货、空=永续）最近已收盘 K 线算 m，与回测第 i 根用 m_{i-1} 一致
         nvm = float(name_vol_mult(src["close"].to_numpy(), nv_t, nv_l, BARS_PER_YEAR_MS / INTERVAL_MS[st["interval"]])[-1]) if nv_t > 0 else 1.0
+        if as_mode != "off":  # 趋势强度仓位乘子：与回测同一函数，乘积封顶 max(原乘子, 1)，5% / 20% 上限不破
+            tsm = float(AD.trend_size_mult(src, as_mode, float(st.get("adaptive_size_lo", 0.5)), float(st.get("adaptive_size_hi", 1.0)))[-1])
+            row["trend_size_mult"] = tsm
+            nvm = float(AD.combine_mult([nvm], [tsm])[0])
         row["name_vol_mult"] = nvm
         z = size(side=side, equity=eq, price=px, atr=row["atr"], max_risk=rk["max_risk_per_trade"] * nvm,
                  max_weight=rk["max_weight_per_name"] * nvm, atr_mult=st["atr_stop_mult"])
@@ -619,6 +638,9 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             row["btc_regime_block_long"] = bool(rg["blocked"])
             if sig > 0 and rg["blocked"]:
                 row["regime_ok"] = False
+            row["direction_bias"] = rg.get("bias", "both")
+            if sig < 0 and rg.get("bias_block_short"):
+                row["bias_ok"] = False
         row["suggested_stop_price"] = z.stop_price
         row["in_universe"] = sym in universe
         row["halted"] = sym in bk.halts
@@ -656,6 +678,11 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         elif sig > 0 and row.get("regime_ok") is False:
             entry = f"BTC 熊市过滤中：BTC 现货收盘低于 SMA{rg['n']}，暂不新开多单（BTC 站回均线后恢复；已有持仓不受影响）"
             exit_, state = "—", "regime_wait"
+            row["stop_source"] = "suggested"
+            row["stop_side"] = side
+        elif row.get("bias_ok") is False:
+            entry = f"体制方向偏置：BTC 收盘高于 SMA{rg['n']} × (1 + {float(st.get('direction_bias_band', 0.1)):g})，只做多，暂不新开空（回落后恢复；已有持仓不受影响）"
+            exit_, state = "—", "bias_wait"
             row["stop_source"] = "suggested"
             row["stop_side"] = side
         elif row.get("chop_ok") is False:
@@ -719,6 +746,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     _annotate_qty_tp(cfg, bk, rows)
     return {"generated_at": iso(utcnow()), "generated_at_la": la(utcnow()), "generated_at_sh": sh(utcnow()),
             "venue": venue, "equity": eq, "short_breaker": sb, "btc_regime": rg, "port_vol_k": cfg["_pv_k"],
+            "adaptive": cfg.get("_adaptive"),
             "rows": rows, "errors": errs}
 
 
@@ -897,6 +925,8 @@ def _route(cfg, sym, market, action, qty, price):
 def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
     with CYCLE_LOCK:
         cfg = cfg or S.load()
+        from . import adaptive as AD
+        cfg = AD.effective_cfg(cfg)  # 自动调参覆盖（热加载：每个周期都重新读取）
         bk = book(cfg)
         cfg = vol_scaled_cfg(cfg, bk)  # 可选组合波动率目标：入场与调仓的风险/权重上限 × k（默认关闭 k=1）
         venue, st, rk = cfg["venue"], cfg["strategy"], cfg["risk"]
@@ -945,7 +975,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         want = {}
         for s in cfg["symbols"]:
             r = rows.get(s)
-            if not r or s in bk.positions or s in bk.halts or r["signal"] == 0 or block_active(bk, s, r, bool(st.get("_fast_exit_research"))) or r.get("trend_ok") is False or r.get("regime_ok") is False or r.get("chop_ok") is False or r.get("elder_ok") is False or r.get("state") == "short_paused":
+            if not r or s in bk.positions or s in bk.halts or r["signal"] == 0 or block_active(bk, s, r, bool(st.get("_fast_exit_research"))) or r.get("trend_ok") is False or r.get("regime_ok") is False or r.get("chop_ok") is False or r.get("elder_ok") is False or r.get("bias_ok") is False or r.get("state") == "short_paused":
                 continue
             if r["side"] == "long" and not rk["allow_spot_long"] or r["side"] == "short" and not rk["allow_perp_short"]:
                 continue

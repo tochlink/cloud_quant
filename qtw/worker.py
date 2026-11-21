@@ -101,8 +101,13 @@ def _loop():
     from .engine import run_cycle
     trig = {"kind": "start", "recv_at": time.time()}
     while not _stop.is_set():
-        cfg = S.load()
+        cfg = S.load()  # 每个周期重新读取设置：页面保存的策略参数下一周期即生效（热加载线程还会立即唤醒本循环）
         t0 = time.time()
+        try:
+            from . import adaptive
+            adaptive.maybe_retune_async(cfg)  # 自动调参到期 → 后台线程跑（不阻塞本周期），完成后写 SQLite 并唤醒
+        except Exception:  # noqa: BLE001
+            log.warning("自动调参调度失败", exc_info=True)
         try:
             res = run_cycle(cfg, note="")
             _state.update(last_result=res, last_error="")

@@ -1432,6 +1432,20 @@ function pageRisk() {
             <label class="toggle field-toggle" title="保本价再加两条腿的吃单手续费（多：入场价×(1+2×费率)，空：×(1−2×费率)）"><input id="sBeFee" type="checkbox" ${s.strategy.tp_be_fees !== false ? "checked" : ""}/><span class="tr"></span>保本含手续费</label>
             <label class="field" title="已停用：研究显示 5m / 10m / 1D 快速离场每一组都显著劣于不离场（5m 会在 4h 收盘之间把长线单逐个平掉），回测基线也从未启用。盘中只按真实触及的止损 / 止盈离场。">快速离场<select id="sFxTf" disabled><option value="off" selected>已停用</option></select><input id="sFxN" type="hidden" value="${s.strategy.fast_exit_n ?? 50}"/><input id="sFxC" type="hidden" value="${s.strategy.fast_exit_confirm ?? 2}"/></label>
           </div>
+          <div class="sec-title" style="margin-top:14px"><h4>运行时自适应 · 热加载</h4><span class="note">保存后 ≤ 5 秒生效，不用重启；持仓保留原止损</span></div>
+          <div class="grid form5">
+            <label class="field" title="按趋势强度缩放每笔仓位：spread = |快线−慢线|/ATR 相对近 1000 根中位数；adx = ADX14/25。乘子夹在下限~上限之间，单笔 5% / 单币 20% 上限不变。持仓每根 K 线随乘子调仓">趋势自适应仓位<select id="aMode">${[["off", "关闭"], ["spread", "均线间距/ATR"], ["adx", "ADX"]].map(([v, t]) => `<option value="${v}" ${(s.strategy.adaptive_size_mode || "off") === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+            <label class="field">仓位乘子下限<input id="aLo" type="number" min="0.1" max="2" step="0.05" value="${s.strategy.adaptive_size_lo ?? 0.5}"/></label>
+            <label class="field">仓位乘子上限<input id="aHi" type="number" min="0.1" max="2" step="0.05" value="${s.strategy.adaptive_size_hi ?? 1}"/></label>
+            <label class="toggle field-toggle" title="BTC 收盘高于体制线 SMA × (1 + 带宽) 时只做多（不新开空）；低于体制线时只做空（原 BTC 体制过滤）。只拦新开仓"><input id="aBias" type="checkbox" ${s.strategy.direction_bias ? "checked" : ""}/><span class="tr"></span>体制方向偏置</label>
+            <label class="field">方向偏置带宽<input id="aBand" type="number" min="0" max="1" step="0.05" value="${s.strategy.direction_bias_band ?? 0.1}"/></label>
+            <label class="toggle field-toggle" title="每 N 天用过去 L 天官方 K 线，在小网格（快 30/50/70 × 慢 100/150/200 × ATR 1.5/2/2.5 × 体制 900/1200/1500）里按 Sharpe 重选参数；挑战者需比现任高出迟滞值才切换。结果写入数据库并热加载，不改上面保存的参数"><input id="aRt" type="checkbox" ${s.strategy.auto_retune ? "checked" : ""}/><span class="tr"></span>自动调参（walk-forward）</label>
+            <label class="field">调参间隔（天）<input id="aEvery" type="number" min="7" max="180" step="1" value="${s.strategy.retune_every_days ?? 30}"/></label>
+            <label class="field">调参回看（天）<input id="aLb" type="number" min="90" max="600" step="15" value="${s.strategy.retune_lookback_days ?? 365}"/></label>
+            <label class="field">切换迟滞（Sharpe）<input id="aMg" type="number" min="0" max="2" step="0.05" value="${s.strategy.retune_margin ?? 0.3}"/></label>
+            <label class="toggle field-toggle" title="运行中修改参数或策略代码（strategy.py / adaptive.py）后自动生效；出错自动回退上一版"><input id="aHot" type="checkbox" ${s.strategy.hot_reload !== false ? "checked" : ""}/><span class="tr"></span>热加载</label>
+          </div>
+          <div id="adaptBox" class="note" style="margin-top:10px">读取当前生效参数…</div>
         </section>
         <section class="set-pane panel" data-pane="universe" role="tabpanel">
           <div class="sec-title"><h3>标的池（USDT 交易对）</h3></div>
@@ -1467,7 +1481,10 @@ function pageRisk() {
         fees: { spot_taker_bps: +$("#rFeeSpotTaker").value, spot_maker_bps: +$("#rFeeSpotMaker").value, perp_taker_bps: +$("#rFeePerpTaker").value, perp_maker_bps: +$("#rFeePerpMaker").value },
         strategy: { interval: $("#sInt").value, fast_ma: +$("#sFast").value, slow_ma: +$("#sSlow").value, atr_period: +$("#sAtrP").value, atr_stop_mult: +$("#sAtr").value, confirm_bars: +$("#sConf").value, trend_ma: +$("#sTrend").value, short_breaker_bars: +$("#sSB").value, pyramid_r: +$("#sPyrR").value, pyramid_frac: +$("#sPyrF").value, tp_r: +$("#sTpR").value, tp_reentry: $("#sTpRe").checked,
           tp_partial: $("#sPtp").checked, tp_partial_r: +$("#sPtpR").value, tp_frac: +$("#sPtpF").value, tp_breakeven: $("#sBe").checked, tp_be_fees: $("#sBeFee").checked,
-          fast_exit_tf: "off", fast_exit_n: +$("#sFxN").value, fast_exit_confirm: +$("#sFxC").value } } });
+          fast_exit_tf: "off", fast_exit_n: +$("#sFxN").value, fast_exit_confirm: +$("#sFxC").value,
+          adaptive_size_mode: $("#aMode").value, adaptive_size_lo: +$("#aLo").value, adaptive_size_hi: +$("#aHi").value,
+          direction_bias: $("#aBias").checked, direction_bias_band: +$("#aBand").value, auto_retune: $("#aRt").checked,
+          retune_every_days: +$("#aEvery").value, retune_lookback_days: +$("#aLb").value, retune_margin: +$("#aMg").value, hot_reload: $("#aHot").checked } } });
       toast("设置已保存"); S.signals = null; await refreshAll(); pageRisk();
     } catch (e) { toast("保存失败：" + e.message, true); b.disabled = false; }
   };
@@ -1482,7 +1499,22 @@ function pageRisk() {
   $("#cycleNow").onclick = (e) => runCycle(e.currentTarget);
   $("#killBig").onclick = killSwitch;
   loadRt();
+  loadAdaptive();
   $("#resetPaper").onclick = async () => { if (!(await confirmBox("重置纸面账本", "将清空全部纸面持仓、成交与账本历史，并恢复起始资金。", "确认重置", true))) return; try { await api("/api/paper/reset", { method: "POST" }); toast("纸面账本已重置"); refreshAll(); } catch (e) { toast(e.message, true); } };
+}
+
+async function loadAdaptive() {
+  const el = $("#adaptBox"); if (!el) return;
+  try {
+    const a = await api("/api/adaptive");
+    const ap = a.active_params || {}, la = a.last_adaptation, hr = a.hot_reload || {};
+    const fmt = (p) => `快 ${p.fast_ma} / 慢 ${p.slow_ma} / ATR×${p.atr_stop_mult} / BTC 体制 ${p.btc_regime_ma}`;
+    const ch = (a.recent_changes || []).slice(0, 5).map((c) => `<li>${esc(t(c.time))} · ${esc(c.source)} · ${esc((c.changes || []).slice(0, 4).map((r) => `${r[0]}: ${JSON.stringify(r[1])} → ${JSON.stringify(r[2])}`).join("；"))}</li>`).join("");
+    el.innerHTML = `<div><b>当前生效参数</b>：${esc(fmt(ap))}${a.auto_retune ? "（自动调参覆盖）" : "（来自已保存设置）"}</div>
+      <div><b>最近一次自适应</b>：${la ? `${esc(t(la.time))} → ${esc(fmt(la.params))}（${esc(la.reason || "")}）` : "尚无（自动调参未开启或未到期）"}</div>
+      <div><b>开关</b>：趋势仓位 ${esc(a.adaptive_size_mode)} · 方向偏置 ${a.direction_bias ? "开" : "关"} · 自动调参 ${a.auto_retune ? "开" : "关"} · 热加载 ${hr.enabled ? "开" : "关"}（每 ${hr.poll_sec ?? 5} 秒检查${hr.last_check ? "，上次 " + esc(t(hr.last_check)) : ""}）${hr.last_error ? ` · <span style="color:var(--down,#e5484d)">${esc(hr.last_error)}</span>` : ""}</div>
+      ${ch ? `<div><b>最近参数变更</b></div><ul style="margin:4px 0 0 18px">${ch}</ul>` : ""}`;
+  } catch (e) { el.textContent = "读取自适应状态失败：" + e.message; }
 }
 
 /* ---------- API / 设置 ---------- */
