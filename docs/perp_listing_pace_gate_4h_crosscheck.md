@@ -2,7 +2,7 @@
 
 > 本文件是 docs/STRATEGY_FORMULAS.md 本地追加小节的同内容 sidecar（主节见 docs/perp_listing_pace_gate_4h.md，commit 52aa5944；不覆盖远端 STRATEGY_FORMULAS.md）。
 
-### 独立复核（同族第二套预注册，2026-11-21 ~02:55 PST；结论不变：否决）
+### 独立复核（同族第二套预注册，2026-11-21 ~02:30 PST；结论不变：否决）
 
 - 背景：另一个执行进程同时在跑同一族（上节）。本复核用**另一套独立锁定的格子与另一种已下架合约分类方式**，只作稳健性交叉检查，不是新族；文件均带 `_k` 后缀，不覆盖上节文件。
 - 数据（全部官方，`output/perp_listing_official_daily.csv`，2020-01-01 → 2026-11-20 UTC 共 2,516 天，0 缺日，不补值）：Gate 加密 USDT 永续上线事件 1,154 个（2020 年前 3 个不计入日序列 → 1,151），上线时刻 = 官方批量下载 1h 存档首根 K 线；其中 **613 个已下架 / 下架中**靠存档补回。已下架合约的类型直接用 Gate **官方单合约接口** `/futures/usdt/contracts/{name}`（对已下架合约仍返回 status / contract_type / is_pre_market），共剔除 517 个股票 / 指数 / 金属等非加密合约与盘前合约；4 个接口返回 400（TONCOIN、TRUMPOLD、U、ZKOLD）按加密计。2026-11 尚未进存档的 3 个用 API `create_time`。OKX 只有现存 289 个（2020 年起 280 个）`listTime`，**已下架 OKX 永续缺失，早年严重低估**。逐合约表 `scratch/perplisting4h_k/listing_events.csv`。时滞：D 日计数 D+1 00:00 UTC 起使用。
