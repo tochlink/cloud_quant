@@ -125,7 +125,8 @@ def _trade_quality(closed) -> dict:
 
 
 def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict | None = None, signals=None,
-                 funding: dict | None = None, btc_spot: pd.DataFrame | None = None, schedule: list | None = None) -> dict:
+                 funding: dict | None = None, btc_spot: pd.DataFrame | None = None, schedule: list | None = None,
+                 lending_rates: tuple | None = None) -> dict:
     """signals：可选，多策略注册表（qtw.strategies）用的信号函数 f(ind, idx, syms) -> {symbol: 逐根 {-1,0,1}}，
     替换默认双均线合成信号；执行、止损、仓位、费用与默认完全同一套。None = 默认策略 #1（逐字节不变）。
     btc_spot：可选，BTCUSDT 现货 K 线，只供 BTC 体制过滤（btc_regime_ma）使用、不参与交易。标的里没有 BTCUSDT 时，
@@ -235,6 +236,17 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
             DBS = np.array([_db[int(_pp[AI[j]].get("btc_regime_ma") or 0)][j] for j in range(len(idx))], dtype=bool)
         else:
             DBS = bias_blocks_short(_b, rg_n, _band).reindex(idx).fillna(False).to_numpy(dtype=bool)
+    # 可选 OKX USDT 借贷利率闸门（lending_gate_enabled，默认关）：与引擎同一函数 lending.block_mask，
+    # LGB[j] = 第 j 根（信号 K 线）开盘时间上 z > q；第 i 根开盘入场用 LGB[i−1]（与 RGL 同口径），只拦新开多。
+    # lending_rates = (ts_ms, rates) 可注入真实历史（研究 / 测试）；否则读 / 刷新官方缓存，取不到时全 False（失败开放）。
+    LGB = np.zeros(len(idx), dtype=bool)
+    lg_info = {"enabled": bool(st.get("lending_gate_enabled", False))}
+    if lg_info["enabled"]:
+        from . import lending as LENDING
+        _om = pd.DatetimeIndex(pd.to_datetime(idx, utc=True)).as_unit("ms").asi8
+        _lt, _lr = (lending_rates if lending_rates is not None else (None, None))
+        LGB, _lz = LENDING.block_mask(st, _om, _lt, _lr)
+        lg_info.update(blocked_bars=int(LGB.sum()), nan_bars=int(np.isnan(_lz).sum()), bars=int(len(idx)))
     MK = {"long": "perp" if t_mode == "perp_both" else "spot", "short": "perp"}
     # 可选动态多空风险平价 up（ls_parity_cap，0 = 关闭）：按上一根已收盘合成信号把较小一侧信号书的单币风险 / 权重乘数放大到与较大一侧相同（≤ cap 倍）
     lsp_c = float(st.get("ls_parity_cap", 0) or 0)
@@ -430,6 +442,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                 continue
             if sg > 0 and RGL[i - 1]:
                 continue
+            if sg > 0 and LGB[i - 1]:
+                continue
             if sg < 0 and DBS[i - 1]:
                 continue
             if not trend_ok(sg, P(sd, "close", s)[i - 1], P(sd, "trend_ma", s)[i - 1], st.get("trend_ma", 0)):
@@ -448,7 +462,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         for s, d in list(sarq.items()):
             if s in pos or s in want:
                 continue
-            if d > 0 and (RGL[i - 1] or not rk["allow_spot_long"]) or d < 0 and (not rk["allow_perp_short"] or DBS[i - 1]):
+            if d > 0 and (RGL[i - 1] or LGB[i - 1] or not rk["allow_spot_long"]) or d < 0 and (not rk["allow_perp_short"] or DBS[i - 1]):
                 continue
             sd = side_of(d)
             z = size(side=sd, equity=eq_prev, price=P(sd, "open", s)[i], atr=P(sd, "atr", s)[i - 1],
@@ -735,6 +749,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "long_prices": "spot OHLC", "short_prices": "perp (USDT 永续) OHLC",
         "excluded_symbols": " ".join(excluded),
         "btc_regime_source": rg_source,
+        "lending_gate": lg_info,
         "btc_regime_symbol": rg_sym,
         "spot_signal_long_bars": int(sum((PX["spot"]["signal"][s][warm:] == 1).sum() for s in syms)),
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),

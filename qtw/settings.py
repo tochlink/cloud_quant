@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import threading
 from typing import Any
 
@@ -104,6 +105,16 @@ DEFAULTS: dict[str, Any] = {
         # 全部不输（f1 0.10 平均 +4.8 点，Sharpe +0.06），固定 f1 0.10 月度样本外 32/32 胜；但 2026-03 后逐月只约 5/8 更好，未改默认。
         # 「仅推迟入场一根」对照被否定（2026-03 后 8/8 落后）。0=关闭，建议试用 0.10–0.25
         "staged_entry_f1": 0.0,
+        # 2026-11-21：可选 OKX 官方 USDT 借贷利率体制闸门（默认关闭；回测与模拟盘 / 实盘同一函数 qtw/lending.block_mask）。
+        # r = 时间戳 ≤ 信号 K 线开盘时间的最近一条 OKX 小时 lendingRate（finance/savings/lending-rate-history?ccy=USDT），
+        # z = (r − W 天均值) / W 天标准差；z > q 时不新开多（已持多不动，空单不受影响）。数据过旧（> stale_hours）/ 取不到 → 不拦（失败开放）。
+        # 研究（scratch/lend/run.py、output/research_usdt_lending_rate_regime_4h.csv）：W30 q1.0 深历史 / 调参前段三组都更好，
+        # 但 2026-03 后三组都更差（逐月 0–2/9）→ 弱观察，只做纸面前向检验（8793 paper-lendgate）。环境变量 QTW_LENDING_GATE=1 强制开启。
+        "lending_gate_enabled": False,
+        "lending_gate_window_days": 30,
+        "lending_gate_z": 1.0,
+        "lending_gate_side": "long",
+        "lending_gate_stale_hours": 6.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -249,6 +260,8 @@ def load() -> dict:
             # v1 存档：perp_leverage 被强制为 1（不是用户选择）。升级到 t69u 后改用新默认（多空永续、10 倍，仓位仍按风险）
             data = {**data, "risk": {k: v for k, v in rk.items() if k != "perp_leverage"}}
         out = _merge(DEFAULTS, data)
+        if str(os.environ.get("QTW_LENDING_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
+            out["strategy"]["lending_gate_enabled"] = True  # 纸面前向检验实例（paper-lendgate）用环境变量强制开启借贷利率闸门
         out["strategy"]["fast_exit_tf"] = "off"  # 已存的旧值（5m / 10m / 1d）也不生效，见 validate() 注释
         for k in ("live_enabled", "okx_demo", "gate_testnet"):  # 旧存档里的字符串 "false" 不能被当成 True（实盘闸门 / 模拟盘开关）
             out["live"][k] = _as_bool(out["live"].get(k, DEFAULTS["live"][k]))
@@ -356,6 +369,19 @@ def validate(s: dict) -> dict:
     st["name_es_alpha"] = float(st.get("name_es_alpha", 0.05) if st.get("name_es_alpha") is not None else 0.05)
     if not 0.01 <= st["name_es_alpha"] <= 0.25:
         raise ValueError("ES 尾部分位 α 需在 0.01–0.25 之间")
+    st["lending_gate_enabled"] = _as_bool(st.get("lending_gate_enabled", False))
+    st["lending_gate_window_days"] = int(st.get("lending_gate_window_days", 30) or 30)
+    if not 7 <= st["lending_gate_window_days"] <= 180:
+        raise ValueError("借贷利率闸门窗口需在 7–180 天之间")
+    st["lending_gate_z"] = float(st.get("lending_gate_z", 1.0) if st.get("lending_gate_z") is not None else 1.0)
+    if not 0.25 <= st["lending_gate_z"] <= 5:
+        raise ValueError("借贷利率闸门阈值 q 需在 0.25–5 之间")
+    st["lending_gate_side"] = str(st.get("lending_gate_side") or "long").lower()
+    if st["lending_gate_side"] != "long":
+        raise ValueError("借贷利率闸门目前只支持 long（拦新开多）")
+    st["lending_gate_stale_hours"] = float(st.get("lending_gate_stale_hours", 6.0) or 6.0)
+    if not 1 <= st["lending_gate_stale_hours"] <= 72:
+        raise ValueError("借贷利率过期阈值需在 1–72 小时之间")
     st["staged_entry_f1"] = float(st.get("staged_entry_f1", 0) or 0)
     if st["staged_entry_f1"] and not 0.05 <= st["staged_entry_f1"] <= 0.95:
         raise ValueError("分批入场首笔比例需为 0（关闭）或 0.05–0.95")
