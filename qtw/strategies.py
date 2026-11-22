@@ -243,7 +243,7 @@ def sig_capitulation_dvol(ind, idx, syms, p):
 
 
 def sig_cny_fix_basket(ind, idx, syms, p):
-    """#15 人民币中间价篮子走弱冲击（短线，1h）：官方人民币汇率中间价（09:15 北京 = 01:15 UTC 公布）美元 / 欧元 / 日元三币
+    """#16 人民币中间价篮子走弱冲击（短线，1h）：官方人民币汇率中间价（09:15 北京 = 01:15 UTC 公布）美元 / 欧元 / 日元三币
     Δln 均值（正 = 人民币对中间价篮子走弱）对前 L 个公布日的稳健 z ≥ k → 事件放在当天 01:00 UTC 那根 1h K 线（02:00 UTC 收盘时已公布），
     第 i+1 根开盘等权做多全部币，持有 H 根离场，持仓期内不重复触发。取不到官方中间价（离线 / 非时间索引）时不触发，绝不补造数据。
     测试可用 p["_fix_df"] 注入官方日表（date, usd100, eur100, jpy100）。"""
@@ -350,7 +350,7 @@ STRATEGIES: list[dict] = [
      "signal": sig_capitulation_dvol,
      "overrides": {"interval": "1h", "atr_stop_mult": 50.0, "name_vol_target": 0.0, "slow_ma": 150},
      "risk_overrides": {"max_weight_per_name": 0.0625, "max_risk_per_trade": 0.05}},
-    {"id": "cny_fix_basket_1h", "no": 15, "name": "人民币中间价篮子走弱冲击做多（短线 1h，弱观察）", "interval": "1h", "kind": "短线·事件",
+    {"id": "cny_fix_basket_1h", "no": 16, "name": "人民币中间价篮子走弱冲击做多（短线 1h，弱观察）", "interval": "1h", "kind": "短线·事件",
      "desc": "1 小时 K 线：官方人民币汇率中间价（09:15 北京 = 01:15 UTC）美元 / 欧元 / 日元三币日变动均值对前 120 个公布日稳健 z ≥ 2"
              "（人民币对中间价篮子异常走弱）→ 当天 02:00 UTC 开盘等权做多全部币，持有 24 小时离场，持仓期内不重复触发。"
              "单币名义上限 6.25% 权益（8 币合计约 0.5×），50×ATR 灾难线。OKX 官方 1h 永续 train / test / 2026-03 后 +57 / +78 / +157 bps/笔"

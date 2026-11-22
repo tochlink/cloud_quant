@@ -4,7 +4,7 @@
 单次跨度 ≤ 366 天；页面注明「数据来源于中国外汇交易中心」），解析表格里 日期 / 美元 / 欧元 / 日元（每 100 外币折合人民币）。
 缓存：data/cny_fix_daily.csv（不入库），只追加官方真实返回值；拉取失败时返回已有缓存，绝不补造 / 插值。
 
-#15 用法（qtw.strategies.sig_cny_fix_basket）：bskt_t = 1e4 × mean(Δln 美元, Δln 欧元, Δln 日元 中间价)（正 = 人民币对三币中间价篮子走弱），
+#16 用法（qtw.strategies.sig_cny_fix_basket）：bskt_t = 1e4 × mean(Δln 美元, Δln 欧元, Δln 日元 中间价)（正 = 人民币对三币中间价篮子走弱），
 对前 L 个公布日做稳健 z（中位数 / 1.4826×MAD）；z ≥ k 的公布日，把事件放在当天 01:00 UTC 那根 1h K 线（该根 02:00 UTC 收盘时中间价已公布）。
 """
 from __future__ import annotations

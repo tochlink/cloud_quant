@@ -1,6 +1,6 @@
-# 短线新族：人民币汇率中间价（央行授权外汇交易中心 09:15 北京 = 01:15 UTC 公布）冲击 1h 事件 → 8 币永续篮子（2026-11-22 ~10:56–11:30 PST，研究 + 影子子账本 #15；默认不改）
+# 短线新族：人民币汇率中间价（央行授权外汇交易中心 09:15 北京 = 01:15 UTC 公布）冲击 1h 事件 → 8 币永续篮子（2026-11-22 ~10:56–11:30 PST，研究 + 影子子账本 #16；默认不改）
 
-状态：事先首选格**否决**；事先登记的备选格 `bskt L120 k2 weak mom H24` **弱观察**，已作为影子子账本 #15 `cny_fix_basket_1h`（只纸面）上线做真实前向检验。默认 #1 与已保存参数不变；live 关；8787/8790/8791 未触碰。
+状态：事先首选格**否决**；事先登记的备选格 `bskt L120 k2 weak mom H24` **弱观察**，已作为影子子账本 #16 `cny_fix_basket_1h`（只纸面）上线做真实前向检验。默认 #1 与已保存参数不变；live 关；8787/8790/8791 未触碰。
 
 ## 选题与查重
 
@@ -41,8 +41,8 @@
 
 - 先验（美元单币）**否决**；美元单币族不再作为首选。
 - 备选（三币篮子走弱 → 做多 24h）**弱观察**：8/8、未调参 new8 同向、邻域九格稳定、全网格 usable 数与洗牌分位均胜安慰剂、post 对基线逐月 6/7；但所有段 t < 2、test 中位为负、2022 年为负、post 仅 10 笔且靠两笔大赚，达不到强观察 / 改默认门槛。
-- 实现（只纸面）：`qtw/cnyfix.py`（外管局官方查询页拉取 + 缓存 `data/cny_fix_daily.csv`，公布窗 01:10–04:00 UTC 每 10 分钟、其余每 3 小时查一次；失败只用已有真实数据，绝不补造）+ `qtw/strategies.py` 新增 #15 `cny_fix_basket_1h`（`sig_cny_fix_basket`，fix_window 120 / fix_z 2.0 / hold 24；单币 6.25% 上限、50×ATR 灾难线，与 #13/#14 同口径；VERDICTS「观察」→ 自动进影子子账本）。逐事件与研究对拍：OKX 1h 2022-01→2026-11 共 63 次入场时刻与研究完全一致。测试 `tests/test_cny_fix_basket.py`（官方真实片段 `tests/data/cny_fix_official_2025-06_2026-11.csv`），全套 506 通过。
-- 纸面：新开 8797 `paper-cnyfix`（默认 #1 书 + 全部影子子账本含 #15，live 关）立即前向交易；8788–8796 需重启才会加载 #15。预期：每月约 0–3 次事件，+57…+157 bps/笔（子账本 0.5× 名义 ≈ +0.3…+0.8%/笔），胜率约 50%。
+- 实现（只纸面）：`qtw/cnyfix.py`（外管局官方查询页拉取 + 缓存 `data/cny_fix_daily.csv`，公布窗 01:10–04:00 UTC 每 10 分钟、其余每 3 小时查一次；失败只用已有真实数据，绝不补造）+ `qtw/strategies.py` 新增 #16 `cny_fix_basket_1h`（`sig_cny_fix_basket`，fix_window 120 / fix_z 2.0 / hold 24；单币 6.25% 上限、50×ATR 灾难线，与 #13/#14 同口径；VERDICTS「观察」→ 自动进影子子账本；编号 #15 已被币安下架公告影子账本 `binance_delist_short_1h` 占用，故本策略为 #16）。逐事件与研究对拍：OKX 1h 2022-01→2026-11 共 63 次入场时刻与研究完全一致。测试 `tests/test_cny_fix_basket.py`（官方真实片段 `tests/data/cny_fix_official_2025-06_2026-11.csv`），全套 506 通过。
+- 纸面：新开 8797 `paper-cnyfix`（默认 #1 书 + 全部影子子账本含 #16，live 关）立即前向交易；8788–8796 需重启才会加载 #16。预期：每月约 0–3 次事件，+57…+157 bps/笔（子账本 0.5× 名义 ≈ +0.3…+0.8%/笔），胜率约 50%。
 
 ## 勿重测（never retest by…）
 
@@ -50,11 +50,11 @@
 - 换序列：美元单币、三币以外的篮子（CFETS 人民币指数、SDR、BIS 篮子、加港元 / 英镑等）、中间价对前日 16:30 收盘价 / 23:30 夜盘价的偏离（逆周期因子代理）、CNH 离岸价、中间价与市场预测值之差；
 - 换时点（09:30 开盘、16:30 收盘、夜盘）或改用日频 / 4h 闸门（4h 单一汇率趋势闸门已另条否决）；
 - 换成其它央行定盘（港元 / 新台币 / 韩元 / 印度卢比参考汇率、欧央行参考汇率）重开；
-- 只能用**前向纸面账本**（#15 影子子账本、8797）积累的新事件复核本格。
+- 只能用**前向纸面账本**（#16 影子子账本、8797）积累的新事件复核本格。
 
 ## 文件
 
 - CSV（不入库）：`output/research_pboc_cny_fixing_shock_event_1h.csv`、`output/research_pboc_cny_fixing_shock_event_1h_supp.csv`、官方序列 `output/cny_central_parity_official_daily.csv`。
 - 脚本：`scratch/pbocfix1h/{fetch,parse_xlsx,build,prereg,run,analyze,supp,baseline,plog}.py`、`PRE_REGISTER.json`、`analyze_wide.csv`、`prior_events.csv`（研究脚本不推送）。
-- 代码：`qtw/cnyfix.py`、`qtw/strategies.py`（#15）、`tests/test_cny_fix_basket.py`、`tests/data/cny_fix_official_2025-06_2026-11.csv`。
+- 代码：`qtw/cnyfix.py`、`qtw/strategies.py`（#16）、`tests/test_cny_fix_basket.py`、`tests/data/cny_fix_official_2025-06_2026-11.csv`。
 - 下一轮（长线）：Baker Hughes 官方北美钻机数（rigcount.bakerhughes.com 周五发布，美国石油 + 天然气钻机总数）趋势 / 同比 → 4h 默认书入场闸门（多次列为指针、尚未测；先查重）。

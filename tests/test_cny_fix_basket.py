@@ -1,4 +1,4 @@
-"""#15 人民币中间价篮子走弱冲击：用官方中间价真实片段（国家外汇管理局查询页 / 历史工作簿，来源外汇交易中心）检验事件时点与持有逻辑。"""
+"""#16 人民币中间价篮子走弱冲击：用官方中间价真实片段（国家外汇管理局查询页 / 历史工作簿，来源外汇交易中心）检验事件时点与持有逻辑。"""
 from pathlib import Path
 
 import numpy as np
@@ -61,7 +61,7 @@ def test_parse_official_page_table():
 
 def test_registered_as_watch_event_and_default_unchanged():
     spec = R.BY_ID["cny_fix_basket_1h"]
-    assert spec["no"] == 15 and R.is_event("cny_fix_basket_1h")
+    assert spec["no"] == 16 and R.is_event("cny_fix_basket_1h")
     assert R.VERDICTS["cny_fix_basket_1h"]["status"] == "观察"
     c = R.strategy_cfg(S.DEFAULTS, "cny_fix_basket_1h")
     assert c["strategy"]["interval"] == "1h" and c["risk"]["max_weight_per_name"] == 0.0625
