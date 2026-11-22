@@ -242,6 +242,37 @@ def sig_capitulation_dvol(ind, idx, syms, p):
     return {s: st.copy() for s in syms}
 
 
+def sig_cny_fix_basket(ind, idx, syms, p):
+    """#15 人民币中间价篮子走弱冲击（短线，1h）：官方人民币汇率中间价（09:15 北京 = 01:15 UTC 公布）美元 / 欧元 / 日元三币
+    Δln 均值（正 = 人民币对中间价篮子走弱）对前 L 个公布日的稳健 z ≥ k → 事件放在当天 01:00 UTC 那根 1h K 线（02:00 UTC 收盘时已公布），
+    第 i+1 根开盘等权做多全部币，持有 H 根离场，持仓期内不重复触发。取不到官方中间价（离线 / 非时间索引）时不触发，绝不补造数据。
+    测试可用 p["_fix_df"] 注入官方日表（date, usd100, eur100, jpy100）。"""
+    from . import cnyfix as CF
+    from . import dvol as DV
+    L, k, H = int(p["fix_window"]), float(p["fix_z"]), int(p["hold"])
+    n = len(idx)
+    st = np.zeros(n, dtype=int)
+    ms = DV.idx_to_ms(idx)
+    if ms is None or not n:
+        return {s: st.copy() for s in syms}
+    try:
+        df = p["_fix_df"] if "_fix_df" in p else CF.series(start_ms=int(ms[0]) - int(L * 1.6 + 30) * 86_400_000)
+        ev = CF.basket_events(df, L, k)
+    except Exception:
+        ev = None
+    if ev is None or not len(ev):
+        return {s: st.copy() for s in syms}
+    hit = np.isin(ms, ev.index.to_numpy(dtype="int64"))
+    i = 0
+    while i < n:
+        if hit[i]:
+            st[i:min(n, i + H)] = 1
+            i += H + 1  # 与研究一致：恰好在离场根（i+H）上的新事件不接力（研究要求下一事件 ≥ 入场 + H）
+        else:
+            i += 1
+    return {s: st.copy() for s in syms}
+
+
 # 每套策略对执行层（cfg.strategy）的覆盖：候选策略一律关闭 #1 专用的趋势过滤 / BTC 体制 / 确认根数（信号自带逻辑）
 _NEUTRAL = {"trend_ma": 0, "btc_regime_ma": 0, "confirm_bars": 1, "short_breaker_bars": 0, "chop_n": 0, "elder_short_gate_n": 0}
 
@@ -319,6 +350,15 @@ STRATEGIES: list[dict] = [
      "signal": sig_capitulation_dvol,
      "overrides": {"interval": "1h", "atr_stop_mult": 50.0, "name_vol_target": 0.0, "slow_ma": 150},
      "risk_overrides": {"max_weight_per_name": 0.0625, "max_risk_per_trade": 0.05}},
+    {"id": "cny_fix_basket_1h", "no": 15, "name": "人民币中间价篮子走弱冲击做多（短线 1h，弱观察）", "interval": "1h", "kind": "短线·事件",
+     "desc": "1 小时 K 线：官方人民币汇率中间价（09:15 北京 = 01:15 UTC）美元 / 欧元 / 日元三币日变动均值对前 120 个公布日稳健 z ≥ 2"
+             "（人民币对中间价篮子异常走弱）→ 当天 02:00 UTC 开盘等权做多全部币，持有 24 小时离场，持仓期内不重复触发。"
+             "单币名义上限 6.25% 权益（8 币合计约 0.5×），50×ATR 灾难线。OKX 官方 1h 永续 train / test / 2026-03 后 +57 / +78 / +157 bps/笔"
+             "（38 / 15 / 10 次，真实费 + 资金费），未调参 new8 +72 / +53 / +116，Gate 2026-03 后 +158；t 均 < 2、post 逐月 3/7，弱观察，只做纸面前向检验"
+             "（docs/pboc_cny_fixing_shock_event_1h.md）。",
+     "params": {"fix_window": 120, "fix_z": 2.0, "hold": 24}, "signal": sig_cny_fix_basket,
+     "overrides": {"interval": "1h", "atr_stop_mult": 50.0, "name_vol_target": 0.0, "slow_ma": 150},
+     "risk_overrides": {"max_weight_per_name": 0.0625, "max_risk_per_trade": 0.05}},
 ]
 BY_ID = {s["id"]: s for s in STRATEGIES}
 
@@ -381,6 +421,15 @@ VERDICTS.setdefault("capitulation_dvol_1h", {"status": "观察", "reason": ("强
     "post 逐月 4 好 / 3 小亏 / 2 空仓。叠加 #1（w 0.5）三段 Sharpe 0.72 / 1.48 / 2.28 → 1.47 / 2.15 / 2.66，压力费同向。"
     "进影子子账本做真实纸面前向检验（DVOL 实时取 Deribit 公共接口）。"
     "CSV：output/research_dvol_capitulation_combined_subbook_1h.csv、output/research_dvol_cap_overlay_on_4h_book.csv。")})
+
+
+VERDICTS.setdefault("cny_fix_basket_1h", {"status": "观察", "reason": ("弱观察（短线，纸面前向检验）。"
+    "2026-11-22 研究（scratch/pbocfix1h）：官方人民币中间价（国家外汇管理局官方查询页 / 历史工作簿，来源外汇交易中心）2019-01 → 2026-11 共 1,913 个公布日；"
+    "324 格事先登记。事先首选 美元单币 L120 k2 走弱→做多 H24 深历史 −30 bps/笔、post 仅 3 次 → 否决；事先备选 三币篮子 L120 k2 走弱→做多 H24 "
+    "8/8 为正：OKX train / test / post +57 / +78 / +157 bps/笔（38 / 15 / 10 次），new8 +72 / +53 / +116，Gate post +158；L×k 九格全部 8/8；"
+    "全网格 8/8 可用格 22 个 vs 平移 ±5/±20/±60 日安慰剂 2–11 个；随机日安慰剂分位 train 0.82 / test 0.89 / post 1.00。"
+    "但 t 值都 < 2（0.8 / 0.7 / 1.7）、2022 年 −86 bps、post 逐月 3/7 正且靠 8/20、9/3 两笔，故只进影子子账本做真实纸面前向检验，不改默认。"
+    "CSV：output/research_pboc_cny_fixing_shock_event_1h.csv、output/research_pboc_cny_fixing_shock_event_1h_supp.csv。")})
 
 
 def strategy_cfg(cfg: dict, sid: str) -> dict:
