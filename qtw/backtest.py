@@ -126,7 +126,8 @@ def _trade_quality(closed) -> dict:
 
 def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict | None = None, signals=None,
                  funding: dict | None = None, btc_spot: pd.DataFrame | None = None, schedule: list | None = None,
-                 lending_rates: tuple | None = None, custody_data: tuple | None = None) -> dict:
+                 lending_rates: tuple | None = None, custody_data: tuple | None = None,
+                 cryptoeq_data: tuple | None = None) -> dict:
     """signals：可选，多策略注册表（qtw.strategies）用的信号函数 f(ind, idx, syms) -> {symbol: 逐根 {-1,0,1}}，
     替换默认双均线合成信号；执行、止损、仓位、费用与默认完全同一套。None = 默认策略 #1（逐字节不变）。
     btc_spot：可选，BTCUSDT 现货 K 线，只供 BTC 体制过滤（btc_regime_ma）使用、不参与交易。标的里没有 BTCUSDT 时，
@@ -258,6 +259,18 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         CGB, _cz = CUSTODY.block_mask(st, _om, _co, _cv)
         cg_info.update(blocked_bars=int(CGB.sum()), nan_bars=int(np.isnan(_cz).sum()), bars=int(len(idx)))
         LGB = LGB | CGB
+    # 可选加密股相对强弱闸门（cryptoeq_gate_enabled，默认关）：与引擎同一函数 cryptoeq.block_mask，第 j 根（信号 K 线）开盘时间上
+    # 已知的最新交易日 chg = ln(MSTR/BTC) − n 个交易日前 ≤ 0 时拦新开多；并入 LGB（同口径：第 i 根开盘入场用 LGB[i−1]）。
+    # BTC 取标的里的 BTCUSDT 现货（否则 btc_spot）的 20:00 UTC 收盘；cryptoeq_data = (交易日毫秒, 收盘) 可注入真实历史（研究 / 测试）。
+    ce_info = {"enabled": bool(st.get("cryptoeq_gate_enabled", False))}
+    if ce_info["enabled"]:
+        from . import cryptoeq as CRYPTOEQ
+        _om = pd.DatetimeIndex(pd.to_datetime(idx, utc=True)).as_unit("ms").asi8
+        _bdf = spot_d["BTCUSDT"] if "BTCUSDT" in spot_d else btc_spot
+        CEB, _cc = CRYPTOEQ.block_mask(st, _om, _bdf, cryptoeq_data)
+        ce_info.update(blocked_bars=int(CEB.sum()), nan_bars=int(np.isnan(_cc).sum()), bars=int(len(idx)),
+                       btc_source="symbols" if "BTCUSDT" in spot_d else ("btc_spot" if btc_spot is not None else "missing"))
+        LGB = LGB | CEB
     MK = {"long": "perp" if t_mode == "perp_both" else "spot", "short": "perp"}
     # 可选动态多空风险平价 up（ls_parity_cap，0 = 关闭）：按上一根已收盘合成信号把较小一侧信号书的单币风险 / 权重乘数放大到与较大一侧相同（≤ cap 倍）
     lsp_c = float(st.get("ls_parity_cap", 0) or 0)
@@ -762,6 +775,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "btc_regime_source": rg_source,
         "lending_gate": lg_info,
         "custody_gate": cg_info,
+        "cryptoeq_gate": ce_info,
         "btc_regime_symbol": rg_sym,
         "spot_signal_long_bars": int(sum((PX["spot"]["signal"][s][warm:] == 1).sum() for s in syms)),
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),

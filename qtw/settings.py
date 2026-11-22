@@ -126,6 +126,15 @@ DEFAULTS: dict[str, Any] = {
         "custody_gate_h": 4,
         "custody_gate_k": 1.0,
         "custody_gate_stale_days": 21.0,
+        # 2026-11-22：可选加密股相对强弱闸门（默认关闭；回测与模拟盘 / 实盘同一函数 qtw/cryptoeq.block_mask）。
+        # rs = ln(Nasdaq 官方 MSTR 日收盘 / BTCUSDT 现货当日 20:00 UTC 收盘)，chg = rs − n 个交易日前；chg ≤ 0（美股资金减配加密）时不新开多。
+        # 可用 = 交易日 + 1 天 00:00 UTC。研究（scratch/cryptoeq4h/run.py、output/research_crypto_equity_relstrength_gate_4h.csv、
+        # docs/crypto_equity_relstrength_gate_4h.md）：预注册先验 MSTR n20 long_off 9/9（深未见 / 调参三组都更好、n10/15 邻域同为 9/9、
+        # 安慰剂 ≤ 2/9），但 2026-03 后几乎不拦（逐月 2/1）→ 强观察，只做纸面前向检验（8795 paper-cryptoeq）。环境变量 QTW_CRYPTOEQ_GATE=1 强制开启。
+        "cryptoeq_gate_enabled": False,
+        "cryptoeq_gate_symbol": "MSTR",
+        "cryptoeq_gate_n": 20,
+        "cryptoeq_gate_stale_days": 7.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -275,6 +284,8 @@ def load() -> dict:
             out["strategy"]["lending_gate_enabled"] = True  # 纸面前向检验实例（paper-lendgate）用环境变量强制开启借贷利率闸门
         if str(os.environ.get("QTW_CUSTODY_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
             out["strategy"]["custody_gate_enabled"] = True  # 纸面前向检验实例（paper-custody）用环境变量强制开启 H.4.1 托管闸门
+        if str(os.environ.get("QTW_CRYPTOEQ_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
+            out["strategy"]["cryptoeq_gate_enabled"] = True  # 纸面前向检验实例（paper-cryptoeq）用环境变量强制开启加密股相对强弱闸门
         out["strategy"]["fast_exit_tf"] = "off"  # 已存的旧值（5m / 10m / 1d）也不生效，见 validate() 注释
         for k in ("live_enabled", "okx_demo", "gate_testnet"):  # 旧存档里的字符串 "false" 不能被当成 True（实盘闸门 / 模拟盘开关）
             out["live"][k] = _as_bool(out["live"].get(k, DEFAULTS["live"][k]))
@@ -411,6 +422,16 @@ def validate(s: dict) -> dict:
     st["custody_gate_stale_days"] = float(st.get("custody_gate_stale_days", 21.0) or 21.0)
     if not 7 <= st["custody_gate_stale_days"] <= 60:
         raise ValueError("托管数据过期阈值需在 7–60 天之间")
+    st["cryptoeq_gate_enabled"] = _as_bool(st.get("cryptoeq_gate_enabled", False))
+    st["cryptoeq_gate_symbol"] = str(st.get("cryptoeq_gate_symbol") or "MSTR").upper()
+    if st["cryptoeq_gate_symbol"] not in ("MSTR", "COIN"):
+        raise ValueError("加密股闸门标的只支持 MSTR 或 COIN")
+    st["cryptoeq_gate_n"] = int(st.get("cryptoeq_gate_n", 20) or 20)
+    if not 5 <= st["cryptoeq_gate_n"] <= 120:
+        raise ValueError("加密股闸门回看交易日 n 需在 5–120 之间")
+    st["cryptoeq_gate_stale_days"] = float(st.get("cryptoeq_gate_stale_days", 7.0) or 7.0)
+    if not 4 <= st["cryptoeq_gate_stale_days"] <= 30:
+        raise ValueError("加密股数据过期阈值需在 4–30 天之间")
     st["staged_entry_f1"] = float(st.get("staged_entry_f1", 0) or 0)
     if st["staged_entry_f1"] and not 0.05 <= st["staged_entry_f1"] <= 0.95:
         raise ValueError("分批入场首笔比例需为 0（关闭）或 0.05–0.95")
