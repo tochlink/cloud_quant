@@ -1,0 +1,21 @@
+<!-- Sidecar for docs/STRATEGY_FORMULAS.md (main file exceeds the GitHub connector 1MB push cap). -->
+
+## 短线新族：官方 WBTC 铸造 / 赎回（Mint / Burn）1h 事件 → 8 币永续篮子顺势 / 逆势（1h，持有 12–48h，2026-11-22 ~07:45 PST，研究，不改默认；否决）
+
+- 查重：`docs/STRATEGY_FORMULAS.md`、全部 `docs/*.md` 侧文档、`output/research_*.csv`（1,176 个）、`/workspace/scratch` 目录与记忆检索 WBTC / wrapped bitcoin / `0x2260FAC5` / 铸造 / 赎回 / mint / burn：只有已否决的 **WBTC 供给 4h 体制闸门**（`research_wbtc_supply_gate_4h.csv`，日度存量趋势 / z，勿以 n / z / 方向 / ln / cbBTC / tBTC / 流通量口径重测）。本条是不同的机制与周期：单个托管铸造 / 赎回**离散事件**（巨鲸把 BTC 包进 / 撤出以太坊 DeFi）的 1h 事件研究，持有 12–48h。也不是已否决的稳定币供给冲击 1h / 增速 4h（DefiLlama 日度发行量）、CEX 交易所流入流出、WETH9 / Lido / EigenLayer / CCTP / 跨链桥 / 闪电贷等 1h 突发、矿工 coinbase 花费、政府 BTC 流出。
+- 预注册：`scratch/wbtcev1h/PRE_REGISTER.json`（2026-11-22 07:40 PST，任何 PnL 之前锁定，90 格，sha256 `aa6755ee6be69476…`）。锁定前已知（并写入预注册）：2024 年后铸造几乎消失（test 10 次、post 3 次且金额为 0；本轮扩展扫描又多 2 笔 11 月铸造），赎回 test 80 次 / post 43 次、金额变小——铸造格预期在 test / post 不可用，照样保留，不在看结果后增删或翻向。
+- 数据（只用官方以太坊主网，不用聚合器、不回补）：WBTC 合约 `0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599` 的 `Mint(to, amount)` / `Burn(burner, value)` 日志，从合约首个有代码区块 6,766,284 扫到 26,471,601（2026-11-22 15:37 UTC），共 1,259 条（铸造 747 / 赎回 512）；由日志重建的总供给 11,613,228,357,262 wei 与该区块 `eth_call totalSupply()` **逐 wei 相等**。按官方区块时间汇总成 UTC 小时：mint_btc、burn_btc、net = mint − burn，70,007 根完整小时 2018-11-27 16:00 → 2026-11-22 14:00 UTC，缺口 0，无事件小时为真实 0。序列 `scratch/wbtcev1h/wbtc_mint_burn_official_1h.csv`。
+- 交易数据：OKX 官方 1h USDT 永续（d8 2022-01-29 起；未调参 new8：LINK / LTC / DOT / TRX / BCH / ATOM / NEAR / UNI）+ OKX 官方深历史资金费；Gate 官方 1h 永续（2025-09-24 起）+ Gate 官方资金费。成本：真实 taker 5.1 bps / 边，压力 15.1 bps / 边，持仓期资金费照扣。
+- 公式：序列小时 h 整体后移 1h（区块时间容差），在 h+1 的永续 K 线上判定，下一根 1h 开盘（h+2）入场，持有 H 根后开盘平；同一格持仓未平不重复入场。阈值：`absS` = 该小时金额 ≥ S BTC（S ∈ {100, 500}；net 用 |net|）；`qP` = 该小时金额 > 0 且 ≥ 过去 8,760h（严格早于 h）非零小时金额的 P 分位（P ∈ {50, 75, 90}，至少 10 个先前非零小时）。方向：mom = 铸造做多 / 赎回做空 / net 取 sign(net)；contra 反向。网格：series {burn, mint, net} × 阈值 5 × mode 2 × H {12, 24, 48} = 90 格。分段：train（深层未见）2022-02-15→2024-10-21、test →2026-03-05、post →今、Gate 窗 2025-09-28→今。同脚本基线：同期每 H 根无条件持有同向篮子。安慰剂：方向序列平移 ±720h、±168h。
+- 经济先验（锁定）：大额 WBTC 赎回 = 巨鲸把 BTC 抵押品撤出 DeFi（去杠杆、常转去 CEX 卖）→ 次日看空 → `burn_q75_mom_H24`；回退 `net_q75_mom_H48`。
+- 结果（`output/research_wbtc_mint_burn_event_1h.csv`，6,552 行；每事件净 bps，真实费）：
+  - **先验 `burn_q75_mom_H24`：0/8，全段为负**。OKX d8 train −88.4（t −1.58，n 54）/ test −73.0（n 15）/ post −36.1（n 5）；new8 −48.2 / −52.3 / −14.9；Gate post −36.3（n 5）、Gate 窗 −79.4（n 10）；压力费更差（OKX train −108.4）。
+  - **回退 `net_q75_mom_H48`：0/8**。OKX d8 −112.3（t −1.65，n 53）/ −115.0（n 16）/ −88.2（n 6）；new8 −95.8 / −72.9 / −146.6；Gate post −89.1、Gate 窗 −218.5。
+  - 8/8 格 9 个，**全是非先验 contra（赎回后做多）**，且 OKX d8 post 只有 2–6 笔（预注册要求 ≥ 8）→ **可用 8/8 = 0**。最好的 `burn_q75_contra_H48`：OKX d8 train +159.5（t 2.1，n 45，月份 13/18）/ test +176.5（t 1.3，n 14）/ post **+4.0**（t 0.0，n 5，月份 1/3）；new8 +155.9 / +135.1 / +76.3；Gate test +462（n 4）、post +4.9（n 5）；压力费 post −16。`burn_abs500_contra_H48`：OKX +115.4（t 1.7，n 54）/ +184.8（n 13）/ +183.9（**n 2**），Gate post +185.7（n 2）——方向一致但 post 实际只有 2 个事件，无法验证。
+  - 邻域：q75 contra H24 降为 +68 / +53 / +16（post t 0.2）；q90 contra H48 train +23.8 / test −13.1 / post 0 笔；q50 contra H48 +48.2 / −3.2 / −36.4（n 71 / 27 / 10）——阈值一放宽 post 即转负，一收紧就没有样本。
+  - 安慰剂：8/8 格数 真实 9 vs +720h 0、−720h 1、+168h 0、−168h 0（真实略多，但都来自 post 样本 2–6 笔的格）；`burn_q75_contra_H48` 的 +168h 平移 post +93（n 5）高于真实 +4。
+  - 混淆检查：`burn_q75` 事件前 24h 篮子收益均值 −30.7 bps、中位 −21.2、为负比例 51%——contra 的正值不是单纯「跌后买」，但也无法在 post 上复核。
+  - 基线（同脚本，OKX d8 无条件 H48）：做多 train −0.6 / test −2.4 / post −27.4；做空 −19.8 / −18.0 / +7.0；事件格的 post 优势不显著。
+- 结论：**否决**，不实现、不进观察名单、不加纸面盘 / shadow、不改默认、无代码改动，仅文档。先验（赎回看空）在深层未见、test、post 与两家交易所全部为负；回退同样全负。反向的「大额赎回后做多 48h」在 2022–2026-03 有每笔 +100–180 bps 的结构性大边际，但 2024 年托管变更后 WBTC 大额赎回 / 铸造几乎消失，post 段只有 2–5 个事件、t≈0，事件源本身在衰竭，无法达到强观察门槛；也不起实时记录器（日志可随时从链上重取）。
+- **勿以**同一机制换阈值（absS / 分位）、H、方向（mom↔contra）、series（burn / mint / net）、改滞后或改用日频，或换 cbBTC / tBTC / 其他包装 BTC（renBTC、BTCB、Solana / Arbitrum WBTC）铸造赎回、或改用托管商 / 商户地址标签再测本族。
+- CSV（不入库）：`output/research_wbtc_mint_burn_event_1h.csv`；官方事件与小时序列 `scratch/wbtcev1h/{wbtc_mint_burn_official_events.json, wbtc_mint_burn_official_1h.csv}`；脚本 `scratch/wbtcev1h/{fetch_ext,build,run,analyze}.py`、`PRE_REGISTER.json`（研究脚本未推送）。
