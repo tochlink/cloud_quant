@@ -135,6 +135,15 @@ DEFAULTS: dict[str, Any] = {
         "cryptoeq_gate_symbol": "MSTR",
         "cryptoeq_gate_n": 20,
         "cryptoeq_gate_stale_days": 7.0,
+        # 2026-11-22：可选美元广义指数做空闸门（默认关闭；回测与模拟盘 / 实盘同一函数 qtw/usd_gate.block_mask）。
+        # FRED DTWEXBGS（美联储 H.10 广义美元指数，观测日 + 10 天 00:00 UTC 才算已知）；最新已知值 ≤ 最近 n 个观测均值（美元走弱）时不新开空。
+        # 研究（scratch/macro/run.py、output/research_us_macro_risk_regime_gate_4h.csv、docs/STRATEGY_FORMULAS.md 2026-11-14 宏观节）：
+        # N20 short_on 8/9，2026-03 后 OKX d8 +72.6% vs +59.9%、Gate +73.3% vs +60.3%（逐月 5/3），但 d7 深历史输、对发布滞后敏感
+        # → 观察，只做纸面前向检验（8796 paper-usdgate）。环境变量 QTW_USD_GATE=1 强制开启。
+        "usd_gate_enabled": False,
+        "usd_gate_n": 20,
+        "usd_gate_lag_days": 10,
+        "usd_gate_stale_days": 14.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -286,6 +295,8 @@ def load() -> dict:
             out["strategy"]["custody_gate_enabled"] = True  # 纸面前向检验实例（paper-custody）用环境变量强制开启 H.4.1 托管闸门
         if str(os.environ.get("QTW_CRYPTOEQ_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
             out["strategy"]["cryptoeq_gate_enabled"] = True  # 纸面前向检验实例（paper-cryptoeq）用环境变量强制开启加密股相对强弱闸门
+        if str(os.environ.get("QTW_USD_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
+            out["strategy"]["usd_gate_enabled"] = True  # 纸面前向检验实例（paper-usdgate）用环境变量强制开启美元广义指数做空闸门
         out["strategy"]["fast_exit_tf"] = "off"  # 已存的旧值（5m / 10m / 1d）也不生效，见 validate() 注释
         for k in ("live_enabled", "okx_demo", "gate_testnet"):  # 旧存档里的字符串 "false" 不能被当成 True（实盘闸门 / 模拟盘开关）
             out["live"][k] = _as_bool(out["live"].get(k, DEFAULTS["live"][k]))
@@ -432,6 +443,16 @@ def validate(s: dict) -> dict:
     st["cryptoeq_gate_stale_days"] = float(st.get("cryptoeq_gate_stale_days", 7.0) or 7.0)
     if not 4 <= st["cryptoeq_gate_stale_days"] <= 30:
         raise ValueError("加密股数据过期阈值需在 4–30 天之间")
+    st["usd_gate_enabled"] = _as_bool(st.get("usd_gate_enabled", False))
+    st["usd_gate_n"] = int(st.get("usd_gate_n", 20) or 20)
+    if not 5 <= st["usd_gate_n"] <= 200:
+        raise ValueError("美元闸门均线观测数 n 需在 5–200 之间")
+    st["usd_gate_lag_days"] = int(st.get("usd_gate_lag_days", 10) or 10)
+    if not 3 <= st["usd_gate_lag_days"] <= 30:
+        raise ValueError("美元闸门发布滞后需在 3–30 天之间")
+    st["usd_gate_stale_days"] = float(st.get("usd_gate_stale_days", 14.0) or 14.0)
+    if not 5 <= st["usd_gate_stale_days"] <= 60:
+        raise ValueError("美元数据过期阈值需在 5–60 天之间")
     st["staged_entry_f1"] = float(st.get("staged_entry_f1", 0) or 0)
     if st["staged_entry_f1"] and not 0.05 <= st["staged_entry_f1"] <= 0.95:
         raise ValueError("分批入场首笔比例需为 0（关闭）或 0.05–0.95")

@@ -127,7 +127,7 @@ def _trade_quality(closed) -> dict:
 def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict | None = None, signals=None,
                  funding: dict | None = None, btc_spot: pd.DataFrame | None = None, schedule: list | None = None,
                  lending_rates: tuple | None = None, custody_data: tuple | None = None,
-                 cryptoeq_data: tuple | None = None) -> dict:
+                 cryptoeq_data: tuple | None = None, usd_data: tuple | None = None) -> dict:
     """signals：可选，多策略注册表（qtw.strategies）用的信号函数 f(ind, idx, syms) -> {symbol: 逐根 {-1,0,1}}，
     替换默认双均线合成信号；执行、止损、仓位、费用与默认完全同一套。None = 默认策略 #1（逐字节不变）。
     btc_spot：可选，BTCUSDT 现货 K 线，只供 BTC 体制过滤（btc_regime_ma）使用、不参与交易。标的里没有 BTCUSDT 时，
@@ -271,6 +271,17 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         ce_info.update(blocked_bars=int(CEB.sum()), nan_bars=int(np.isnan(_cc).sum()), bars=int(len(idx)),
                        btc_source="symbols" if "BTCUSDT" in spot_d else ("btc_spot" if btc_spot is not None else "missing"))
         LGB = LGB | CEB
+    # 可选美元广义指数做空闸门（usd_gate_enabled，默认关）：与引擎同一函数 usd_gate.block_mask，第 j 根（信号 K 线）开盘时间上
+    # 已知（观测日 + lag 天）的最新 DTWEXBGS ≤ 最近 n 个观测均值时拦新开空；并入 DBS（同口径：第 i 根开盘入场用 DBS[i−1]，含反手）。
+    # usd_data = (观测日毫秒, 值) 可注入真实历史（研究 / 测试）；否则读 / 刷新官方缓存，取不到时不拦（失败开放）。
+    ug_info = {"enabled": bool(st.get("usd_gate_enabled", False))}
+    if ug_info["enabled"]:
+        from . import usd_gate as USDG
+        _om = pd.DatetimeIndex(pd.to_datetime(idx, utc=True)).as_unit("ms").asi8
+        _uo, _uv = (usd_data if usd_data is not None else (None, None))
+        UGB, _ud = USDG.block_mask(st, _om, _uo, _uv)
+        ug_info.update(blocked_bars=int(UGB.sum()), nan_bars=int(np.isnan(_ud).sum()), bars=int(len(idx)))
+        DBS = np.asarray(DBS, dtype=bool) | UGB
     MK = {"long": "perp" if t_mode == "perp_both" else "spot", "short": "perp"}
     # 可选动态多空风险平价 up（ls_parity_cap，0 = 关闭）：按上一根已收盘合成信号把较小一侧信号书的单币风险 / 权重乘数放大到与较大一侧相同（≤ cap 倍）
     lsp_c = float(st.get("ls_parity_cap", 0) or 0)
@@ -776,6 +787,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "lending_gate": lg_info,
         "custody_gate": cg_info,
         "cryptoeq_gate": ce_info,
+        "usd_gate": ug_info,
         "btc_regime_symbol": rg_sym,
         "spot_signal_long_bars": int(sum((PX["spot"]["signal"][s][warm:] == 1).sum() for s in syms)),
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
