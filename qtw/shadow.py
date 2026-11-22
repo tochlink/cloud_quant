@@ -78,6 +78,55 @@ def _save(sid: str) -> None:
     db.execute("INSERT OR REPLACE INTO shadow_books(sid,state,updated_at) VALUES(?,?,?)", (sid, json.dumps(b), iso(utcnow())))
 
 
+def _bar_td(sid: str) -> pd.Timedelta:
+    return pd.Timedelta(str(R.BY_ID[sid].get("interval") or "1h"))
+
+
+def _hold_bars(sid: str) -> int:
+    return int((R.BY_ID[sid].get("params") or {}).get("hold") or 0)
+
+
+def _ts(x) -> pd.Timestamp | None:
+    try:
+        t = pd.Timestamp(x)
+    except Exception:  # noqa: BLE001
+        return None
+    if pd.isna(t):
+        return None
+    return t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+
+
+def event_expiry(sid: str, p: dict) -> pd.Timestamp | None:
+    """事件型持仓的到期时刻（UTC）：固定为「原始触发 K 线开盘 + (H+1) 根」= 准时入场时刻 + H 根，与回测一致。
+    开仓时写入 expires_at 并随账本持久化（重启不重置）；旧持仓没有 expires_at 时按 signal_bar 推算，再没有就按 entry_time + H 根。
+    之后再出现的触发（同一事件持续 / 新事件）都不会延长这张单的持有期。"""
+    H = _hold_bars(sid)
+    if H <= 0:
+        return None
+    t = _ts(p.get("expires_at")) if p.get("expires_at") else None
+    if t is not None:
+        return t
+    bar = _bar_td(sid)
+    sb = _ts(p.get("signal_bar")) if p.get("signal_bar") else None
+    if sb is not None:
+        return sb + (H + 1) * bar
+    et = _ts(p.get("entry_time")) if p.get("entry_time") else None
+    return et + H * bar if et is not None else None
+
+
+def overdue(sid: str, b: dict, now: pd.Timestamp | None = None) -> list[str]:
+    """已过到期时刻仍未平的事件型持仓（用于启动时立刻补做一次离场决策）。"""
+    if not R.is_event(sid):
+        return []
+    now = now or pd.Timestamp.now(tz="UTC")
+    out = []
+    for s, p in b["positions"].items():
+        e = event_expiry(sid, p)
+        if e is not None and now >= e:
+            out.append(s)
+    return out
+
+
 def _fee(cfg, market):
     return S.taker_rate(cfg, market)
 
@@ -145,14 +194,30 @@ def decide(sid: str, data: dict, cfg: dict, when: str | None = None, rows: dict 
             return [f"行情源已切换到 {venue}，影子账本仍有 {b['venue']} 持仓，跳过"]
         b["venue"] = venue
         last = {m: {s: data[m][s].iloc[-1] for s in data[m]} for m in ("spot", "perp")}
+        # 最新已收盘 K 线的收盘时刻（事件型持仓按它判断是否到期，不看重算出来的信号是否还在）
+        now_close = _ts(idx[-1]) + _bar_td(sid) if event and idx is not None and len(idx) else None
         for s in list(b["positions"]):
             p = b["positions"][s]
             want = {1: "long", -1: "short"}.get(sig.get(s, 0), "flat")
-            if want != p["side"]:
-                px, src = _px(venue, s, p["market"], last[p["market"]][s]["close"])
-                pnl = _close(c, b, s, px, ("持有期满" if event else "信号转空仓") if want == "flat" else "信号反转", when, src)
-                ev.append(f"{s} 平{('多' if p['side'] == 'long' else '空')} @{px:.6g}")
-                rows["close"].append([s, _mk_cn(p["side"], p["market"], "平"), f"{p['entry']:.6g}", f"{px:.6g}", f"{pnl:+.2f}"])
+            if event:
+                exp = event_expiry(sid, p)
+                if exp is None or now_close is None:
+                    if want == p["side"]:
+                        continue
+                    reason = "持有期满"
+                elif now_close >= exp:
+                    late_h = (now_close - exp) / _bar_td(sid)
+                    reason = "持有期满" + (f"（到期 {iso(exp.to_pydatetime())}，晚 {late_h:.0f} 根离场）" if late_h >= 1 else "")
+                else:
+                    continue  # 未到期：持有到 entry+H，不因重算信号提前 / 推迟离场
+            elif want == p["side"]:
+                continue
+            else:
+                reason = "信号转空仓" if want == "flat" else "信号反转"
+            px, src = _px(venue, s, p["market"], last[p["market"]][s]["close"])
+            pnl = _close(c, b, s, px, reason, when, src)
+            ev.append(f"{s} 平{('多' if p['side'] == 'long' else '空')} @{px:.6g}")
+            rows["close"].append([s, _mk_cn(p["side"], p["market"], "平"), f"{p['entry']:.6g}", f"{px:.6g}", f"{pnl:+.2f}"])
         for s in list(b["blocked"]):
             if sig.get(s, 0) != b["blocked"][s]:
                 b["blocked"].pop(s)
@@ -167,6 +232,13 @@ def decide(sid: str, data: dict, cfg: dict, when: str | None = None, rows: dict 
             if event and age is not None and age > EVENT_GRACE_BARS:
                 stale[s] = age
                 continue
+            if event:
+                # 同一持有段内不重复触发：新触发 K 线必须不早于上一笔入场触发 K 线 + H 根（重启后同样成立，记录在账本里）
+                tb, prev = _ts(bar_t(age or 0)), _ts((b.get("last_trigger") or {}).get(s))
+                if tb is not None and prev is not None and tb < prev + _hold_bars(sid) * _bar_td(sid):
+                    continue
+                if tb is not None and now_close is not None and tb + (_hold_bars(sid) + 1) * _bar_td(sid) <= now_close:
+                    continue
             long_mkt = "perp" if rk.get("trade_mode") == "perp_both" else "spot"  # 跟随风控「交易方式」
             side, mkt = ("long", long_mkt) if g > 0 else ("short", "perp")
             if side == "long" and not rk["allow_spot_long"] or side == "short" and not rk["allow_perp_short"]:
@@ -200,6 +272,11 @@ def decide(sid: str, data: dict, cfg: dict, when: str | None = None, rows: dict 
             b["positions"][s] = {"symbol": s, "side": side, "market": mkt, "qty": n / px, "entry": px, "stop": z.stop_price,
                                  "notional": n, "fee_in": f, "entry_time": when, "entry_src": src, "venue": venue, "strategy": sid,
                                  "signal_bar": bar_t(age or 0), "late_bars": int(age or 0)}
+            if event:
+                tb = _ts(bar_t(age or 0))
+                if tb is not None:
+                    b["positions"][s]["expires_at"] = iso((tb + (_hold_bars(sid) + 1) * _bar_td(sid)).to_pydatetime())
+                    b.setdefault("last_trigger", {})[s] = iso(tb.to_pydatetime())
             b["marks"][s] = {"px": px, "t": when}
             ev.append(f"{s} {_mk_cn(side, mkt, '开')} {n:.1f}U @{px:.6g}")
             rows["open"].append([s, _mk_cn(side, mkt, "开"), f"{n:.1f}", f"{px:.6g}"])
@@ -290,7 +367,9 @@ def load_all() -> None:
     """启动时载入影子账本；从未决策过的账本在启动约 15 秒后（等 WS 行情就绪）按最新已收盘 K 线做首次决策（一次性，不是定时）。"""
     fresh = []
     for sid in active_ids():
-        if book(sid).get("last_decision") is None:
+        b = book(sid)
+        # 从未决策过的账本，或事件型持仓已过 entry+H 到期（停机 / 重启期间错过了离场）→ 启动后立刻补做一次决策
+        if b.get("last_decision") is None or overdue(sid, b):
             fresh.append(sid)
     if fresh and __import__("os").environ.get("QTW_FORBID_LIVE") != "1":
         def _boot():
