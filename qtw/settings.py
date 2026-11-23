@@ -144,6 +144,16 @@ DEFAULTS: dict[str, Any] = {
         "usd_gate_n": 20,
         "usd_gate_lag_days": 10,
         "usd_gate_stale_days": 14.0,
+        # 2026-11-22：可选日本财务省周度居民外债净买闸门（默认关闭；回测与模拟盘 / 实盘同一函数 qtw/mof_gate.block_mask）。
+        # MoF「对外及对内证券买卖（周度）」居民中长期外债净买，13 周和 > 其 26 周均值（外流加速 = risk-on）时不新开空，否则不新开多；
+        # 周末 + 6 天 00:00 UTC 才算已知。研究（scratch/mofsec4h/run.py、output/research_mof_resident_foreign_bond_flow_gate_4h.csv、
+        # docs/mof_resident_foreign_bond_flow_gate_4h.md）：预注册先验 b13_trend26_contra_both 9/9，2026-03 后 OKX d8 +70.7% vs +59.9%、
+        # Gate +71.2% vs +60.3%，但逐月只 4/3、5/2（< 6/9）、邻域深未见不稳 → 强观察，只做纸面前向检验（8798 paper-mofgate）。
+        # 环境变量 QTW_MOF_GATE=1 强制开启。
+        "mof_gate_enabled": False,
+        "mof_gate_sum_n": 13,
+        "mof_gate_trend_n": 26,
+        "mof_gate_stale_days": 21.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -297,6 +307,8 @@ def load() -> dict:
             out["strategy"]["cryptoeq_gate_enabled"] = True  # 纸面前向检验实例（paper-cryptoeq）用环境变量强制开启加密股相对强弱闸门
         if str(os.environ.get("QTW_USD_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
             out["strategy"]["usd_gate_enabled"] = True  # 纸面前向检验实例（paper-usdgate）用环境变量强制开启美元广义指数做空闸门
+        if str(os.environ.get("QTW_MOF_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
+            out["strategy"]["mof_gate_enabled"] = True  # 纸面前向检验实例（paper-mofgate）用环境变量强制开启 MoF 居民外债净买闸门
         out["strategy"]["fast_exit_tf"] = "off"  # 已存的旧值（5m / 10m / 1d）也不生效，见 validate() 注释
         for k in ("live_enabled", "okx_demo", "gate_testnet"):  # 旧存档里的字符串 "false" 不能被当成 True（实盘闸门 / 模拟盘开关）
             out["live"][k] = _as_bool(out["live"].get(k, DEFAULTS["live"][k]))
@@ -453,6 +465,16 @@ def validate(s: dict) -> dict:
     st["usd_gate_stale_days"] = float(st.get("usd_gate_stale_days", 14.0) or 14.0)
     if not 5 <= st["usd_gate_stale_days"] <= 60:
         raise ValueError("美元数据过期阈值需在 5–60 天之间")
+    st["mof_gate_enabled"] = _as_bool(st.get("mof_gate_enabled", False))
+    st["mof_gate_sum_n"] = int(st.get("mof_gate_sum_n", 13) or 13)
+    if not 1 <= st["mof_gate_sum_n"] <= 52:
+        raise ValueError("MoF 闸门求和周数需在 1–52 之间")
+    st["mof_gate_trend_n"] = int(st.get("mof_gate_trend_n", 26) or 26)
+    if not 2 <= st["mof_gate_trend_n"] <= 104:
+        raise ValueError("MoF 闸门均线周数需在 2–104 之间")
+    st["mof_gate_stale_days"] = float(st.get("mof_gate_stale_days", 21.0) or 21.0)
+    if not 8 <= st["mof_gate_stale_days"] <= 60:
+        raise ValueError("MoF 数据过期阈值需在 8–60 天之间")
     st["staged_entry_f1"] = float(st.get("staged_entry_f1", 0) or 0)
     if st["staged_entry_f1"] and not 0.05 <= st["staged_entry_f1"] <= 0.95:
         raise ValueError("分批入场首笔比例需为 0（关闭）或 0.05–0.95")
