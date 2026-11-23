@@ -1,4 +1,4 @@
-# 短线新族：EIA 官方每周天然气库存报告（WNGSR）发布 → 8 币永续篮子 1h 事件（2026-11-23 ~03:55–04:20 PST，研究，不改默认；否决）
+# 短线新族：EIA 官方每周天然气库存报告（WNGSR）发布 → 8 币永续篮子 1h 事件（2026-11-23 ~03:51–03:58 PST，研究，不改默认；否决）
 
 ## 查重 / 换题
 - 原建议「美国国债拍卖结果 1h 事件」已测：`output/research_us_treasury_auction_event_1h.csv`、`docs/us_treasury_auction_event_1h.md`（另有 `us_treasury_auction_demand_gate_4h`）→ 不重测，换题。
