@@ -1,4 +1,4 @@
-# 长线：OECD 综合领先指标（CLI）全球景气体制 → 默认 4h 书入场闸门（2026-11-22 ~20:55–21:20 PST，否决）
+# 长线：OECD 综合领先指标（CLI）全球景气体制 → 默认 4h 书入场闸门（2026-11-22 ~20:41–20:55 PST，否决）
 
 ## 查重
 - `ls output/research_*.csv`、`docs/*.md`、`docs/STRATEGY_FORMULAS.md` 轮换记录检索 `OECD` / `composite leading` / `CLI` / `leading index` / `PMI` / `GSCPI` / `CFNAI`：无 OECD CLI 条目（`CLI` 仅为命令行无关命中；`PMI` 仅为 ISM 下架说明）。
@@ -10,7 +10,7 @@
 - 发布时滞：月 M 仅于 **M+2 月 1 日 01:00 UTC** 起使用（OECD 约在 M+1 月中旬发布；2026-10 在 2026-11-22 已公开），前向填充到 4h K 线。
 - 修订风险：OECD SDMX 无公开实时版本库，使用的是当前版本，修订只会让结果偏乐观；即便通过也只能封顶为观察。
 
-## 公式与预注册（看 PnL 前锁定，`PRE_REGISTER.json` 2026-11-22 20:58 PST）
+## 公式与预注册（看 PnL 前锁定，`PRE_REGISTER.json` 2026-11-22 20:43 PST）
 - 序列 g20 / chn / g7；形式：`lvl100` CLI>100；`chgN` CLI−CLI(N 月前)>0，N∈{1,3,6}；`trendN` CLI>SMA(N 月)，N∈{6,12}；`z60gtK` (CLI−SMA60)/STD60>K，K∈{0.5,1}。
 - 五侧：long_off / short_off / both / contra_both / cap_short_off（只拦新开仓，已有同向仓保留）。3×8×5 = 120 格 + 同脚本基线（默认 #1 MA50/150 不加闸门）。
 - 经济先验（锁定不翻转）：CLI 上行 / 高于趋势 = 全球景气上行 = risk-on → cap_short_off / contra_both。回退先验格 `g20_chg3_cap_short_off`。
