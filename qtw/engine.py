@@ -25,6 +25,7 @@ from . import lending as LENDING
 from . import custody as CUSTODY
 from . import cryptoeq as CRYPTOEQ
 from . import usd_gate as USDG
+from . import cp_gate as CPG
 from . import mof_gate as MOFG
 from . import backstop_gate as BSG
 from .strategy import bar_close_equity, btc_regime_blocks_long, regime_vote_lengths, combine, es_tail_mult, hedge_pair_mask, side_crowd_scales, indicators, last_cross, ls_parity_scales, market_of, name_vol_mult, port_vol_factor, side_of, trend_ok, chop_ok, elder_short_ok
@@ -397,6 +398,32 @@ def _usd_gate_state(cfg: dict, frames: dict) -> dict:
     return out
 
 
+def _cp_gate_state(cfg: dict, frames: dict) -> dict:
+    """可选 H.15 商业票据融资利差闸门（默认关）：刷新 FRED DCPF3M / DTB3 官方缓存（每 6 小时，运行中自动），返回最近已收盘信号 K 线开盘时间上的状态。
+    取不到 / 过旧时失败开放（不拦）并记日志。_ob/_vs 供本轮各币复用同一份数据（不进 API 输出）。"""
+    st = cfg["strategy"]
+    if not bool(st.get("cp_gate_enabled", False)):
+        return {"enabled": False, "blocked": False}
+    t_open = None
+    try:
+        for m in ("perp", "spot"):
+            for df in (frames.get(m) or {}).values():
+                if df is not None and len(df):
+                    v = int(pd.Timestamp(df["open_time"].iloc[-1]).value // 1_000_000)
+                    t_open = v if t_open is None else max(t_open, v)
+    except Exception:  # noqa: BLE001
+        t_open = None
+    out = CPG.state(st, t_open)
+    try:
+        ob, vs = CPG.series(fetch=False)
+        out["_ob"], out["_vs"] = ob, vs
+    except Exception:  # noqa: BLE001
+        pass
+    if out.get("eval_open_ms"):
+        out["eval_open"] = iso(pd.Timestamp(out["eval_open_ms"], unit="ms", tz="UTC").to_pydatetime())
+    return out
+
+
 def _mof_gate_state(cfg: dict, frames: dict) -> dict:
     """可选 MoF 周度居民外债净买闸门（默认关）：刷新财务省官方缓存（每 6 小时，运行中自动），返回最近已收盘信号 K 线开盘时间上的状态。
     取不到 / 过旧时失败开放（不拦）并记日志。_ob/_vs 供本轮各币复用同一份数据（不进 API 输出）。"""
@@ -698,6 +725,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
     cg = _custody_gate_state(cfg, frames)
     ce = _cryptoeq_gate_state(cfg, frames, venue)
     ug = _usd_gate_state(cfg, frames)
+    cpg = _cp_gate_state(cfg, frames)
     mg = _mof_gate_state(cfg, frames)
     bgs = _backstop_gate_state(cfg, frames)
     eq = bk.equity()
@@ -838,6 +866,13 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             row["usd_block_short"] = bool(ub[0])
             if sig < 0 and bool(ub[0]):
                 row["usd_ok"] = False
+        if cpg["enabled"]:
+            # 可选 H.15 商业票据融资利差闸门（与回测同一函数 cp_gate.block_mask）：按本币信号 K 线开盘时间判定，只拦新开多
+            pb, pd_ = CPG.block_mask(st, [int(pd.Timestamp(last["open_time"]).value // 1_000_000)], cpg.get("_ob"), cpg.get("_vs"))
+            row["cp_diff"] = float(pd_[0]) if pd_[0] == pd_[0] else None
+            row["cp_block_long"] = bool(pb[0])
+            if sig > 0 and bool(pb[0]):
+                row["cp_ok"] = False
         if mg["enabled"]:
             # 可选 MoF 周度居民外债净买闸门（与回测同一函数 mof_gate.block_mask）：按本币信号 K 线开盘时间判定，flag=1 拦新开空、flag=0 拦新开多
             mbl, mbs, mf = MOFG.block_mask(st, [int(pd.Timestamp(last["open_time"]).value // 1_000_000)], mg.get("_ob"), mg.get("_vs"))
@@ -907,6 +942,11 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
         elif sig > 0 and row.get("cryptoeq_ok") is False:
             entry = f"加密股相对强弱闸门：ln({ce.get('symbol')}/BTC) 近 {ce['n']} 个交易日变化 = {row.get('cryptoeq_chg'):+.3f} ≤ 0（美股资金减配加密），暂不新开多单（转正后恢复；已有持仓与空单不受影响）"
             exit_, state = "—", "cryptoeq_wait"
+            row["stop_source"] = "suggested"
+            row["stop_side"] = side
+        elif sig > 0 and row.get("cp_ok") is False:
+            entry = f"商业票据融资利差闸门：FRED DCPF3M−DTB3 利差 {cpg.get('spread')}pp（观测 {cpg.get('obs_date')}，下一工作日 +1 天已知）的 5 观测均值 {cpg.get('x')} 高于 {cpg['n']} 观测均线 {cpg.get('ma')}（差 {row.get('cp_diff'):+.4f}，短端美元融资压力上升），暂不新开多单（回落后恢复；已有持仓与空单不受影响）"
+            exit_, state = "—", "cp_wait"
             row["stop_source"] = "suggested"
             row["stop_side"] = side
         elif row.get("mof_ok") is False:
@@ -1000,6 +1040,7 @@ def compute_signals(cfg: dict, with_quotes: bool = True) -> dict:
             "custody_gate": {k: v for k, v in cg.items() if not k.startswith("_")},
             "cryptoeq_gate": {k: v for k, v in ce.items() if not k.startswith("_")},
             "usd_gate": {k: v for k, v in ug.items() if not k.startswith("_")},
+            "cp_gate": {k: v for k, v in cpg.items() if not k.startswith("_")},
             "mof_gate": {k: v for k, v in mg.items() if not k.startswith("_")},
             "backstop_gate": {k: v for k, v in bgs.items() if not k.startswith("_")},
             "adaptive": cfg.get("_adaptive"),
@@ -1231,7 +1272,7 @@ def run_cycle(cfg: dict | None = None, note: str = "") -> dict:
         want = {}
         for s in cfg["symbols"]:
             r = rows.get(s)
-            if not r or s in bk.positions or s in bk.halts or r["signal"] == 0 or block_active(bk, s, r, bool(st.get("_fast_exit_research"))) or r.get("trend_ok") is False or r.get("regime_ok") is False or r.get("chop_ok") is False or r.get("elder_ok") is False or r.get("bias_ok") is False or r.get("lending_ok") is False or r.get("custody_ok") is False or r.get("cryptoeq_ok") is False or r.get("usd_ok") is False or r.get("mof_ok") is False or r.get("backstop_ok") is False or r.get("state") == "short_paused":
+            if not r or s in bk.positions or s in bk.halts or r["signal"] == 0 or block_active(bk, s, r, bool(st.get("_fast_exit_research"))) or r.get("trend_ok") is False or r.get("regime_ok") is False or r.get("chop_ok") is False or r.get("elder_ok") is False or r.get("bias_ok") is False or r.get("lending_ok") is False or r.get("custody_ok") is False or r.get("cryptoeq_ok") is False or r.get("usd_ok") is False or r.get("cp_ok") is False or r.get("mof_ok") is False or r.get("backstop_ok") is False or r.get("state") == "short_paused":
                 continue
             if r["side"] == "long" and not rk["allow_spot_long"] or r["side"] == "short" and not rk["allow_perp_short"]:
                 continue

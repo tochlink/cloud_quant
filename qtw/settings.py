@@ -154,6 +154,16 @@ DEFAULTS: dict[str, Any] = {
         "mof_gate_sum_n": 13,
         "mof_gate_trend_n": 26,
         "mof_gate_stale_days": 21.0,
+        # 2026-11-27：可选美联储 H.15 商业票据融资利差闸门（默认关闭；回测与模拟盘 / 实盘同一函数 qtw/cp_gate.block_mask）。
+        # FRED DCPF3M − DTB3（3M AA 金融类 CP − 3M 国库券）5 个观测均值 > 其 60 个观测均线（短端美元融资压力上升）时不新开多；
+        # 下一个工作日 + 1 天 00:00 UTC 才算已知。研究（scratch/cpspread4h/run.py、output/research_fed_h15_cp_spread_gate_4h.csv、
+        # docs/fed_h15_cp_spread_gate_4h.md）：预注册回退格 FIN3_trend_n60_long_off 深未见 Sharpe OKX 1.46 / Gate 0.56（基线 0.71 / 0.09）、
+        # 安慰剂 0/17 超过；2026-03 后与基线逐位相同（post 窗内无多单被拦，逐月 0 胜 0 负）→ 强观察（非默认），只做纸面前向检验（8800 paper-cpgate）。
+        # 环境变量 QTW_CP_GATE=1 强制开启。
+        "cp_gate_enabled": False,
+        "cp_gate_n": 60,
+        "cp_gate_smooth": 5,
+        "cp_gate_stale_days": 10.0,
         # 2026-11-27：可选美联储贴现窗口一级信贷（H.4.1 WLCFLPCL 周三水平）闸门（默认关闭；回测与模拟盘 / 实盘同一函数 qtw/backstop_gate.block_mask）。
         # 一级信贷 > 其 13 周均线（银行融资压力上升）时不新开多，否则不新开空（both）；周三 + 3 天 00:00 UTC 才算已知。研究（scratch/fedswap4h/run.py、
         # output/research_fed_backstop_lending_gate_4h.csv、docs/fed_backstop_lending_gate_4h.md）：pcr_trend_n13_both 6/9，2026-03 后 OKX d8 +66.7% vs +59.9%、
@@ -317,6 +327,8 @@ def load() -> dict:
             out["strategy"]["usd_gate_enabled"] = True  # 纸面前向检验实例（paper-usdgate）用环境变量强制开启美元广义指数做空闸门
         if str(os.environ.get("QTW_MOF_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
             out["strategy"]["mof_gate_enabled"] = True  # 纸面前向检验实例（paper-mofgate）用环境变量强制开启 MoF 居民外债净买闸门
+        if str(os.environ.get("QTW_CP_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
+            out["strategy"]["cp_gate_enabled"] = True  # 纸面前向检验实例（paper-cpgate）用环境变量强制开启 H.15 商业票据融资利差闸门
         if str(os.environ.get("QTW_BACKSTOP_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
             out["strategy"]["backstop_gate_enabled"] = True  # 纸面前向检验实例（paper-backstop）用环境变量强制开启一级信贷闸门
         out["strategy"]["fast_exit_tf"] = "off"  # 已存的旧值（5m / 10m / 1d）也不生效，见 validate() 注释
@@ -485,6 +497,16 @@ def validate(s: dict) -> dict:
     st["mof_gate_stale_days"] = float(st.get("mof_gate_stale_days", 21.0) or 21.0)
     if not 8 <= st["mof_gate_stale_days"] <= 60:
         raise ValueError("MoF 数据过期阈值需在 8–60 天之间")
+    st["cp_gate_enabled"] = _as_bool(st.get("cp_gate_enabled", False))
+    st["cp_gate_n"] = int(st.get("cp_gate_n", 60) or 60)
+    if not 10 <= st["cp_gate_n"] <= 300:
+        raise ValueError("CP 利差闸门均线观测数 n 需在 10–300 之间")
+    st["cp_gate_smooth"] = int(st.get("cp_gate_smooth", 5) or 5)
+    if not 1 <= st["cp_gate_smooth"] <= 20:
+        raise ValueError("CP 利差闸门平滑观测数需在 1–20 之间")
+    st["cp_gate_stale_days"] = float(st.get("cp_gate_stale_days", 10.0) or 10.0)
+    if not 4 <= st["cp_gate_stale_days"] <= 60:
+        raise ValueError("CP 利差数据过期阈值需在 4–60 天之间")
     st["backstop_gate_enabled"] = _as_bool(st.get("backstop_gate_enabled", False))
     st["backstop_gate_trend_n"] = int(st.get("backstop_gate_trend_n", 13) or 13)
     if not 2 <= st["backstop_gate_trend_n"] <= 104:

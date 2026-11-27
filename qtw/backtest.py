@@ -128,7 +128,8 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                  funding: dict | None = None, btc_spot: pd.DataFrame | None = None, schedule: list | None = None,
                  lending_rates: tuple | None = None, custody_data: tuple | None = None,
                  cryptoeq_data: tuple | None = None, usd_data: tuple | None = None,
-                 mof_data: tuple | None = None, backstop_data: tuple | None = None) -> dict:
+                 mof_data: tuple | None = None, backstop_data: tuple | None = None,
+                 cp_data: tuple | None = None) -> dict:
     """signals：可选，多策略注册表（qtw.strategies）用的信号函数 f(ind, idx, syms) -> {symbol: 逐根 {-1,0,1}}，
     替换默认双均线合成信号；执行、止损、仓位、费用与默认完全同一套。None = 默认策略 #1（逐字节不变）。
     btc_spot：可选，BTCUSDT 现货 K 线，只供 BTC 体制过滤（btc_regime_ma）使用、不参与交易。标的里没有 BTCUSDT 时，
@@ -295,6 +296,16 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         mg_info.update(blocked_long_bars=int(MBL.sum()), blocked_short_bars=int(MBS.sum()), nan_bars=int(np.isnan(_mf).sum()), bars=int(len(idx)))
         LGB = np.asarray(LGB, dtype=bool) | MBL
         DBS = np.asarray(DBS, dtype=bool) | MBS
+    # 可选美联储 H.15 商业票据融资利差闸门（cp_gate_enabled，默认关）：与引擎同一函数 cp_gate.block_mask；已知（下一个工作日 + 1 天）的最新
+    # 利差 5 观测均值 > 其 60 观测均线时拦新开多；并入 LGB（第 i 根开盘入场用 LGB[i−1]）。cp_data = (观测日毫秒, 利差 pp) 可注入真实历史。
+    cp_info = {"enabled": bool(st.get("cp_gate_enabled", False))}
+    if cp_info["enabled"]:
+        from . import cp_gate as CPG
+        _om = pd.DatetimeIndex(pd.to_datetime(idx, utc=True)).as_unit("ms").asi8
+        _co, _cv = (cp_data if cp_data is not None else (None, None))
+        CPB, _cd = CPG.block_mask(st, _om, _co, _cv)
+        cp_info.update(blocked_bars=int(CPB.sum()), nan_bars=int(np.isnan(_cd).sum()), bars=int(len(idx)))
+        LGB = np.asarray(LGB, dtype=bool) | CPB
     # 可选美联储一级信贷闸门（backstop_gate_enabled，默认关）：与引擎同一函数 backstop_gate.block_mask；已知（周三 + 3 天）的最新一周
     # 一级信贷 > 其 13 周均线（flag=1）时拦新开多、否则拦新开空（both）；并入 LGB / DBS。backstop_data = (周三毫秒, 余额) 可注入真实历史。
     bg_info = {"enabled": bool(st.get("backstop_gate_enabled", False))}
@@ -812,6 +823,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "custody_gate": cg_info,
         "cryptoeq_gate": ce_info,
         "usd_gate": ug_info,
+        "cp_gate": cp_info,
         "mof_gate": mg_info,
         "backstop_gate": bg_info,
         "btc_regime_symbol": rg_sym,
