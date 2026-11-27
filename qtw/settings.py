@@ -154,6 +154,14 @@ DEFAULTS: dict[str, Any] = {
         "mof_gate_sum_n": 13,
         "mof_gate_trend_n": 26,
         "mof_gate_stale_days": 21.0,
+        # 2026-11-27：可选美联储贴现窗口一级信贷（H.4.1 WLCFLPCL 周三水平）闸门（默认关闭；回测与模拟盘 / 实盘同一函数 qtw/backstop_gate.block_mask）。
+        # 一级信贷 > 其 13 周均线（银行融资压力上升）时不新开多，否则不新开空（both）；周三 + 3 天 00:00 UTC 才算已知。研究（scratch/fedswap4h/run.py、
+        # output/research_fed_backstop_lending_gate_4h.csv、docs/fed_backstop_lending_gate_4h.md）：pcr_trend_n13_both 6/9，2026-03 后 OKX d8 +66.7% vs +59.9%、
+        # Gate +67.4% vs +60.3%，逐月 5/2、6/1，安慰剂全部更差，但 2024-10→2026-03 段大幅落后 → 弱观察，只做纸面前向检验（8799 paper-backstop）。
+        # 环境变量 QTW_BACKSTOP_GATE=1 强制开启。
+        "backstop_gate_enabled": False,
+        "backstop_gate_trend_n": 13,
+        "backstop_gate_stale_days": 21.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -309,6 +317,8 @@ def load() -> dict:
             out["strategy"]["usd_gate_enabled"] = True  # 纸面前向检验实例（paper-usdgate）用环境变量强制开启美元广义指数做空闸门
         if str(os.environ.get("QTW_MOF_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
             out["strategy"]["mof_gate_enabled"] = True  # 纸面前向检验实例（paper-mofgate）用环境变量强制开启 MoF 居民外债净买闸门
+        if str(os.environ.get("QTW_BACKSTOP_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
+            out["strategy"]["backstop_gate_enabled"] = True  # 纸面前向检验实例（paper-backstop）用环境变量强制开启一级信贷闸门
         out["strategy"]["fast_exit_tf"] = "off"  # 已存的旧值（5m / 10m / 1d）也不生效，见 validate() 注释
         for k in ("live_enabled", "okx_demo", "gate_testnet"):  # 旧存档里的字符串 "false" 不能被当成 True（实盘闸门 / 模拟盘开关）
             out["live"][k] = _as_bool(out["live"].get(k, DEFAULTS["live"][k]))
@@ -475,6 +485,13 @@ def validate(s: dict) -> dict:
     st["mof_gate_stale_days"] = float(st.get("mof_gate_stale_days", 21.0) or 21.0)
     if not 8 <= st["mof_gate_stale_days"] <= 60:
         raise ValueError("MoF 数据过期阈值需在 8–60 天之间")
+    st["backstop_gate_enabled"] = _as_bool(st.get("backstop_gate_enabled", False))
+    st["backstop_gate_trend_n"] = int(st.get("backstop_gate_trend_n", 13) or 13)
+    if not 2 <= st["backstop_gate_trend_n"] <= 104:
+        raise ValueError("一级信贷闸门均线周数需在 2–104 之间")
+    st["backstop_gate_stale_days"] = float(st.get("backstop_gate_stale_days", 21.0) or 21.0)
+    if not 8 <= st["backstop_gate_stale_days"] <= 60:
+        raise ValueError("一级信贷数据过期阈值需在 8–60 天之间")
     st["staged_entry_f1"] = float(st.get("staged_entry_f1", 0) or 0)
     if st["staged_entry_f1"] and not 0.05 <= st["staged_entry_f1"] <= 0.95:
         raise ValueError("分批入场首笔比例需为 0（关闭）或 0.05–0.95")

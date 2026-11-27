@@ -128,7 +128,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                  funding: dict | None = None, btc_spot: pd.DataFrame | None = None, schedule: list | None = None,
                  lending_rates: tuple | None = None, custody_data: tuple | None = None,
                  cryptoeq_data: tuple | None = None, usd_data: tuple | None = None,
-                 mof_data: tuple | None = None) -> dict:
+                 mof_data: tuple | None = None, backstop_data: tuple | None = None) -> dict:
     """signals：可选，多策略注册表（qtw.strategies）用的信号函数 f(ind, idx, syms) -> {symbol: 逐根 {-1,0,1}}，
     替换默认双均线合成信号；执行、止损、仓位、费用与默认完全同一套。None = 默认策略 #1（逐字节不变）。
     btc_spot：可选，BTCUSDT 现货 K 线，只供 BTC 体制过滤（btc_regime_ma）使用、不参与交易。标的里没有 BTCUSDT 时，
@@ -295,6 +295,17 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         mg_info.update(blocked_long_bars=int(MBL.sum()), blocked_short_bars=int(MBS.sum()), nan_bars=int(np.isnan(_mf).sum()), bars=int(len(idx)))
         LGB = np.asarray(LGB, dtype=bool) | MBL
         DBS = np.asarray(DBS, dtype=bool) | MBS
+    # 可选美联储一级信贷闸门（backstop_gate_enabled，默认关）：与引擎同一函数 backstop_gate.block_mask；已知（周三 + 3 天）的最新一周
+    # 一级信贷 > 其 13 周均线（flag=1）时拦新开多、否则拦新开空（both）；并入 LGB / DBS。backstop_data = (周三毫秒, 余额) 可注入真实历史。
+    bg_info = {"enabled": bool(st.get("backstop_gate_enabled", False))}
+    if bg_info["enabled"]:
+        from . import backstop_gate as BSG
+        _om = pd.DatetimeIndex(pd.to_datetime(idx, utc=True)).as_unit("ms").asi8
+        _bo, _bv = (backstop_data if backstop_data is not None else (None, None))
+        BBL, BBS, _bf = BSG.block_mask(st, _om, _bo, _bv)
+        bg_info.update(blocked_long_bars=int(BBL.sum()), blocked_short_bars=int(BBS.sum()), nan_bars=int(np.isnan(_bf).sum()), bars=int(len(idx)))
+        LGB = np.asarray(LGB, dtype=bool) | BBL
+        DBS = np.asarray(DBS, dtype=bool) | BBS
     MK = {"long": "perp" if t_mode == "perp_both" else "spot", "short": "perp"}
     # 可选动态多空风险平价 up（ls_parity_cap，0 = 关闭）：按上一根已收盘合成信号把较小一侧信号书的单币风险 / 权重乘数放大到与较大一侧相同（≤ cap 倍）
     lsp_c = float(st.get("ls_parity_cap", 0) or 0)
@@ -802,6 +813,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "cryptoeq_gate": ce_info,
         "usd_gate": ug_info,
         "mof_gate": mg_info,
+        "backstop_gate": bg_info,
         "btc_regime_symbol": rg_sym,
         "spot_signal_long_bars": int(sum((PX["spot"]["signal"][s][warm:] == 1).sum() for s in syms)),
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),
