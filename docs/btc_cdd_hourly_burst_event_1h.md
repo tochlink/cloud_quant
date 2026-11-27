@@ -1,10 +1,10 @@
-# 比特币链上逐小时币天销毁（CDD）/ 休眠度爆发 1h 事件 → 8 币永续篮子（短线，2026-11-27 ~12:20–12:55 PST，已否决）
+# 比特币链上逐小时币天销毁（CDD）/ 休眠度爆发 1h 事件 → 8 币永续篮子（短线，2026-11-27 ~12:15–12:30 PST，已否决）
 
 - 结论：**REJECTED（否决）**。先验 / 回退都失败；仅 2 个非先验 8/8，post t < 1.5，深度未见段接近 0，邻域在 k=4 断裂，−720h 时移安慰剂产生 6 个 8/8（多于真实的 2 个）。默认书、代码、纸面账本都不变，不加 shadow 子账本。
 - 查重：docs / `output/research_*.csv`（1,322 个）/ 轮换锁中只有 **日度 CDD / 休眠度 4h 默认书闸门**（长线，`btc_cdd_dormancy_gate_4h`，已否决）；短线 1h 只有按**转账额**的巨鲸爆发（`btc_whale_transfer_burst_event_1h`，不看币龄）与矿工 coinbase 产出花费（`btc_miner_coinbase_spend_event_1h`，只看矿工输出）。逐小时全网币天销毁（老币苏醒）1h 事件 0 条。按此前 DVOL / Coinbase 溢价 / ETF 资金流「4h 闸门 + 1h 事件」分开测的先例，本族为新短线族。
 - 机制（看 PnL 前锁定）：老币在一小时内集中移动 = 长期持有者派发 / 供给苏醒 → 之后 12–48h 加密篮子走弱（先验做空）。事件稀少（L720 k3 约每月 7 次），每笔持有 12–48h，目标是比 1h 主动成交费大得多的单笔边际。
 - 数据（只用链上区块数据，不编造、不补数）：Blockchair 公开区块 dump（gz.blockchair.com/bitcoin/blocks）逐块 `cdd_total`、`input_total`，高度 663,913–976,966，按区块头时间汇总到 UTC 小时：2021-07-01 00:00 → 2026-11-21 23:00，47,280 小时；127 个无块小时、dump 缺的 2 个高度（854599、854614，2024-07-30）所在小时记 NaN（不算事件）。逐日加总与已入档的 `output/btc_cdd_dormancy_official_daily.csv` 1,969 天逐位一致（最大相对差 6e−16）。小时序列 `output/btc_cdd_official_1h.csv`。
-- 公式：cdd = ln(小时 CDD，BTC·天)；dorm = ln(小时 CDD ÷ 小时花费输入 BTC) = 被花费币的平均币龄（天）。z_h = (x_h − 过去 L 小时均值) / 标准差（需 ≥0.8L 有效小时）；z_h ≥ k 为事件。方向：short 恒做空；mom = sign(BTC 永续 close(h+1)/close(h−1) − 1)；contra 取反。小时 h 的数据在 h+1 收盘才用（+1h 滞后），下一根 1h 永续开盘进场，等权 8 币，持有 H 根；同 cell 不重叠。网格 series{cdd,dorm} × L{168,720} × k{3,4} × side{short,contra,mom} × H{12,24,48} = 72 格；`PRE_REGISTER.json` 在任何 PnL 前锁定（sha256 510b5a8e…）。先验 `cdd_L720_k3_short_H24`，回退 `dorm_L720_k3_short_H24`。
+- 公式：cdd = ln(小时 CDD，BTC·天)；dorm = ln(小时 CDD ÷ 小时花费输入 BTC) = 被花费币的平均币龄（天）。z_h = (x_h − 过去 L 小时均值) / 标准差（需 ≥0.8L 有效小时）；z_h ≥ k 为事件。方向：short 恒做空；mom = sign(BTC 永续 close(h+1)/close(h−1) − 1)；contra 取反。小时 h 的数据在 h+1 收盘才用（+1h 滞后），下一根 1h 永续开盘进场，等权 8 币，持有 H 根；同 cell 不重叠。网格 series{cdd,dorm} × L{168,720} × k{3,4} × side{short,contra,mom} × H{12,24,48} = 72 格；`PRE_REGISTER.json` 在任何 PnL 前锁定（12:21:34 PST 写入，结果 CSV 12:21:45 PST；json 内 locked_at_pst 字段误写为 12:50，以文件时间为准；sha256 510b5a8e…）。先验 `cdd_L720_k3_short_H24`，回退 `dorm_L720_k3_short_H24`。
 - 验证：官方 OKX 1h 永续 d8（train = 深度未见 2022-02-15→2024-10-21，test →2026-03-05，post 2026-03-05→）、OKX 未调参 new8、Gate 1h 永续 d8（post + gate_window 2025-09-28→）；官方资金费；taker 5.1 bps/边（压力 15.1）；±720h / ±168h 时移安慰剂；同脚本无条件基线。打分 = 8 个槽位均值 > 0；usable = OKX d8 n ≥ 10/8/8。
 - 结果（OKX d8 real，bps/笔，净费与资金费）：
   - 先验 `cdd_L720_k3_short_H24`：train −38.9（n180，t −1.55）/ test −77.2（t −2.46）/ post −30.3（n34，月 4/9）；new8 post −24.4；**失败**（老币苏醒后反而偏涨，但做多不在预注册里，不追认）。
