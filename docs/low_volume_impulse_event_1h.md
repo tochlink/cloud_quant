@@ -1,0 +1,15 @@
+# 短线新族：低量冲击棒（Campbell–Grossman–Wang 量价条件收益延续）→ 逐币 1h 永续事件（2026-11-27 ~10:50 PST，研究，不改默认；否决）
+
+- 查重：`docs/STRATEGY_FORMULAS.md`、`docs/*.md`、约 1,311 个 `output/research_*.csv`、`/workspace/scratch` 目录名中检索 Campbell / Grossman / 低量 / 缩量 / low volume / volume-conditioned：只有 4h EMV「缩量易推」入场闸门（默认书闸门，非独立事件）、1h 吸收（放量不涨，absorption volume no-progress）、1h 成交量冲击 / 篮子量冲击、15m 影线反转、单币特质冲击、量价相关闸门。从未测过「**大幅 1h 价格冲击但成交量低于常态**」这一条件事件（CGW 1993：低量价格变动更可能是信息驱动、会延续；放量变动是流动性需求、会反转）。不是重复。
+- 公式（逐币，只用已收盘 K 线）：`r_i = ln(C_i / C_{i−1})`，`σ_i = std(r, 168 根)`（右移 1 根），`vz_i = (ln(V_i+1) − mean_720) / std_720`（720 根，右移 1 根）。事件：`|r_i| / σ_i ≥ X` 且 `vz_i ≤ v`。方向 `d = sign(r_i)`（follow，CGW 先验）或 `−sign(r_i)`（contra）；下一根 1h 开盘入场，持有 H 根后开盘离场；逐币不重叠；扣资金费。
+- 预注册（`scratch/lowvolimp1h/PRE_REGISTER.json`，sha256 `03479ce7ff192698e3e981d20dfd62cc9a2867e8068a5ed13281029cd96dfd85`，在看任何 PnL 之前写入）：X ∈ {2, 3} × v ∈ {0, −0.5, −1} × {follow, contra} × H ∈ {12, 24, 48} = **36 格**。先验 `lvi_X3.0_v-0.5_follow_H24`，回退 `lvi_X2.0_v-1.0_follow_H48`。同脚本基线 = 不加量条件的纯冲击事件（同 X / 方向 / H）。另加未预注册诊断：放量冲击（vz ≥ 1）。
+- 数据（只用官方、不编造）：OKX 官方 1h 永续 K 线 + 官方资金费，默认 8 币 2022-01-29 → 2026-11-23 06:00 UTC；Gate 官方 1h 永续 2025-09-24 → 2026-11-23 06:00 UTC（无 train 段）；未调参 new8（LINK / LTC / DOT / TRX / BCH / ATOM / NEAR / UNI）OKX 官方 1h 2022-01-29 起。分段：train（深未见）2022-02-15 → 2024-10-21，test → 2026-03-05，post → 末尾。费率：真实 taker 0.051%/边（往返 10.2 bps）、maker 0.02%/边、压力 0.151%/边。安慰剂：事件序列平移 ±720h。
+- 结果（`output/research_low_volume_impulse_event_1h.csv`，1,548 行；月度 `..._months.csv`）。每笔净 bps（真实 taker），括号为笔数：
+  - **先验 X3 v−0.5 follow H24：事件几乎不存在**——OKX d8 train 0 笔、test 1 笔 −17.8、post 0 笔；Gate 0 笔；new8 train 2 笔 −22.0、test 1 笔 −271.4、post 0 笔。|r| ≥ 3σ 的 1h 棒几乎总是放量，「低量大冲击」在机制上就很罕见，无法验证。
+  - 回退 X2 v−1.0 follow H48：OKX d8 train +24.9（5）、test −62.2（2）、post +471（1）；Gate post +531（1）；new8 train −74.7（21）、test −82.7（5）、post −144.3（5）→ 样本过小、new8 全负。
+  - 9 槽（Gate 无 train，实际 8 槽）最多 7 正，没有 8/8。7 正的两格：`X3 v0 contra H24` OKX post 仅 1 笔、Gate post 2 笔（不可用）；`X2 v0 contra H12`（唯一样本像样的）OKX d8 +8.4（228）/ +9.9（117）/ **post +1.0（41，t 0.04）**，Gate test +37.3（29）/ **post −18.0（67，t −0.9）**，new8 +26.3 / +17.8 / +21.2（121，t 0.9）；maker 下 OKX post +7.2、Gate −11.8；压力费 OKX post −19.0、Gate −38.0；安慰剂 ±720h OKX post −10.5 / −15.0（真实略好但只差 ~12 bps 且真实本身≈0）；post 月份 OKX 5/9、Gate 3/9。
+  - CGW 先验方向（follow）在样本可用的 v = 0 格：`X2 v0 follow H48` OKX post +94.1（38，t 1.5）但 Gate post −11.8（56）、Gate test −226.7（25，t −2.2），new8 三段全负（−46 / −9 / −55）→ 不稳。
+  - 同脚本基线（纯冲击，不分量）：follow / contra 每笔多在 −30 ~ +15 bps，几乎都低于往返成本；放量诊断（vz ≥ 1）同样无可用边。
+- 结论：**否决**，不实现、不进观察名单、不改默认、不动纸面实例、无代码改动。低量大冲击在 1h 加密永续上过于稀少（|r| ≥ 3σ 与 vz ≤ −0.5 同时成立在 8 币近 5 年内仅个位数次），放宽到 v = 0 后边际 ≈ 0、跨所方向相反、压力费全负。
+- 勿重测（never retest by…）：不要通过改 X / v 阈值 / σ 或量窗口（168 / 720）/ H / follow↔contra，改用成交额（quote）、笔数或 taker 量代替成交量，改为篮子级（等权 8 币）冲击或 BTC 单币，加趋势 / 资金费 / BTC 状态过滤，改 15m / 4h 周期，换 Gate↔OKX 量互作分母，或把「放量冲击反转」诊断臂单独拿出来重测同一「量价条件收益延续 / 反转（CGW）」机制。
+- 文件（不入库）：CSV `output/research_low_volume_impulse_event_1h.csv`、`output/research_low_volume_impulse_event_1h_months.csv`；脚本 `scratch/lowvolimp1h/{prereg,run,an}.py`、`PRE_REGISTER.json`、`PRE_REGISTER.sha256`、`wide.csv`。
