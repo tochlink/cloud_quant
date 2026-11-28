@@ -171,6 +171,8 @@ async def lifespan(_app: FastAPI):
     _btcwit.start()
     from . import montag_shadow as _montag  # #19 币安监控标签新增公告做空影子（默认关；QTW_SHADOW_MONTAG=1 才启动，测试模式永不启动）
     _montag.start()
+    from . import levtier_shadow as _levtier  # #20 币安永续保证金档位收紧公告做空影子（默认关；QTW_SHADOW_LEVTIER=1 才启动，测试模式永不启动）
+    _levtier.start()
     if _kick_after_freeze not in stream._on_host_freeze:
         stream._on_host_freeze.append(_kick_after_freeze)
     stream.start()
@@ -208,6 +210,11 @@ async def lifespan(_app: FastAPI):
         try:
             from . import montag_shadow
             montag_shadow.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from . import levtier_shadow
+            levtier_shadow.stop()
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -949,6 +956,13 @@ def shadow_montag():
     """#19 币安官方监控标签新增公告做空影子子账本状态（纸面，不计入主账本）。"""
     from . import montag_shadow
     return ok(montag_shadow.status())
+
+
+@app.get("/api/shadow/levtier")
+def shadow_levtier():
+    """#20 币安官方永续保证金档位收紧公告做空影子子账本状态（纸面，不计入主账本）。"""
+    from . import levtier_shadow
+    return ok(levtier_shadow.status())
 
 
 @app.get("/api/shadow/unlock")
