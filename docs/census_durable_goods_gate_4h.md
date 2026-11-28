@@ -1,4 +1,4 @@
-# 长线新族：美国人口普查局 M3 耐用品订单预估报告（官方首发 vintage：核心资本品订单 / 耐用品总订单）→ 4h 默认书 #1 入场闸门（2026-11-28 ~01:00 PST，研究，否决）
+# 长线新族：美国人口普查局 M3 耐用品订单预估报告（官方首发 vintage：核心资本品订单 / 耐用品总订单）→ 4h 默认书 #1 入场闸门（2026-11-28 ~00:35 PST，研究，否决）
 
 ## 查重
 本轮候选（1）美联储 G.19 消费信贷（`fed_g19_consumer_credit_gate_4h`）、（2）人行社融（`pboc_tsf_credit_gate_4h`）、（3）零售销售 RSAFS（`us_real_activity_sentiment_gate_4h`）与 JOLTS（`jolts_gate_4h`）、以及 M2（`m2_money_supply_regime_gate_4h`）**均已测过并否决**，按规则不重测。改选同类「官方首发宏观月度」中从未测过的耐用品订单：rg `durable / DGORDER / NEWORDER / ADXTNO / capital goods / factory orders / 耐用品 / 核心资本品` 于 `docs/STRATEGY_FORMULAS.md`、`docs/*.md`、约 1,406 个 `output/research_*.csv` 文件名、`/workspace/scratch`：0 条。区别于已否决的 INDPRO（产出）、RSAFS（消费）、Census 企业申请、SLOOS、货运。
@@ -11,7 +11,7 @@
 - 文件：`output/census_durable_goods_firstrelease.csv`（不入库）；脚本 `scratch/durgood4h/{fetch_batch,build,run,new8}.py`。
 - 价格：同脚本官方 OKX / Gate 4h 现货 + 永续深历史（至 2026-11-14）、官方资金费。
 
-## 公式（`scratch/durgood4h/PRE_REGISTER.json`，sha256 `e3b25d03…fada4`，2026-11-28 00:40 PST 看任何 PnL 前锁定 120 格）
+## 公式（`scratch/durgood4h/PRE_REGISTER.json`，sha256 `e3b25d03…fada4`，文件时间 2026-11-28 00:23:48 PST 锁定 120 格，PnL 运行 00:24:02 PST 才开始；JSON 内 locked_at 字段误写为 00:40，以文件时间为准）
 - 序列：core_yoy = NEWORDER 同比；core_3m3m = (近 3 月均 / 前 3 月均)^4 − 1；dg_yoy = DGORDER 同比（均为首发值）。
 - flag = 1（订单走弱）：trend_n（x < 最近 n 次发布均值，n=6/12）、chg_n（x − x[−n] < 0，n=3/12）、z36lt_k（36 次发布 z < −k，k=0.5/1/1.5/2）。
 - 侧：long_off（走弱拦新多）、short_off、both、contra_both、cap_short_off（走强拦新空）。
