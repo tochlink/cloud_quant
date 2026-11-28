@@ -1,0 +1,26 @@
+# 长线新族：美联储 G.19 消费信贷（官方首发版本：循环信贷同比 / 循环信贷 3 个月年化 / 总消费信贷同比）→ 4h 默认书 #1 入场闸门（2026-11-27 ~17:10 PST，研究；否决，仅文档，不改默认、无纸面变更）
+
+- 查重：`docs/STRATEGY_FORMULAS.md`（含全部轮换记录）、`docs/*.md`（约 165 篇）、约 1,360 个 `output/research_*.csv` 文件名、`scratch/ROTATION_LOCK.txt`、bot store 搜 G.19 / TOTALSL / REVOLSL / NONREVSL / consumer credit / 消费信贷 / revolving：只有两处「下一轮」指针（`docs/binance_oi_shock_event_1h.md`、STRATEGY_FORMULAS 第 11222 行）和 `docs/pboc_tsf_credit_gate_4h.md` 勿重测行里的「G.19 未测，须作为独立新族」——**从未测过**。与已否决族的区别：SLOOS 是**贷款标准问卷**（其勿重测覆盖消费贷 / 信用卡*标准*子序列，不含信贷*存量*）；PBoC 社融是中国；M2 是存款；FINRA 融资余额是投资者杠杆；金融压力 / 信用利差 / CP 利差是价格；按揭 / 营建是利率与开工；美国实体（UMCSENT / RSAFS / INDPRO）是消费与产出，不是家庭借贷。
+- 数据（只用官方，不编造、不插值、不回补）：美联储理事会 G.19 Consumer Credit，经圣路易斯联储官方 ALFRED 实时 vintage 存档取 `TOTALSL` / `REVOLSL` / `NONREVSL`（季调）2015-01-08 → 2026-11-06 共 143 个 vintage（`alfredgraph.csv` 每次 12 个 vintage 批量取）。**首发口径**：每个第一次公布新月份 M 的 vintage，只用这一份 vintage 自己的数据算增速（`yoy = v[M]/v[M−12]−1`，`3m = (v[M]/v[M−3])^4−1`），不受之后修订污染；只有修订、没有新月份的 vintage 跳过。各 vintage 单位不同（十亿 → 百万美元），增速与单位无关。142 个首发观测（数据月 2014-11 → 2026-09）；ALFRED 缺 2019-05-07 那次发布，因此 2019-03 没有首发值（如实缺失，不补）。**滞后**：G.19 于发布日约 15:00 ET 公布，按发布日 +1 天 00:00 UTC 起才算已知。最新（2026-11-06 发布、2026-09 数据）：循环信贷同比 +4.25%、3 个月年化 +4.21%，总消费信贷同比 +3.01%。首发表 `output/fed_g19_consumer_credit_firstrelease.csv`（不入库）。
+- 公式（看 PnL 前锁定 `scratch/g19cc4h/PRE_REGISTER.json`，sha256 `7dc5a4cd…`，120 格）：序列 rev_yoy / rev_3m / tot_yoy；flag = 1 表示**消费信贷增速走弱**：trend（x < 最近 n 次发布均值，n 6 / 12）、chg（x − x[−n] < 0，n 3 / 12）、z（36 次发布 z < −k，k 0.5 / 1 / 1.5 / 2）；侧 long_off（走弱 → 不新开多）、short_off（不走弱 → 不新开空）、both、contra_both、cap_short_off（走弱 → 不新开空）。闸门只拦新开仓，已有同向仓保留。**先验 rev_yoy_trend_n6_long_off，回退 tot_yoy_chg_n3_long_off**，安慰剂锚 = 先验。
+- 回测：同脚本默认 #1（perp_both 10×、官方资金费；结构同 `scratch/pboctsf4h/run.py`），真实费 maker 2 / taker 5.1 bps，压力费 spot 20 / perp 15.1 bps；OKX d8（2023-02 →）、Gate d8（2022-07 →）、OKX d7 不含 BNB（2022-04 →）；深未见 < 2024-10-21，调参窗 → 2026-03-05，post → 2026-11-14（官方 4h 深缓存终点）；未调参 new8（OKX + Gate 最近 4500 根，2024-12-03 起）。
+
+## 结果（`output/research_fed_g19_consumer_credit_gate_4h.csv` 444 行；`_supp.csv` 63 行 邻域 + 安慰剂（事后、已标注）；`_new8.csv` 20 行）
+
+| 格子 | 9 段 | OKX d8 深未见 / 调参 Sharpe | OKX post 收益 / Sharpe | Gate d8 深未见 / 调参 | Gate post | post 月胜 / 负（OKX、Gate） | new8 pre Sharpe（OKX、Gate） |
+|---|---|---|---|---|---|---|---|
+| 基线 默认 #1 | — | 0.71 / 1.47 | +59.90% / 2.23 | 0.09 / 1.46 | +60.32% / 2.25 | — | 0.75、0.73 |
+| **先验 rev_yoy_trend_n6_long_off** | 0/9 | 0.52 / 0.68 | +59.90% / 2.23（相同） | −0.04 / 0.65 | +60.32% / 2.25（相同） | 0/0、0/0 | 0.94、0.91 |
+| **回退 tot_yoy_chg_n3_long_off** | 1/9 | 0.60 / 1.50 | +59.90% / 2.23（相同） | 0.04 / 1.48 | +60.32% / 2.25（相同） | 0/0、0/0 | 0.95、0.94 |
+| 9 段最高 tot_yoy_trend_n6_cap_short_off | 6/9 | 0.24 / 1.67 | +66.53% / 2.45 | −0.40 / 1.65 | +67.72% / 2.48 | 3/3、4/2 | 0.58、0.59 |
+| post 月份最好 rev_3m_chg_n3_both | 3/9 | 0.48 / 1.04 | +71.40% / 2.82 | 0.08 / 1.05 | +71.97% / 2.84 | **6/3、6/3** | 0.60、0.57 |
+| rev_yoy_z36lt0.5_cap_short_off | 5/9 | 0.68 / 1.53 | +67.74% / 2.56 | −0.01 / 1.54 | +68.18% / 2.57 | 3/2、4/1 | — |
+
+- **先验（循环信贷同比跌破 6 次发布均值 → 不新开多）**：2023–2025 年循环信贷首发同比一路走低（2025 年首发同比一度为负），flag 在深未见 / 调参窗占 95% / 88%，大量拦多：OKX 深未见 0.52 vs 0.71、调参 0.68 vs 1.47，Gate 同样全输；post 中 flag 只占 11%，收益与基线逐位相同 → 0/9，否决。8 个时间平移安慰剂深未见 Sharpe 0.22–0.75，真实 0.52 居中，无时点信息。压力费同向（OKX 调参 19.82% vs 75.18%）。
+- **回退（总消费信贷同比 3 次发布下降 → 不新开多）**：只在 OKX 调参窗小胜（1.50 vs 1.47），深未见三处都输，post 完全相同 → 1/9，否决。
+- 9 段最高 tot_yoy_trend_n6_cap_short_off（总消费信贷同比低于 6 次均值 → 不新开空）：6 胜全来自调参窗 + post；深未见三处都大输（OKX 0.24 vs 0.71、Gate −0.40 vs 0.09）；post 月份 3/3、4/2 < 6/9；邻域塌陷（n3 / n4 post +29.91% / +26.49%，n9 与基线相同）；+30d 平移安慰剂 post +71.55% 反而高于真实 +66.53%；new8 pre 更差（0.58 vs 0.75）→ 否决。
+- post 月份最好 rev_3m_chg_n3_both（循环信贷 3 个月年化比 3 次发布前低 → 不新开多，否则不新开空）：post 两家 +11.5 pp、月份 6/3 两家、压力费保持（new8 也 6/3 两家、post Sharpe 1.13 / 1.80 vs 0.28 / 1.00），8 个平移安慰剂 post 都更差（−10% ~ +45%）。但是**深未见与调参窗三处全输**（调参 1.04 vs 1.47），new8 pre 更差（0.60 / 0.57 vs 0.75 / 0.73），邻域立即塌陷（n2 / n4 / n6 post +46.29% / +33.49% / +21.56%，都低于基线；rev_3m trend_n3 +37.45%；rev_yoy chg_n3 / n6 +34.38% / +13.43%）。这是 2026 年循环信贷 3 个月年化恰好与币价趋势同向的单段拟合，不满足「未见历史成立」→ 不观察。
+- 结论：**否决**，不实现、不进观察名单、不改默认、无纸面变更、无代码改动。美国家庭消费信贷是慢变量（首发增速月度变化小、经常被修订、2025 年首发同比异常为负），作为闸门要么在 2022–2025 长期常开大量拦单，要么只在 post 单段与价格趋势巧合；没有格同时在深未见、调参窗和 post 成立，也没有格通过邻域。
+- 勿重测（never retest via）：不要换 n / z 窗 / 阈值 / 侧 / 滞后重测本族；不要在总消费信贷、循环信贷、非循环信贷（车贷 / 学生贷）、同比 / 3 个月 / 1 个月年化 / 水平、首发 / 最新修订值之间换序列；不要改用 G.19 按持有人分项（商业银行 / 财务公司 / 联邦政府 / 证券化池）、纽约联储家庭债务与信贷季报（HHDC）、信用卡拖欠率 / 冲销率（FRED DRCCLACBS / CORCCACBS）、H.8 消费贷款周度或 Fed Z.1 家庭负债同类「家庭借贷量」替身重测；不要把 G.19 发布日改成 1h 事件重测。
+- 文件：`output/research_fed_g19_consumer_credit_gate_4h.csv`、`_supp.csv`、`_new8.csv`、`output/fed_g19_consumer_credit_firstrelease.csv`（均不入库）；脚本 `scratch/g19cc4h/{fetch_batch,build,run,supp,new8}.py`、`alfred_batch/`、`PRE_REGISTER.json(.sha256)`（不推送）。因 `docs/STRATEGY_FORMULAS.md` 已超过 GitHub 连接器写入上限，本段写在本 sidecar（本地 STRATEGY_FORMULAS.md 同步追加一行轮换记录）。
+- 下一轮（短线）：日本财务省官方 JGB 拍卖结果（mof.go.jp 入札結果，10Y / 20Y / 30Y / 40Y，12:35 JST 公布的尾差 tail 与投标倍数 bid-to-cover，2021 起）弱需求冲击 → 8 币永续篮子 1h 顺势 / 逆势事件（公布后下一根 1h 入场）。查重：`output/research_*.csv` 与 docs 无 JGB 拍卖条目（Lido 提款队列 1h 已测，`research_lido_wq_burst_event_1h.csv`，不选）；须先确认不被 `us_treasury_auction_event_1h`（只禁美债期限 / 指标互换）与 `jgb10y_yield_gate_4h`（收益率水平 / 期限）勿重测覆盖，若判同机制就换题。
