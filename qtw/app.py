@@ -167,6 +167,8 @@ async def lifespan(_app: FastAPI):
     _delist.start()
     from . import unlock_shadow as _unlock  # #17 代币解锁前 72h 做空影子（默认关；QTW_SHADOW_UNLOCK=1 才启动，测试模式永不启动）
     _unlock.start()
+    from . import btcwit_shadow as _btcwit  # #18 BTC 区块见证占比突发顺势影子（默认关；QTW_SHADOW_BTCWIT=1 才启动，测试模式永不启动）
+    _btcwit.start()
     if _kick_after_freeze not in stream._on_host_freeze:
         stream._on_host_freeze.append(_kick_after_freeze)
     stream.start()
@@ -199,6 +201,11 @@ async def lifespan(_app: FastAPI):
         try:
             from . import unlock_shadow
             unlock_shadow.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from . import btcwit_shadow
+            btcwit_shadow.stop()
         except Exception:  # noqa: BLE001
             pass
         worker.stop()
@@ -935,6 +942,13 @@ def shadow_unlock():
     """#17 代币解锁前 72h 做空（BTC 对冲）影子子账本状态（纸面，不计入主账本）。"""
     from . import unlock_shadow
     return ok(unlock_shadow.status())
+
+
+@app.get("/api/shadow/btcwit")
+def shadow_btcwit():
+    """#18 BTC 区块见证占比 4h 突发顺势影子子账本状态（纸面，不计入主账本）。"""
+    from . import btcwit_shadow
+    return ok(btcwit_shadow.status())
 
 
 @app.get("/api/shadow/trades")
