@@ -129,7 +129,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
                  lending_rates: tuple | None = None, custody_data: tuple | None = None,
                  cryptoeq_data: tuple | None = None, usd_data: tuple | None = None,
                  mof_data: tuple | None = None, backstop_data: tuple | None = None,
-                 cp_data: tuple | None = None) -> dict:
+                 cp_data: tuple | None = None, levtok_data: tuple | None = None) -> dict:
     """signals：可选，多策略注册表（qtw.strategies）用的信号函数 f(ind, idx, syms) -> {symbol: 逐根 {-1,0,1}}，
     替换默认双均线合成信号；执行、止损、仓位、费用与默认完全同一套。None = 默认策略 #1（逐字节不变）。
     btc_spot：可选，BTCUSDT 现货 K 线，只供 BTC 体制过滤（btc_regime_ma）使用、不参与交易。标的里没有 BTCUSDT 时，
@@ -317,6 +317,18 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         bg_info.update(blocked_long_bars=int(BBL.sum()), blocked_short_bars=int(BBS.sum()), nan_bars=int(np.isnan(_bf).sum()), bars=int(len(idx)))
         LGB = np.asarray(LGB, dtype=bool) | BBL
         DBS = np.asarray(DBS, dtype=bool) | BBS
+    # 可选 Gate BTC 杠杆代币多空比闸门（levtok_gate_enabled，默认关）：与引擎同一函数 levtok_gate.block_mask；已知（日 + 28h）的最新一日
+    # ln(7 日 BTC3L/BTC3S 成交额) > 其 90 日均线（flag=1）时拦新开空、否则拦新开多（contra_both）；并入 LGB / DBS。
+    # levtok_data = (UTC 日毫秒, BTC3L 成交额, BTC3S 成交额) 可注入真实历史。
+    lt_info = {"enabled": bool(st.get("levtok_gate_enabled", False))}
+    if lt_info["enabled"]:
+        from . import levtok_gate as LTG
+        _om = pd.DatetimeIndex(pd.to_datetime(idx, utc=True)).as_unit("ms").asi8
+        _lk, _ll, _ls = (levtok_data if levtok_data is not None else (None, None, None))
+        TBL, TBS, _tf = LTG.block_mask(st, _om, _lk, _ll, _ls)
+        lt_info.update(blocked_long_bars=int(TBL.sum()), blocked_short_bars=int(TBS.sum()), nan_bars=int(np.isnan(_tf).sum()), bars=int(len(idx)))
+        LGB = np.asarray(LGB, dtype=bool) | TBL
+        DBS = np.asarray(DBS, dtype=bool) | TBS
     MK = {"long": "perp" if t_mode == "perp_both" else "spot", "short": "perp"}
     # 可选动态多空风险平价 up（ls_parity_cap，0 = 关闭）：按上一根已收盘合成信号把较小一侧信号书的单币风险 / 权重乘数放大到与较大一侧相同（≤ cap 倍）
     lsp_c = float(st.get("ls_parity_cap", 0) or 0)
@@ -826,6 +838,7 @@ def run_backtest(data: dict[str, dict[str, pd.DataFrame]], cfg: dict, fast: dict
         "cp_gate": cp_info,
         "mof_gate": mg_info,
         "backstop_gate": bg_info,
+        "levtok_gate": lt_info,
         "btc_regime_symbol": rg_sym,
         "spot_signal_long_bars": int(sum((PX["spot"]["signal"][s][warm:] == 1).sum() for s in syms)),
         "perp_signal_short_bars": int(sum((PX["perp"]["signal"][s][warm:] == -1).sum() for s in syms)),

@@ -172,6 +172,17 @@ DEFAULTS: dict[str, Any] = {
         "backstop_gate_enabled": False,
         "backstop_gate_trend_n": 13,
         "backstop_gate_stale_days": 21.0,
+        # 2026-11-27：可选 Gate 官方 BTC 3 倍杠杆代币多空成交额比闸门（默认关闭；回测与模拟盘 / 实盘同一函数 qtw/levtok_gate.block_mask）。
+        # x = ln(7 日 BTC3L 成交额 / 7 日 BTC3S 成交额)（Gate v4 官方 1d K 线，日 D 自 D+1 04:00 UTC 起已知）；x > 其 90 日均线
+        # （散户杠杆偏多上升）时不新开空，否则不新开多（contra_both，确认式）。研究（scratch/levtok4h/run.py、
+        # output/research_gate_leveraged_token_flow_gate_4h.csv、docs/gate_leveraged_token_flow_gate_4h.md）：反向先验 ls7_trend_n30_long_off 0/9 否决；
+        # 非先验 lsbtc7_trend_n90_contra_both 9/9，2026-03 后 OKX d8 +64.8% vs +59.9%、Gate +65.2% vs +60.3%，深未见三组大幅更好、压力费保持、
+        # new8 pre 两所更好、n45–180 邻域 post Sharpe 全高于基线、8 个平移安慰剂 post 全更差，但逐月只 4/5、4/4（< 6/9）→ 观察，
+        # 只做纸面前向检验（8802 paper-levtok）。环境变量 QTW_LEVTOK_GATE=1 强制开启。
+        "levtok_gate_enabled": False,
+        "levtok_gate_sum_n": 7,
+        "levtok_gate_trend_n": 90,
+        "levtok_gate_stale_days": 3.0,
         # 2026-11-10：可选浮盈加仓（默认关闭）。前一根收盘浮盈 ≥ pyramid_r × R 时加仓一次，规模 pyramid_frac × 原名义，止损不动。
         # 12 组邻域整段全优于基线，但前推后 6 段只高约 0.5 个百分点，未达到改默认的标准。0=关闭（仅回测生效）
         "pyramid_r": 0.0,
@@ -331,6 +342,8 @@ def load() -> dict:
             out["strategy"]["cp_gate_enabled"] = True  # 纸面前向检验实例（paper-cpgate）用环境变量强制开启 H.15 商业票据融资利差闸门
         if str(os.environ.get("QTW_BACKSTOP_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
             out["strategy"]["backstop_gate_enabled"] = True  # 纸面前向检验实例（paper-backstop）用环境变量强制开启一级信贷闸门
+        if str(os.environ.get("QTW_LEVTOK_GATE", "")).strip().lower() in ("1", "true", "yes", "on"):
+            out["strategy"]["levtok_gate_enabled"] = True  # 纸面前向检验实例（paper-levtok）用环境变量强制开启杠杆代币多空比闸门
         out["strategy"]["fast_exit_tf"] = "off"  # 已存的旧值（5m / 10m / 1d）也不生效，见 validate() 注释
         for k in ("live_enabled", "okx_demo", "gate_testnet"):  # 旧存档里的字符串 "false" 不能被当成 True（实盘闸门 / 模拟盘开关）
             out["live"][k] = _as_bool(out["live"].get(k, DEFAULTS["live"][k]))
@@ -514,6 +527,16 @@ def validate(s: dict) -> dict:
     st["backstop_gate_stale_days"] = float(st.get("backstop_gate_stale_days", 21.0) or 21.0)
     if not 8 <= st["backstop_gate_stale_days"] <= 60:
         raise ValueError("一级信贷数据过期阈值需在 8–60 天之间")
+    st["levtok_gate_enabled"] = _as_bool(st.get("levtok_gate_enabled", False))
+    st["levtok_gate_sum_n"] = int(st.get("levtok_gate_sum_n", 7) or 7)
+    if not 1 <= st["levtok_gate_sum_n"] <= 30:
+        raise ValueError("杠杆代币闸门成交额求和天数需在 1–30 之间")
+    st["levtok_gate_trend_n"] = int(st.get("levtok_gate_trend_n", 90) or 90)
+    if not 5 <= st["levtok_gate_trend_n"] <= 365:
+        raise ValueError("杠杆代币闸门均线天数需在 5–365 之间")
+    st["levtok_gate_stale_days"] = float(st.get("levtok_gate_stale_days", 3.0) or 3.0)
+    if not 2 <= st["levtok_gate_stale_days"] <= 14:
+        raise ValueError("杠杆代币数据过期阈值需在 2–14 天之间")
     st["staged_entry_f1"] = float(st.get("staged_entry_f1", 0) or 0)
     if st["staged_entry_f1"] and not 0.05 <= st["staged_entry_f1"] <= 0.95:
         raise ValueError("分批入场首笔比例需为 0（关闭）或 0.05–0.95")
